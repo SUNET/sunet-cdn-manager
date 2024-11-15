@@ -1,8 +1,7 @@
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/SUNET/sunet-cdn-manager/pkg/server"
 	"github.com/spf13/cobra"
 )
 
@@ -13,7 +12,7 @@ var serverCmd = &cobra.Command{
 	Long: `This runs the manager server which exposes
 API endpoints and user interface for managing the SUNET CDN service.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("server called")
+		server.Run(cdnLogger)
 	},
 }
 
