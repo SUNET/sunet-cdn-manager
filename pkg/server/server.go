@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,10 +12,30 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/justinas/alice"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
+	"github.com/spf13/viper"
 )
+
+const (
+	contentTypeString string = "application/json; charset=utf-8"
+)
+
+type config struct {
+	DB dbSettings
+}
+
+type dbSettings struct {
+	User     string
+	Password string
+	DBName   string
+	Host     string
+	Port     int
+	SSLMode  string
+}
 
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
@@ -41,6 +62,50 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	fmt.Fprintf(w, "Welcome to SUNET CDN Manager\n")
+}
+
+func writeNewlineJSON(w http.ResponseWriter, b []byte, statusCode int) error {
+	w.Header().Set("content-type", contentTypeString)
+	w.WriteHeader(statusCode)
+	// Include newline since this JSON can be returned to curl
+	// requests and similar where the prompt gets messed up without
+	// it.
+	_, err := fmt.Fprintf(w, "%s\n", b)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		rows, err := dbPool.Query(context.Background(), "SELECT name FROM customers")
+		if err != nil {
+			logger.Err(err).Msg("unable to Query getCustomers for getCustomers")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		customers, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			logger.Err(err).Msg("unable to CollectRows for getCustomers")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		b, err := json.Marshal(customers)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal getCustomers in API GET")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusOK)
+		if err != nil {
+			logger.Err(err).Msg("failed writing lockStatusData in API GET")
+			return
+		}
+	}
 }
 
 func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
@@ -85,13 +150,47 @@ func Run(logger zerolog.Logger) {
 		cancel()
 	}(logger, cancel)
 
+	var conf config
+	err := viper.Unmarshal(&conf)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("viper unable to decode into struct")
+	}
+
+	pgConfigString := fmt.Sprintf(
+		"user=%s password=%s host=%s port=%d dbname=%s sslmode=%s",
+		conf.DB.User,
+		conf.DB.Password,
+		conf.DB.Host,
+		conf.DB.Port,
+		conf.DB.DBName,
+		conf.DB.SSLMode,
+	)
+
+	pgConfig, err := pgxpool.ParseConfig(pgConfigString)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to parse PostgreSQL config string")
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create database pool")
+	}
+	defer dbPool.Close()
+
+	err = dbPool.Ping(context.Background())
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to ping database connection")
+	}
+
 	hlogMiddlewares := newHlogMiddlewares(logger)
 	rootMiddlewares := newRootMiddlewares(hlogMiddlewares)
 
 	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
+	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(logger, dbPool))
 
 	mux := http.NewServeMux()
 	mux.Handle("/", rootChain)
+	mux.Handle("GET /api/v1/customers", getCustomersChain)
 
 	srv := &http.Server{
 		Addr:         "127.0.0.1:8080",
