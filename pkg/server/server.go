@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,8 +40,27 @@ type dbSettings struct {
 }
 
 type customer struct {
-	ID   string `jsonapi:"primary,customers"`
+	// omitempty is needed to accept requests from clients that does not
+	// include an ID (they are server generated).
+	ID   int64  `jsonapi:"primary,customers,omitempty"`
 	Name string `jsonapi:"attribute" json:"name"`
+}
+
+// Implements jsonapi.MarshalIdentifier
+// Fixes "primary/id field must be a string or implement fmt.Stringer or in a
+// struct which implements MarshalIdentifier" error
+func (c customer) MarshalID() string {
+	// When using the customer struct in client mode (e.g. sending a POST
+	// request to the server in tests) using jsonapi.MarshalClientMode() we
+	// do not want to include the ID.
+	//
+	// The server generated IDs comes from a PostgreSQL sequence which
+	// starts from 1 by default so if the value is 0 this means it is a
+	// client mode request.
+	if c.ID == 0 {
+		return ""
+	}
+	return strconv.FormatInt(c.ID, 10)
 }
 
 // Small struct that implements io.Writer so we can pass it to net/http server
@@ -107,7 +128,75 @@ func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w htt
 
 		err = writeNewlineJSON(w, b, http.StatusOK)
 		if err != nil {
-			logger.Err(err).Msg("failed writing lockStatusData in API GET")
+			logger.Err(err).Msg("failed writing customersData in API GET")
+			return
+		}
+	}
+}
+
+func postCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		var id int64
+
+		cReq := customer{}
+		bodyData, err := io.ReadAll(req.Body)
+		if err != nil {
+			logger.Err(err).Msg("unable to read customer data in API POST")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err = jsonapi.Unmarshal(bodyData, &cReq)
+		if err != nil {
+			logger.Err(err).Msg("unable to unmarshal customer in API POST")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if cReq.Name == "" {
+			je := jsonapi.Error{
+				Status: jsonapi.Status(http.StatusBadRequest),
+				Source: &jsonapi.ErrorSource{Pointer: "/data/attributes/name"},
+				Title:  "Invalid Attribute",
+				Detail: "Name must contain at least one character",
+			}
+
+			jeData, err := jsonapi.Marshal(je)
+			if err != nil {
+				logger.Err(err).Msg("unable to marshal JSON:API error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
+			if err != nil {
+				logger.Err(err).Msg("postCustomers: unable to send error json")
+			}
+			return
+		}
+
+		err = dbPool.QueryRow(context.Background(), "INSERT INTO customers (name) VALUES ($1) RETURNING id", cReq.Name).Scan(&id)
+		if err != nil {
+			logger.Err(err).Msg("unable to INSERT customer")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		cResp := customer{
+			ID:   id,
+			Name: cReq.Name,
+		}
+
+		b, err := jsonapi.Marshal(&cResp)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal customer in API POST")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusOK)
+		if err != nil {
+			logger.Err(err).Msg("failed writing customersData in API POST")
 			return
 		}
 	}
@@ -150,9 +239,11 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 
 	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
 	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(logger, dbPool))
+	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(logger, dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
+	mux.Handle("POST /api/v1/customers", postCustomersChain)
 
 	return mux
 }

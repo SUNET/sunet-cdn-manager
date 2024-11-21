@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/DataDog/jsonapi"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -38,49 +41,107 @@ func TestMain(m *testing.M) {
 	goose.SetBaseFS(embedMigrations)
 
 	if err := goose.SetDialect("postgres"); err != nil {
-		panic(err)
+		logger.Fatal().Err(err).Msg("unable to goose.SetDialect()")
 	}
 
 	m.Run()
 }
 
-func TestGetCustomers(t *testing.T) {
+func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 
 	ctx := context.Background()
 
 	pgConfig, err := pgxpool.ParseConfig(pgurl)
 	if err != nil {
-		t.Fatal("unable to parse PostgreSQL config string")
+		return nil, nil, errors.New("unable to parse PostgreSQL config string")
 	}
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
-		t.Fatal("unable to create database pool")
+		return nil, nil, errors.New("unable to create database pool")
 	}
-	defer dbPool.Close()
 
 	db := stdlib.OpenDBFromPool(dbPool)
 
 	if err := goose.Up(db, "testdata/migrations"); err != nil {
-		t.Fatal(err)
+		return nil, dbPool, err
 	}
 
 	mux := newMux(logger, dbPool)
 
 	ts := httptest.NewServer(mux)
-	defer ts.Close()
 
-	res, err := http.Get(ts.URL + "/api/v1/customers")
+	return ts, dbPool, nil
+}
+
+func TestGetCustomers(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer ts.Close()
 
-	jsonData, err := io.ReadAll(res.Body)
+	resp, err := http.Get(ts.URL + "/api/v1/customers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET customers unexpected status code: %d", resp.StatusCode)
+	}
+
+	jsonData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("%s\n", jsonData)
+}
+
+func TestPostCustomers(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	newCustomer := customer{
+		Name: "customer4",
+	}
+
+	b, err := jsonapi.Marshal(newCustomer, jsonapi.MarshalClientMode())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := bytes.NewReader(b)
+
+	resp, err := http.Post(ts.URL+"/api/v1/customers", "application/vnd.api+json", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		r, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("POST customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
+	}
+
+	jsonData, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
