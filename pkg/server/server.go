@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DataDog/jsonapi"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/justinas/alice"
@@ -35,6 +35,11 @@ type dbSettings struct {
 	Host     string
 	Port     int
 	SSLMode  string
+}
+
+type customer struct {
+	ID   string `jsonapi:"primary,customers"`
+	Name string `jsonapi:"attribute" json:"name"`
 }
 
 // Small struct that implements io.Writer so we can pass it to net/http server
@@ -80,20 +85,20 @@ func writeNewlineJSON(w http.ResponseWriter, b []byte, statusCode int) error {
 
 func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
-		rows, err := dbPool.Query(context.Background(), "SELECT name FROM customers")
+		rows, err := dbPool.Query(context.Background(), "SELECT id, name FROM customers")
 		if err != nil {
-			logger.Err(err).Msg("unable to Query getCustomers for getCustomers")
+			logger.Err(err).Msg("unable to Query for getCustomers")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		customers, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		customers, err := pgx.CollectRows(rows, pgx.RowToStructByName[customer])
 		if err != nil {
 			logger.Err(err).Msg("unable to CollectRows for getCustomers")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		b, err := json.Marshal(customers)
+		b, err := jsonapi.Marshal(&customers)
 		if err != nil {
 			logger.Err(err).Msg("unable to marshal getCustomers in API GET")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -135,6 +140,21 @@ func newRootMiddlewares(hlogMiddlewares []alice.Constructor) []alice.Constructor
 	fleetLockMiddlewares = append(fleetLockMiddlewares, hlogMiddlewares...)
 
 	return fleetLockMiddlewares
+}
+
+func newMux(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	hlogMiddlewares := newHlogMiddlewares(logger)
+	rootMiddlewares := newRootMiddlewares(hlogMiddlewares)
+
+	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
+	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(logger, dbPool))
+
+	mux.Handle("/", rootChain)
+	mux.Handle("GET /api/v1/customers", getCustomersChain)
+
+	return mux
 }
 
 func Run(logger zerolog.Logger) {
@@ -182,15 +202,7 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Err(err).Msg("unable to ping database connection")
 	}
 
-	hlogMiddlewares := newHlogMiddlewares(logger)
-	rootMiddlewares := newRootMiddlewares(hlogMiddlewares)
-
-	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
-	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(logger, dbPool))
-
-	mux := http.NewServeMux()
-	mux.Handle("/", rootChain)
-	mux.Handle("GET /api/v1/customers", getCustomersChain)
+	mux := newMux(ctx, logger, dbPool)
 
 	srv := &http.Server{
 		Addr:         "127.0.0.1:8080",
