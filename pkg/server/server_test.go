@@ -69,7 +69,7 @@ func TestGetCustomers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := newMux(ctx, logger, dbPool)
+	mux := newMux(logger, dbPool)
 
 	ts := httptest.NewServer(mux)
 	defer ts.Close()

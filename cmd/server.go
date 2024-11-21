@@ -11,7 +11,7 @@ var serverCmd = &cobra.Command{
 	Short: "Run the manager server",
 	Long: `This runs the manager server which exposes
 API endpoints and user interface for managing the SUNET CDN service.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		server.Run(cdnLogger)
 	},
 }

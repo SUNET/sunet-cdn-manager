@@ -84,7 +84,7 @@ func writeNewlineJSON(w http.ResponseWriter, b []byte, statusCode int) error {
 }
 
 func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		rows, err := dbPool.Query(context.Background(), "SELECT id, name FROM customers")
 		if err != nil {
 			logger.Err(err).Msg("unable to Query for getCustomers")
@@ -142,7 +142,7 @@ func newRootMiddlewares(hlogMiddlewares []alice.Constructor) []alice.Constructor
 	return fleetLockMiddlewares
 }
 
-func newMux(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
+func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	hlogMiddlewares := newHlogMiddlewares(logger)
@@ -202,7 +202,7 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Err(err).Msg("unable to ping database connection")
 	}
 
-	mux := newMux(ctx, logger, dbPool)
+	mux := newMux(logger, dbPool)
 
 	srv := &http.Server{
 		Addr:         "127.0.0.1:8080",
