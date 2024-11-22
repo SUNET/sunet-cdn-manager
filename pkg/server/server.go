@@ -63,6 +63,27 @@ func (c *customer) MarshalID() string {
 	return strconv.FormatInt(c.ID, 10)
 }
 
+type service struct {
+	ID       int64     `jsonapi:"primary,services,omitempty"`
+	Name     string    `jsonapi:"attribute" json:"name"`
+	Customer *customer `jsonapi:"relationship" json:"customer"`
+}
+
+func (s *service) MarshalID() string {
+	if s.ID == 0 {
+		return ""
+	}
+	return strconv.FormatInt(s.ID, 10)
+}
+
+func (s *service) LinkRelation(relation string) *jsonapi.Link {
+	id := strconv.FormatInt(s.ID, 10)
+	return &jsonapi.Link{
+		Self:    fmt.Sprintf("https://example.com/services/%s/relationships/%s", id, relation),
+		Related: fmt.Sprintf("https://example.com/services/%s/%s", id, relation),
+	}
+}
+
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
 type zerologErrorWriter struct {
@@ -251,6 +272,55 @@ func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req 
 	}
 }
 
+func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
+		rows, err := dbPool.Query(context.Background(), "SELECT services.id, services.customer_id, services.name, customers.name FROM services JOIN customers ON services.customer_id = customers.id ORDER BY services.id")
+		if err != nil {
+			logger.Err(err).Msg("unable to Query for getServices")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		services := []*service{}
+		var service_id, customer_id int64
+		var service_name, customer_name string
+		_, err = pgx.ForEachRow(rows, []any{&service_id, &customer_id, &service_name, &customer_name}, func() error {
+			services = append(
+				services,
+				&service{
+					ID:   service_id,
+					Name: service_name,
+					Customer: &customer{
+						Name: customer_name,
+						ID:   customer_id,
+					},
+				},
+			)
+			return nil
+		})
+		if err != nil {
+			logger.Err(err).Msg("unable to ForEachRow over services in API GET")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Printf("%#v\n", services)
+
+		b, err := jsonapi.Marshal(services)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal getServers in API GET")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusOK)
+		if err != nil {
+			logger.Err(err).Msg("failed writing servicesData in API GET")
+			return
+		}
+	}
+}
+
 func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
 	hlogMiddlewares := []alice.Constructor{
 		// hlog handlers based on example from https://github.com/rs/zerolog#integration-with-nethttp
@@ -290,11 +360,13 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(dbPool))
 	getCustomerChain := alice.New(rootMiddlewares...).ThenFunc(getCustomerHandler(dbPool))
 	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
+	getServicesChain := alice.New(rootMiddlewares...).ThenFunc(getServicesHandler(dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
 	mux.Handle("GET /api/v1/customers/{id}", getCustomerChain)
 	mux.Handle("POST /api/v1/customers", postCustomersChain)
+	mux.Handle("GET /api/v1/services", getServicesChain)
 
 	return mux
 }
