@@ -196,7 +196,7 @@ func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req 
 			return
 		}
 
-		err = writeNewlineJSON(w, b, http.StatusOK)
+		err = writeNewlineJSON(w, b, http.StatusCreated)
 		if err != nil {
 			logger.Err(err).Msg("failed writing customersData in API POST")
 			return

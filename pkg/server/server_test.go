@@ -138,7 +138,7 @@ func TestPostCustomers(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusCreated {
 		r, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
