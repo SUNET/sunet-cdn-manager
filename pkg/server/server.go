@@ -286,7 +286,7 @@ func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req 
 func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
 		logger := hlog.FromRequest(req)
-		rows, err := dbPool.Query(context.Background(), "SELECT services.id, services.customer_id, services.name, customers.name FROM services JOIN customers ON services.customer_id = customers.id ORDER BY services.id")
+		rows, err := dbPool.Query(context.Background(), "SELECT id, customer_id, name FROM services ORDER BY id")
 		if err != nil {
 			logger.Err(err).Msg("unable to Query for getServices")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -294,16 +294,15 @@ func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *h
 		}
 		services := []*service{}
 		var serviceID, customerID int64
-		var serviceName, customerName string
-		_, err = pgx.ForEachRow(rows, []any{&serviceID, &customerID, &serviceName, &customerName}, func() error {
+		var serviceName string
+		_, err = pgx.ForEachRow(rows, []any{&serviceID, &customerID, &serviceName}, func() error {
 			services = append(
 				services,
 				&service{
 					ID:   serviceID,
 					Name: serviceName,
 					Customer: &customer{
-						Name: customerName,
-						ID:   customerID,
+						ID: customerID,
 					},
 				},
 			)
@@ -349,10 +348,10 @@ func getServiceHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *ht
 			return
 		}
 
-		var serviceName, customerName string
+		var serviceName string
 		var serviceID, customerID int64
 
-		err = dbPool.QueryRow(context.Background(), "SELECT services.id, services.customer_id, services.name, customers.name FROM services JOIN customers ON services.customer_id = customers.id WHERE services.id=$1", idInt).Scan(&serviceID, &customerID, &serviceName, &customerName)
+		err = dbPool.QueryRow(context.Background(), "SELECT id, customer_id, name FROM services WHERE id=$1", idInt).Scan(&serviceID, &customerID, &serviceName)
 		if err != nil {
 			logger.Err(err).Msg("unable to Query for getServices")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -363,8 +362,7 @@ func getServiceHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *ht
 			ID:   serviceID,
 			Name: serviceName,
 			Customer: &customer{
-				Name: customerName,
-				ID:   customerID,
+				ID: customerID,
 			},
 		}
 
@@ -449,24 +447,9 @@ func postServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *
 		}
 
 		var serviceID int64
-		var customerName string
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			// Make sure noone changes the contents of the customer row while we use the customer ID in the INSERT of service
-			err := tx.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1 FOR SHARE", sReq.Customer.ID).Scan(&customerName)
-			if err != nil {
-				logger.Err(err).Msg("unable to SELECT customer name for service")
-				return err
-			}
-
-			err = tx.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", sReq.Name, sReq.Customer.ID).Scan(&serviceID)
-			if err != nil {
-				logger.Err(err).Msg("unable to INSERT service")
-				return err
-			}
-			return nil
-		})
+		err = dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", sReq.Name, sReq.Customer.ID).Scan(&serviceID)
 		if err != nil {
-			logger.Err(err).Msg("postServices transaction failed")
+			logger.Err(err).Msg("unable to INSERT service")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -475,8 +458,7 @@ func postServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *
 			ID:   serviceID,
 			Name: sReq.Name,
 			Customer: &customer{
-				Name: customerName,
-				ID:   sReq.Customer.ID,
+				ID: sReq.Customer.ID,
 			},
 		}
 
