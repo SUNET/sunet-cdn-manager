@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/DataDog/jsonapi"
@@ -36,7 +38,10 @@ func TestMain(m *testing.M) {
 	}
 	defer pgt.Cleanup()
 
-	logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+		return filepath.Base(file) + ":" + strconv.Itoa(line)
+	}
+	logger = zerolog.New(os.Stderr).With().Timestamp().Caller().Logger()
 
 	goose.SetBaseFS(embedMigrations)
 

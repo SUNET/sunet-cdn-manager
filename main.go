@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 
 	"github.com/rs/zerolog"
 
@@ -21,13 +23,19 @@ func main() {
 		hostname = defaultHostname
 	}
 
+	// Use short filenames for Caller() info, based on
+	// https://github.com/rs/zerolog?tab=readme-ov-file#add-file-and-line-number-to-log
+	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+		return filepath.Base(file) + ":" + strconv.Itoa(line)
+	}
+
 	// Logger used for all output
 	logger := zerolog.New(os.Stderr).With().
 		Str("service", "sunet-cdn-manager").
 		Str("hostname", hostname).
 		Str("server_version", version).
 		Str("go_version", runtime.Version()).
-		Timestamp().Logger()
+		Timestamp().Caller().Logger()
 
 	cmd.Execute(logger)
 }

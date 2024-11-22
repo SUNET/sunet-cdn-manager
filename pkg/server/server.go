@@ -104,9 +104,10 @@ func writeNewlineJSON(w http.ResponseWriter, b []byte, statusCode int) error {
 	return nil
 }
 
-func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		rows, err := dbPool.Query(context.Background(), "SELECT id, name FROM customers")
+func getCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
+		rows, err := dbPool.Query(context.Background(), "SELECT id, name FROM customers ORDER BY id")
 		if err != nil {
 			logger.Err(err).Msg("unable to Query for getCustomers")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -134,8 +135,9 @@ func getCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w htt
 	}
 }
 
-func postCustomersHandler(logger zerolog.Logger, dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
 		var id int64
 
 		cReq := customer{}
@@ -238,8 +240,8 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	rootMiddlewares := newRootMiddlewares(hlogMiddlewares)
 
 	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
-	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(logger, dbPool))
-	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(logger, dbPool))
+	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(dbPool))
+	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
