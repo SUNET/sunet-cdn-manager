@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	contentTypeString string = "application/json; charset=utf-8"
+	contentTypeString string = "application/vnd.api+json; charset=utf-8"
 )
 
 type config struct {
