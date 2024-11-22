@@ -149,7 +149,7 @@ func TestPostCustomers(t *testing.T) {
 	}
 	defer ts.Close()
 
-	newCustomer := customer{
+	newCustomer := &customer{
 		Name: "customer4",
 	}
 

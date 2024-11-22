@@ -42,14 +42,14 @@ type dbSettings struct {
 type customer struct {
 	// omitempty is needed to accept requests from clients that does not
 	// include an ID (they are server generated).
-	ID   int64  `jsonapi:"primary,customers,omitempty"`
+	ID   int64  `jsonapi:"primary,customer,omitempty"`
 	Name string `jsonapi:"attribute" json:"name"`
 }
 
 // Implements jsonapi.MarshalIdentifier
 // Fixes "primary/id field must be a string or implement fmt.Stringer or in a
 // struct which implements MarshalIdentifier" error
-func (c customer) MarshalID() string {
+func (c *customer) MarshalID() string {
 	// When using the customer struct in client mode (e.g. sending a POST
 	// request to the server in tests) using jsonapi.MarshalClientMode() we
 	// do not want to include the ID.
@@ -113,14 +113,14 @@ func getCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		customers, err := pgx.CollectRows(rows, pgx.RowToStructByName[customer])
+		customers, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[customer])
 		if err != nil {
 			logger.Err(err).Msg("unable to CollectRows for getCustomers")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		b, err := jsonapi.Marshal(&customers)
+		b, err := jsonapi.Marshal(customers)
 		if err != nil {
 			logger.Err(err).Msg("unable to marshal getCustomers in API GET")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -162,12 +162,12 @@ func getCustomerHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *h
 			return
 		}
 
-		customer := customer{
+		c := &customer{
 			ID:   idInt,
 			Name: name,
 		}
 
-		b, err := jsonapi.Marshal(&customer)
+		b, err := jsonapi.Marshal(c)
 		if err != nil {
 			logger.Err(err).Msg("unable to marshal getCustomer in API GET")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
