@@ -111,6 +111,34 @@ func TestGetCustomers(t *testing.T) {
 	fmt.Printf("%s\n", jsonData)
 }
 
+func TestGetCustomer(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/customers/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET customers unexpected status code: %d", resp.StatusCode)
+	}
+
+	jsonData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("%s\n", jsonData)
+}
+
 func TestPostCustomers(t *testing.T) {
 	ts, dbPool, err := prepareServer()
 	if dbPool != nil {

@@ -135,6 +135,53 @@ func getCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *
 	}
 }
 
+func getCustomerHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
+
+		id := req.PathValue("id")
+
+		if id == "" {
+			logger.Error().Msg("missing id PathValue getCustomer")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		idInt, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			logger.Err(err).Msg("unable to parse id integer for getCustomer")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		var name string
+		err = dbPool.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1", idInt).Scan(&name)
+		if err != nil {
+			logger.Err(err).Int64("id", idInt).Msg("unable to SELECT customer by id")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		customer := customer{
+			ID:   idInt,
+			Name: name,
+		}
+
+		b, err := jsonapi.Marshal(&customer)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal getCustomer in API GET")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusOK)
+		if err != nil {
+			logger.Err(err).Msg("failed writing customersData in API GET")
+			return
+		}
+	}
+}
+
 func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
 		logger := hlog.FromRequest(req)
@@ -241,10 +288,12 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 
 	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
 	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(dbPool))
+	getCustomerChain := alice.New(rootMiddlewares...).ThenFunc(getCustomerHandler(dbPool))
 	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
+	mux.Handle("GET /api/v1/customers/{id}", getCustomerChain)
 	mux.Handle("POST /api/v1/customers", postCustomersChain)
 
 	return mux
