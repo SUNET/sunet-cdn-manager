@@ -319,6 +319,59 @@ func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *h
 	}
 }
 
+func getServiceHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
+
+		id := req.PathValue("id")
+
+		if id == "" {
+			logger.Error().Msg("missing id PathValue getService")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		idInt, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			logger.Err(err).Msg("unable to parse id integer for getService")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		var serviceName, customerName string
+		var serviceID, customerID int64
+
+		err = dbPool.QueryRow(context.Background(), "SELECT services.id, services.customer_id, services.name, customers.name FROM services JOIN customers ON services.customer_id = customers.id WHERE services.id=$1", idInt).Scan(&serviceID, &customerID, &serviceName, &customerName)
+		if err != nil {
+			logger.Err(err).Msg("unable to Query for getServices")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		s := &service{
+			ID:   serviceID,
+			Name: serviceName,
+			Customer: &customer{
+				Name: customerName,
+				ID:   customerID,
+			},
+		}
+
+		b, err := jsonapi.Marshal(s)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal getServers in API GET")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusOK)
+		if err != nil {
+			logger.Err(err).Msg("failed writing servicesData in API GET")
+			return
+		}
+	}
+}
+
 func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
 	hlogMiddlewares := []alice.Constructor{
 		// hlog handlers based on example from https://github.com/rs/zerolog#integration-with-nethttp
@@ -359,12 +412,14 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	getCustomerChain := alice.New(rootMiddlewares...).ThenFunc(getCustomerHandler(dbPool))
 	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
 	getServicesChain := alice.New(rootMiddlewares...).ThenFunc(getServicesHandler(dbPool))
+	getServiceChain := alice.New(rootMiddlewares...).ThenFunc(getServiceHandler(dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
 	mux.Handle("GET /api/v1/customers/{id}", getCustomerChain)
 	mux.Handle("POST /api/v1/customers", postCustomersChain)
 	mux.Handle("GET /api/v1/services", getServicesChain)
+	mux.Handle("GET /api/v1/services/{id}", getServiceChain)
 
 	return mux
 }

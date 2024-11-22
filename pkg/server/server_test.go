@@ -209,3 +209,31 @@ func TestGetServices(t *testing.T) {
 
 	fmt.Printf("%s\n", jsonData)
 }
+
+func TestGetService(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/services/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET service unexpected status code: %d", resp.StatusCode)
+	}
+
+	jsonData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("%s\n", jsonData)
+}
