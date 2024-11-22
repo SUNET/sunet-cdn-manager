@@ -304,8 +304,6 @@ func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *h
 			return
 		}
 
-		fmt.Printf("%#v\n", services)
-
 		b, err := jsonapi.Marshal(services)
 		if err != nil {
 			logger.Err(err).Msg("unable to marshal getServers in API GET")
