@@ -237,3 +237,51 @@ func TestGetService(t *testing.T) {
 
 	fmt.Printf("%s\n", jsonData)
 }
+
+func TestPostServices(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	newService := &service{
+		Name: "post-service",
+		Customer: &customer{
+			ID: 1,
+		},
+	}
+
+	// TODO: Currently marshalling this client request includes a links section with invalid (ID 0) links in them, e.g.:
+	// {"data":{"type":"services","attributes":{"name":"post-service"},"relationships":{"customer":{"data":{"id":"1","type":"customer"},"links":{"self":"https://example.com/services/0/relationships/customer","related":"https://example.com/services/0/customer"}}}}}
+	b, err := jsonapi.Marshal(newService, jsonapi.MarshalClientMode())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := bytes.NewReader(b)
+
+	resp, err := http.Post(ts.URL+"/api/v1/services", "application/vnd.api+json", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		r, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("POST services unexpected status code: %d (%s)", resp.StatusCode, string(r))
+	}
+
+	jsonData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Printf("%s\n", jsonData)
+}

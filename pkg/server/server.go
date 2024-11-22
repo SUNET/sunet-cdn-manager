@@ -63,6 +63,17 @@ func (c *customer) MarshalID() string {
 	return strconv.FormatInt(c.ID, 10)
 }
 
+// Implements jsonapi.UnmarshalIdentifier
+// Fixes "primary/id field must be a string or in a struct which implements UnmarshalIdentifer" error
+func (c *customer) UnmarshalID(id string) error {
+	var err error
+	c.ID, err = strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return fmt.Errorf("strconv of id failed: %w", err)
+	}
+	return nil
+}
+
 type service struct {
 	ID       int64     `jsonapi:"primary,services,omitempty"`
 	Name     string    `jsonapi:"attribute" json:"name"`
@@ -372,6 +383,118 @@ func getServiceHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *ht
 	}
 }
 
+func postServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		logger := hlog.FromRequest(req)
+
+		sReq := &service{}
+		bodyData, err := io.ReadAll(req.Body)
+		if err != nil {
+			logger.Err(err).Msg("unable to read service data in API POST")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		fmt.Printf("sReq data: %s\n", bodyData)
+
+		err = jsonapi.Unmarshal(bodyData, sReq)
+		if err != nil {
+			logger.Err(err).Msg("unable to unmarshal service in API POST")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if sReq.Name == "" {
+			je := jsonapi.Error{
+				Status: jsonapi.Status(http.StatusBadRequest),
+				Source: &jsonapi.ErrorSource{Pointer: "/data/attributes/name"},
+				Title:  "Invalid Attribute",
+				Detail: "Name must contain at least one character",
+			}
+
+			jeData, err := jsonapi.Marshal(je)
+			if err != nil {
+				logger.Err(err).Msg("unable to marshal JSON:API error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
+			if err != nil {
+				logger.Err(err).Msg("postServices: unable to send error json")
+			}
+			return
+		}
+
+		if sReq.Customer == nil || sReq.Customer.ID <= 0 {
+			je := jsonapi.Error{
+				Status: jsonapi.Status(http.StatusBadRequest),
+				Source: &jsonapi.ErrorSource{Pointer: "/data/relationships/customer/data/id"},
+				Title:  "Invalid Attribute",
+				Detail: "ID must be set and larger than 0",
+			}
+
+			jeData, err := jsonapi.Marshal(je)
+			if err != nil {
+				logger.Err(err).Msg("unable to marshal JSON:API error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
+			if err != nil {
+				logger.Err(err).Msg("postSerices: unable to send error json")
+			}
+			return
+		}
+
+		var serviceID int64
+		var customerName string
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			// Make sure noone changes the contents of the customer row while we use the customer ID in the INSERT of service
+			err := tx.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1 FOR SHARE", sReq.Customer.ID).Scan(&customerName)
+			if err != nil {
+				logger.Err(err).Msg("unable to SELECT customer name for service")
+				return err
+			}
+
+			err = tx.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", sReq.Name, sReq.Customer.ID).Scan(&serviceID)
+			if err != nil {
+				logger.Err(err).Msg("unable to INSERT service")
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			logger.Err(err).Msg("postServices transaction failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		sResp := &service{
+			ID:   serviceID,
+			Name: sReq.Name,
+			Customer: &customer{
+				Name: customerName,
+				ID:   sReq.Customer.ID,
+			},
+		}
+
+		b, err := jsonapi.Marshal(sResp)
+		if err != nil {
+			logger.Err(err).Msg("unable to marshal customer in API POST")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = writeNewlineJSON(w, b, http.StatusCreated)
+		if err != nil {
+			logger.Err(err).Msg("failed writing customersData in API POST")
+			return
+		}
+	}
+}
+
 func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
 	hlogMiddlewares := []alice.Constructor{
 		// hlog handlers based on example from https://github.com/rs/zerolog#integration-with-nethttp
@@ -413,6 +536,7 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
 	getServicesChain := alice.New(rootMiddlewares...).ThenFunc(getServicesHandler(dbPool))
 	getServiceChain := alice.New(rootMiddlewares...).ThenFunc(getServiceHandler(dbPool))
+	postServicesChain := alice.New(rootMiddlewares...).ThenFunc(postServicesHandler(dbPool))
 
 	mux.Handle("/", rootChain)
 	mux.Handle("GET /api/v1/customers", getCustomersChain)
@@ -420,6 +544,7 @@ func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
 	mux.Handle("POST /api/v1/customers", postCustomersChain)
 	mux.Handle("GET /api/v1/services", getServicesChain)
 	mux.Handle("GET /api/v1/services/{id}", getServiceChain)
+	mux.Handle("POST /api/v1/services", postServicesChain)
 
 	return mux
 }
