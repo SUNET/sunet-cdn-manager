@@ -25,7 +25,7 @@ func main() {
 
 	// Use short filenames for Caller() info, based on
 	// https://github.com/rs/zerolog?tab=readme-ov-file#add-file-and-line-number-to-log
-	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
 	}
 

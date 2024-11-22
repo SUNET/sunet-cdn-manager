@@ -282,17 +282,17 @@ func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *h
 			return
 		}
 		services := []*service{}
-		var service_id, customer_id int64
-		var service_name, customer_name string
-		_, err = pgx.ForEachRow(rows, []any{&service_id, &customer_id, &service_name, &customer_name}, func() error {
+		var serviceID, customerID int64
+		var serviceName, customerName string
+		_, err = pgx.ForEachRow(rows, []any{&serviceID, &customerID, &serviceName, &customerName}, func() error {
 			services = append(
 				services,
 				&service{
-					ID:   service_id,
-					Name: service_name,
+					ID:   serviceID,
+					Name: serviceName,
 					Customer: &customer{
-						Name: customer_name,
-						ID:   customer_id,
+						Name: customerName,
+						ID:   customerID,
 					},
 				},
 			)

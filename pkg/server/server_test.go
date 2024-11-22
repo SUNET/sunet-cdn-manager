@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 	}
 	defer pgt.Cleanup()
 
-	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
 	}
 	logger = zerolog.New(os.Stderr).With().Timestamp().Caller().Logger()
