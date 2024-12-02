@@ -268,7 +268,7 @@ func selectCustomerByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID st
 		c.ID = *ident.id
 	} else {
 		if !ad.superuser && (ad.customerName == nil || *ad.customerName != inputID) {
-			return customer{}, errForbidden
+			return customer{}, errNotFound
 		}
 		var id int64
 		err := dbPool.QueryRow(context.Background(), "SELECT id FROM customers WHERE name=$1", inputID).Scan(&id)
@@ -374,6 +374,9 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 		} else if ad.customerID != nil {
 			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN customers ON services.customer_id = customers.id WHERE services.name=$1 AND customers.id=$2", inputID, ad.customerID).Scan(&serviceID)
 			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return service{}, errNotFound
+				}
 				return service{}, fmt.Errorf("unable to SELECT service by name for customer")
 			}
 			s.Name = inputID

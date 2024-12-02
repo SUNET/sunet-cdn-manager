@@ -176,17 +176,31 @@ func TestGetCustomer(t *testing.T) {
 		expectedStatus int
 	}{
 		{
-			description:    "successful superuser request",
+			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       "adminpass1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "customer1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful customer request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful customer request with name",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "customer1",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -197,10 +211,17 @@ func TestGetCustomer(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "failed lookup of customer you do not belong to",
+			description:    "failed lookup of customer you do not belong to with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "1",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed lookup of customer you do not belong to with name",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "customer1",
 			expectedStatus: http.StatusNotFound,
 		},
 	}
@@ -413,31 +434,59 @@ func TestGetService(t *testing.T) {
 		expectedStatus int
 	}{
 		{
-			description:    "successful superuser request",
+			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       "adminpass1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "customer1-service1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful customer request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request for service belonging to other customer",
+			description:    "successful customer request with name",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "customer1-service1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed customer request for service belonging to other customer with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed customer request not assigned to customer",
+			description:    "failed customer request for service belonging to other customer with name",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "customer1-service1",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed customer request not assigned to customer with ID",
 			username:       "username3-no-customer",
 			password:       "password3",
 			nameOrID:       "1",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed customer request not assigned to customer with name",
+			username:       "username3-no-customer",
+			password:       "password3",
+			nameOrID:       "customer1-service1",
 			expectedStatus: http.StatusNotFound,
 		},
 	}
