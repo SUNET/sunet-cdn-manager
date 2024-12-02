@@ -2,8 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,17 +14,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/DataDog/jsonapi"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/justinas/alice"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
+	"golang.org/x/crypto/argon2"
 )
 
-const (
-	contentTypeString string = "application/vnd.api+json; charset=utf-8"
+var (
+	errForbidden            = errors.New("access to resource is not allowed")
+	errNotFound             = errors.New("resource not found")
+	errUnprocessable        = errors.New("resource not processable")
+	errServiceAlreadyExists = errors.New("service already exists")
 )
 
 type config struct {
@@ -39,62 +47,6 @@ type dbSettings struct {
 	SSLMode  string
 }
 
-type customer struct {
-	// omitempty is needed to accept requests from clients that does not
-	// include an ID (they are server generated).
-	ID   int64  `jsonapi:"primary,customer,omitempty"`
-	Name string `jsonapi:"attribute" json:"name"`
-}
-
-// Implements jsonapi.MarshalIdentifier
-// Fixes "primary/id field must be a string or implement fmt.Stringer or in a
-// struct which implements MarshalIdentifier" error
-func (c *customer) MarshalID() string {
-	// When using the customer struct in client mode (e.g. sending a POST
-	// request to the server in tests) using jsonapi.MarshalClientMode() we
-	// do not want to include the ID.
-	//
-	// The server generated IDs comes from a PostgreSQL sequence which
-	// starts from 1 by default so if the value is 0 this means it is a
-	// client mode request.
-	if c.ID == 0 {
-		return ""
-	}
-	return strconv.FormatInt(c.ID, 10)
-}
-
-// Implements jsonapi.UnmarshalIdentifier
-// Fixes "primary/id field must be a string or in a struct which implements UnmarshalIdentifer" error
-func (c *customer) UnmarshalID(id string) error {
-	var err error
-	c.ID, err = strconv.ParseInt(id, 10, 64)
-	if err != nil {
-		return fmt.Errorf("strconv of id failed: %w", err)
-	}
-	return nil
-}
-
-type service struct {
-	ID       int64     `jsonapi:"primary,services,omitempty"`
-	Name     string    `jsonapi:"attribute" json:"name"`
-	Customer *customer `jsonapi:"relationship" json:"customer"`
-}
-
-func (s *service) MarshalID() string {
-	if s.ID == 0 {
-		return ""
-	}
-	return strconv.FormatInt(s.ID, 10)
-}
-
-func (s *service) LinkRelation(relation string) *jsonapi.Link {
-	id := strconv.FormatInt(s.ID, 10)
-	return &jsonapi.Link{
-		Self:    fmt.Sprintf("https://example.com/services/%s/relationships/%s", id, relation),
-		Related: fmt.Sprintf("https://example.com/services/%s/%s", id, relation),
-	}
-}
-
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
 type zerologErrorWriter struct {
@@ -106,380 +58,486 @@ func (zew *zerologErrorWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func rootHandler(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
-	// The "/" pattern matches everything, so we need to check
-	// that we're at the root here.
-	if req.URL.Path != "/" {
-		http.NotFound(w, req)
-		return
-	}
-
+func rootHandler(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "Welcome to SUNET CDN Manager\n")
 }
 
-func writeNewlineJSON(w http.ResponseWriter, b []byte, statusCode int) error {
-	w.Header().Set("content-type", contentTypeString)
-	w.WriteHeader(statusCode)
-	// Include newline since this JSON can be returned to curl
-	// requests and similar where the prompt gets messed up without
-	// it.
-	_, err := fmt.Fprintf(w, "%s\n", b)
+type argon2Settings struct {
+	ArgonTime     uint32 `json:"argon_time"`
+	ArgonMemory   uint32 `json:"argon_memory"`
+	ArgonThreads  uint8  `json:"argon_threads"`
+	ArgonHashSize uint32 `json:"argon_hash_size"`
+}
+
+func newArgon2DefaultSettings() argon2Settings {
+	argon2Settings := argon2Settings{}
+	// https://datatracker.ietf.org/doc/rfc9106/
+	// ===
+	// If much less memory is available, a uniformly safe option is
+	// Argon2id with t=3 iterations, p=4 lanes, m=2^(16) (64 MiB of
+	// RAM), 128-bit salt, and 256-bit tag size.  This is the SECOND
+	// RECOMMENDED option.
+	// [...]
+	// The Argon2id variant with t=1 and 2 GiB memory is the FIRST
+	// RECOMMENDED option and is suggested as a default setting for
+	// all environments.  This setting is secure against
+	// side-channel attacks and maximizes adversarial costs on
+	// dedicated brute-force hardware. The Argon2id variant with t=3
+	// and 64 MiB memory is the SECOND RECOMMENDED option and is
+	// suggested as a default setting for memory- constrained
+	// environments.
+	// ===
+	//
+	// Use the "SECOND RECOMMENDED" settings because we are
+	// probably running in a memory constrained container:
+	// t=3 iterations
+	argon2Settings.ArgonTime = uint32(3)
+
+	// p=4 lanes
+	// const ArgonThreads = uint8(4)
+	argon2Settings.ArgonThreads = uint8(4)
+
+	// m=2^(16) (64 MiB of RAM)
+	argon2Settings.ArgonMemory = uint32(64 * 1024)
+
+	// 256-bit tag size (== 32 bytes)
+	argon2Settings.ArgonHashSize = uint32(32)
+	return argon2Settings
+}
+
+type authDataKey struct{}
+
+type authData struct {
+	username     string
+	userID       int64
+	customerID   *int64
+	customerName *string
+	superuser    bool
+	roleID       int64
+	roleName     string
+}
+
+func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			realm := "SUNET CDN Manager"
+			username, password, ok := r.BasicAuth()
+			if !ok {
+				w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
+			var userID, roleID int64
+			var customerID *int64    // can be nil if not belonging to a customer
+			var customerName *string // same as above
+			var argon2Key, argon2Salt []byte
+			var argon2Time, argon2Memory, argon2TagSize uint32
+			var argon2Threads uint8
+			var superuser bool
+			var roleName string
+
+			// Use RepeatableRead to make sure the databases does not change while we look up things spread over multiple SELECTs
+			err := pgx.BeginTxFunc(context.Background(), dbPool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx pgx.Tx) error {
+				err := tx.QueryRow(
+					context.Background(),
+					`SELECT
+						users.id,
+						users.customer_id,
+						customers.name,
+						users.role_id,
+						roles.name,
+						roles.superuser,
+						user_argon2keys.key,
+						user_argon2keys.salt,
+						user_argon2keys.time,
+						user_argon2keys.memory,
+						user_argon2keys.threads,
+						user_argon2keys.tag_size
+					FROM users
+					JOIN user_argon2keys ON users.id = user_argon2keys.user_id
+					JOIN roles ON users.role_id = roles.id
+					LEFT JOIN customers ON users.customer_id = customers.id
+					WHERE users.name=$1`,
+					username,
+				).Scan(
+					&userID,
+					&customerID,
+					&customerName,
+					&roleID,
+					&roleName,
+					&superuser,
+					&argon2Key,
+					&argon2Salt,
+					&argon2Time,
+					&argon2Memory,
+					&argon2Threads,
+					&argon2TagSize,
+				)
+				if err != nil {
+					return err
+				}
+
+				return nil
+			})
+			if err != nil {
+				logger.Err(err).Msg("failed looking up username for authentication")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
+			// Use subtle.ConstantTimeCompare() in an attempt to
+			// not leak password contents via timing attack
+			passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+
+			if !passwordMatch {
+				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
+			}
+
+			ad := authData{
+				username:     username,
+				userID:       userID,
+				customerID:   customerID,
+				customerName: customerName,
+				roleID:       roleID,
+				roleName:     roleName,
+				superuser:    superuser,
+			}
+
+			ctx := context.WithValue(r.Context(), authDataKey{}, ad)
+
+			// call the next handler in the chain, passing the response writer and
+			// the updated request object with the new context value.
+			//
+			// note: context.Context values are nested, so any previously set
+			// values will be accessible as well, and the new `"user"` key
+			// will be accessible from this point forward.
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func selectCustomers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]customer, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.superuser {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM customers ORDER BY id")
+		if err != nil {
+			logger.Err(err).Msg("unable to Query for customers")
+			return nil, fmt.Errorf("unable to query for customers: %w", err)
+		}
+	} else if ad.customerID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM customers WHERE id=$1 ORDER BY id", *ad.customerID)
+		if err != nil {
+			logger.Err(err).Msg("unable to Query for customers")
+			return nil, fmt.Errorf("unable to query for customers: %w", err)
+		}
+	} else {
+		return nil, errForbidden
+	}
+
+	customers, err := pgx.CollectRows(rows, pgx.RowToStructByName[customer])
 	if err != nil {
-		return err
+		logger.Err(err).Msg("unable to CollectRows for customers")
+		return nil, fmt.Errorf("unable to CollectRows for customers: %w", err)
 	}
 
-	return nil
+	return customers, nil
 }
 
-func getCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
-		rows, err := dbPool.Query(context.Background(), "SELECT id, name FROM customers ORDER BY id")
-		if err != nil {
-			logger.Err(err).Msg("unable to Query for getCustomers")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		customers, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[customer])
-		if err != nil {
-			logger.Err(err).Msg("unable to CollectRows for getCustomers")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		b, err := jsonapi.Marshal(customers)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal getCustomers in API GET")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusOK)
-		if err != nil {
-			logger.Err(err).Msg("failed writing customersData in API GET")
-			return
-		}
+func selectCustomerByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string, ad authData) (customer, error) {
+	c := customer{}
+	ident, err := parseNameOrID(inputID)
+	if err != nil {
+		return customer{}, fmt.Errorf("unable to parse name or id")
 	}
-}
-
-func getCustomerHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
-
-		id := req.PathValue("id")
-
-		if id == "" {
-			logger.Error().Msg("missing id PathValue getCustomer")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
-		}
-
-		idInt, err := strconv.ParseInt(id, 10, 64)
-		if err != nil {
-			logger.Err(err).Msg("unable to parse id integer for getCustomer")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+	if ident.isID() {
+		if !ad.superuser && (ad.customerID == nil || *ad.customerID != *ident.id) {
+			return customer{}, errNotFound
 		}
 
 		var name string
-		err = dbPool.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1", idInt).Scan(&name)
+		err := dbPool.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1", *ident.id).Scan(&name)
 		if err != nil {
-			logger.Err(err).Int64("id", idInt).Msg("unable to SELECT customer by id")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+			logger.Err(err).Int64("id", *ident.id).Msg("unable to SELECT customer by id")
+			return customer{}, fmt.Errorf("unable to SELECT customer by id")
 		}
-
-		c := &customer{
-			ID:   idInt,
-			Name: name,
+		c.Name = name
+		c.ID = *ident.id
+	} else {
+		if !ad.superuser && (ad.customerName == nil || *ad.customerName != inputID) {
+			return customer{}, errForbidden
 		}
-
-		b, err := jsonapi.Marshal(c)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal getCustomer in API GET")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusOK)
-		if err != nil {
-			logger.Err(err).Msg("failed writing customersData in API GET")
-			return
-		}
-	}
-}
-
-func postCustomersHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
 		var id int64
-
-		cReq := customer{}
-		bodyData, err := io.ReadAll(req.Body)
+		err := dbPool.QueryRow(context.Background(), "SELECT id FROM customers WHERE name=$1", inputID).Scan(&id)
 		if err != nil {
-			logger.Err(err).Msg("unable to read customer data in API POST")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
+			logger.Err(err).Str("id", inputID).Msg("unable to SELECT customer by name")
+			return customer{}, fmt.Errorf("unable to SELECT customer by id")
 		}
-
-		err = jsonapi.Unmarshal(bodyData, &cReq)
-		if err != nil {
-			logger.Err(err).Msg("unable to unmarshal customer in API POST")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
-		}
-
-		if cReq.Name == "" {
-			je := jsonapi.Error{
-				Status: jsonapi.Status(http.StatusBadRequest),
-				Source: &jsonapi.ErrorSource{Pointer: "/data/attributes/name"},
-				Title:  "Invalid Attribute",
-				Detail: "Name must contain at least one character",
-			}
-
-			jeData, err := jsonapi.Marshal(je)
-			if err != nil {
-				logger.Err(err).Msg("unable to marshal JSON:API error")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-
-			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
-			if err != nil {
-				logger.Err(err).Msg("postCustomers: unable to send error json")
-			}
-			return
-		}
-
-		err = dbPool.QueryRow(context.Background(), "INSERT INTO customers (name) VALUES ($1) RETURNING id", cReq.Name).Scan(&id)
-		if err != nil {
-			logger.Err(err).Msg("unable to INSERT customer")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		cResp := customer{
-			ID:   id,
-			Name: cReq.Name,
-		}
-
-		b, err := jsonapi.Marshal(&cResp)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal customer in API POST")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusCreated)
-		if err != nil {
-			logger.Err(err).Msg("failed writing customersData in API POST")
-			return
-		}
+		c.Name = inputID
+		c.ID = id
 	}
+
+	return c, nil
 }
 
-func getServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
-		rows, err := dbPool.Query(context.Background(), "SELECT id, customer_id, name FROM services ORDER BY id")
-		if err != nil {
-			logger.Err(err).Msg("unable to Query for getServices")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		services := []*service{}
-		var serviceID, customerID int64
-		var serviceName string
-		_, err = pgx.ForEachRow(rows, []any{&serviceID, &customerID, &serviceName}, func() error {
-			services = append(
-				services,
-				&service{
-					ID:   serviceID,
-					Name: serviceName,
-					Customer: &customer{
-						ID: customerID,
-					},
-				},
-			)
-			return nil
-		})
-		if err != nil {
-			logger.Err(err).Msg("unable to ForEachRow over services in API GET")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		b, err := jsonapi.Marshal(services)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal getServers in API GET")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusOK)
-		if err != nil {
-			logger.Err(err).Msg("failed writing servicesData in API GET")
-			return
-		}
+func insertCustomer(dbPool *pgxpool.Pool, name string, ad authData) (int64, error) {
+	var id int64
+	if !ad.superuser {
+		return 0, errForbidden
 	}
+	err := dbPool.QueryRow(context.Background(), "INSERT INTO customers (name) VALUES ($1) RETURNING id", name).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("unable to INSERT customer: %w", err)
+	}
+
+	return id, nil
 }
 
-func getServiceHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
-
-		id := req.PathValue("id")
-
-		if id == "" {
-			logger.Error().Msg("missing id PathValue getService")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
-		}
-
-		idInt, err := strconv.ParseInt(id, 10, 64)
+func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.superuser {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY id")
 		if err != nil {
-			logger.Err(err).Msg("unable to parse id integer for getService")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
-
-		var serviceName string
-		var serviceID, customerID int64
-
-		err = dbPool.QueryRow(context.Background(), "SELECT id, customer_id, name FROM services WHERE id=$1", idInt).Scan(&serviceID, &customerID, &serviceName)
+	} else if ad.customerID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE customer_id=$1 ORDER BY id", *ad.customerID)
 		if err != nil {
-			logger.Err(err).Msg("unable to Query for getServices")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
+	} else {
+		return nil, errForbidden
+	}
 
-		s := &service{
-			ID:   serviceID,
-			Name: serviceName,
-			Customer: &customer{
-				ID: customerID,
+	services := []service{}
+	var serviceID int64
+	var serviceName string
+	_, err = pgx.ForEachRow(rows, []any{&serviceID, &serviceName}, func() error {
+		services = append(
+			services,
+			service{
+				ID:   serviceID,
+				Name: serviceName,
 			},
-		}
-
-		b, err := jsonapi.Marshal(s)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal getServers in API GET")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusOK)
-		if err != nil {
-			logger.Err(err).Msg("failed writing servicesData in API GET")
-			return
-		}
+		)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to ForEachRow over services in API GET: %w", err)
 	}
+
+	return services, nil
 }
 
-func postServicesHandler(dbPool *pgxpool.Pool) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		logger := hlog.FromRequest(req)
+func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (service, error) {
+	s := service{}
+	var serviceName string
+	var serviceID int64
 
-		sReq := &service{}
-		bodyData, err := io.ReadAll(req.Body)
+	ident, err := parseNameOrID(inputID)
+	if err != nil {
+		return service{}, fmt.Errorf("unable to parse name or id")
+	}
+	if ident.isID() {
+		if ad.superuser {
+			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *ident.id).Scan(&serviceName)
+			if err != nil {
+				return service{}, fmt.Errorf("unable to SELECT service by id for superuser")
+			}
+			s.Name = serviceName
+			s.ID = *ident.id
+		} else if ad.customerID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN customers ON services.customer_id = customers.id WHERE services.id=$1 AND customers.id=$2", *ident.id, ad.customerID).Scan(&serviceName)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return service{}, errNotFound
+				}
+				return service{}, fmt.Errorf("unable to SELECT service by id for customer")
+			}
+			s.Name = serviceName
+			s.ID = *ident.id
+		} else {
+			return service{}, errNotFound
+		}
+	} else {
+		if ad.superuser {
+			err := dbPool.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1", inputID).Scan(&serviceID)
+			if err != nil {
+				return service{}, fmt.Errorf("unable to SELECT service by name for superuser")
+			}
+			s.Name = inputID
+			s.ID = serviceID
+		} else if ad.customerID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN customers ON services.customer_id = customers.id WHERE services.name=$1 AND customers.id=$2", inputID, ad.customerID).Scan(&serviceID)
+			if err != nil {
+				return service{}, fmt.Errorf("unable to SELECT service by name for customer")
+			}
+			s.Name = inputID
+			s.ID = serviceID
+		} else {
+			return service{}, errNotFound
+		}
+	}
+
+	return s, nil
+}
+
+type identifier struct {
+	name *string
+	id   *int64
+}
+
+func parseNameOrID(inputID string) (identifier, error) {
+	id, err := strconv.ParseInt(inputID, 10, 64)
+	if err == nil {
+		// This is a numeric identifer, treat it as an ID
+		return identifier{
+			id: &id,
+		}, nil
+	}
+
+	// This is not a numeric ID, treat it as a name
+	return identifier{
+		name: &inputID,
+	}, nil
+}
+
+func (i identifier) isID() bool {
+	return i.id != nil
+}
+
+func (i identifier) isValid() bool {
+	return i.id != nil || i.name != nil
+}
+
+func (i identifier) String() string {
+	if i.name != nil {
+		return *i.name
+	}
+
+	if i.id != nil {
+		return strconv.FormatInt(*i.id, 10)
+	}
+
+	return ""
+}
+
+func insertService(dbPool *pgxpool.Pool, name string, customerNameOrID *string, ad authData) (int64, error) {
+	var id int64
+
+	var ident identifier
+	var err error
+
+	if customerNameOrID != nil {
+		ident, err = parseNameOrID(*customerNameOrID)
 		if err != nil {
-			logger.Err(err).Msg("unable to read service data in API POST")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
+			return 0, errUnprocessable
+		}
+	}
+
+	if ad.superuser {
+		if !ident.isValid() {
+			return 0, errUnprocessable
+		}
+		if ident.isID() {
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", name, *ident.id).Scan(&id)
+			if err != nil {
+				return 0, fmt.Errorf("unable to INSERT service for superuser with customer id: %w", err)
+			}
+		} else {
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) SELECT $1, customers.id FROM customers where customers.name=$2 returning id", name, *ident.name).Scan(&id)
+			if err != nil {
+				return 0, fmt.Errorf("unable to INSERT service for superuser with customer name: %w", err)
+			}
+		}
+	} else {
+		if ad.customerID == nil {
+			return 0, errForbidden
 		}
 
-		fmt.Printf("sReq data: %s\n", bodyData)
+		if ident.isValid() {
+			if ident.isID() {
+				if *ad.customerID != *ident.id {
+					return 0, errForbidden
+				}
+			} else {
+				if *ad.customerName != *ident.name {
+					return 0, errForbidden
+				}
+			}
+		}
 
-		err = jsonapi.Unmarshal(bodyData, sReq)
+		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", name, ad.customerID).Scan(&id)
 		if err != nil {
-			logger.Err(err).Msg("unable to unmarshal service in API POST")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				// https://www.postgresql.org/docs/current/errcodes-appendix.html
+				// unique_violation: 23505
+				if pgErr.Code == "23505" {
+					return 0, errServiceAlreadyExists
+				}
+			}
+			return 0, fmt.Errorf("unable to INSERT service for customer with id: %w", err)
 		}
+	}
 
-		if sReq.Name == "" {
-			je := jsonapi.Error{
-				Status: jsonapi.Status(http.StatusBadRequest),
-				Source: &jsonapi.ErrorSource{Pointer: "/data/attributes/name"},
-				Title:  "Invalid Attribute",
-				Detail: "Name must contain at least one character",
-			}
+	return id, nil
+}
 
-			jeData, err := jsonapi.Marshal(je)
-			if err != nil {
-				logger.Err(err).Msg("unable to marshal JSON:API error")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-
-			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
-			if err != nil {
-				logger.Err(err).Msg("postServices: unable to send error json")
-			}
-			return
-		}
-
-		if sReq.Customer == nil || sReq.Customer.ID <= 0 {
-			je := jsonapi.Error{
-				Status: jsonapi.Status(http.StatusBadRequest),
-				Source: &jsonapi.ErrorSource{Pointer: "/data/relationships/customer/data/id"},
-				Title:  "Invalid Attribute",
-				Detail: "ID must be set and larger than 0",
-			}
-
-			jeData, err := jsonapi.Marshal(je)
-			if err != nil {
-				logger.Err(err).Msg("unable to marshal JSON:API error")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-
-			err = writeNewlineJSON(w, jeData, http.StatusBadRequest)
-			if err != nil {
-				logger.Err(err).Msg("postSerices: unable to send error json")
-			}
-			return
-		}
-
-		var serviceID int64
-		err = dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", sReq.Name, sReq.Customer.ID).Scan(&serviceID)
+func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.superuser {
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id ORDER BY service_versions.version")
 		if err != nil {
-			logger.Err(err).Msg("unable to INSERT service")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("unable to Query for service versions as superuser: %w", err)
 		}
+	} else if ad.customerID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.customer_id=$1 ORDER BY service_versions.version", ad.customerID)
+		if err != nil {
+			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
+		}
+	} else {
+		return nil, errForbidden
+	}
 
-		sResp := &service{
-			ID:   serviceID,
-			Name: sReq.Name,
-			Customer: &customer{
-				ID: sReq.Customer.ID,
+	serviceVersions := []serviceVersion{}
+	var id, version int64
+	// active can be NULL in the database so that we can force uniqeness on
+	// the TRUE value. Treat NULL as false in the API.
+	var active *bool
+	var serviceName string
+	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &serviceName}, func() error {
+		if active == nil {
+			b := false
+			active = &b
+		}
+		serviceVersions = append(
+			serviceVersions,
+			serviceVersion{
+				ID:          id,
+				ServiceName: serviceName,
+				Version:     version,
+				Active:      *active,
 			},
-		}
-
-		b, err := jsonapi.Marshal(sResp)
-		if err != nil {
-			logger.Err(err).Msg("unable to marshal customer in API POST")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		err = writeNewlineJSON(w, b, http.StatusCreated)
-		if err != nil {
-			logger.Err(err).Msg("failed writing customersData in API POST")
-			return
-		}
+		)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to ForEachRow over services in API GET: %w", err)
 	}
+
+	return serviceVersions, nil
 }
 
-func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
-	hlogMiddlewares := []alice.Constructor{
-		// hlog handlers based on example from https://github.com/rs/zerolog#integration-with-nethttp
+func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
+	router := chi.NewMux()
+
+	hlogChain := chi.Chain(
 		hlog.NewHandler(logger),
 		hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
 			hlog.FromRequest(r).Info().
@@ -494,41 +552,277 @@ func newHlogMiddlewares(logger zerolog.Logger) []alice.Constructor {
 		hlog.UserAgentHandler("user_agent"),
 		hlog.RefererHandler("referer"),
 		hlog.RequestIDHandler("req_id", "Request-Id"),
-	}
+	)
 
-	return hlogMiddlewares
+	router.Use(hlogChain...)
+	router.Use(authMiddleware(dbPool, logger))
+
+	router.Get("/", rootHandler)
+
+	return router
 }
 
-func newRootMiddlewares(hlogMiddlewares []alice.Constructor) []alice.Constructor {
-	fleetLockMiddlewares := []alice.Constructor{}
-	fleetLockMiddlewares = append(fleetLockMiddlewares, hlogMiddlewares...)
+func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
+	api := humachi.New(router, huma.DefaultConfig("SUNET CDN API", "0.0.1"))
 
-	return fleetLockMiddlewares
+	huma.Get(api, "/api/v1/customers", func(ctx context.Context, _ *struct{},
+	) (*customersOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from getCustomersHandler")
+			return nil, errors.New("unable to read auth data from getCustomersHandler")
+		}
+
+		customers, err := selectCustomers(dbPool, logger, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("not allowed to access resource")
+			}
+			logger.Err(err).Msg("unable to query customers")
+			return nil, err
+		}
+
+		resp := &customersOutput{
+			Body: customers,
+		}
+		return resp, nil
+	})
+
+	huma.Get(api, "/api/v1/customers/{customer}", func(ctx context.Context, input *struct {
+		Customer string `path:"customer" example:"1" doc:"Customer ID or name"`
+	},
+	) (*customerOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from getCustomerHandler")
+		}
+
+		customer, err := selectCustomerByID(dbPool, logger, input.Customer, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("not allowed to access resource")
+			} else if errors.Is(err, errNotFound) {
+				return nil, huma.Error404NotFound("customer not found")
+			}
+			logger.Err(err).Msg("unable to query customers")
+			return nil, err
+		}
+		resp := &customerOutput{}
+		resp.Body.ID = customer.ID
+		resp.Body.Name = customer.Name
+		return resp, nil
+	})
+
+	// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
+	postCustomersPath := "/api/v1/customers"
+	huma.Register(
+		api,
+		huma.Operation{
+			OperationID:   huma.GenerateOperationID(http.MethodPost, postCustomersPath, &customerOutput{}),
+			Summary:       huma.GenerateSummary(http.MethodPost, postCustomersPath, &customerOutput{}),
+			Method:        http.MethodPost,
+			Path:          postCustomersPath,
+			DefaultStatus: http.StatusCreated,
+		},
+		func(ctx context.Context, input *struct {
+			Body struct {
+				Name string `json:"name" example:"Some name" doc:"Customer name"`
+			}
+		},
+		) (*customerOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				logger.Error().Msg("unable to read auth data from getCustomerHandler")
+				return nil, errors.New("unable to read auth data from getCustomerHandler")
+			}
+
+			id, err := insertCustomer(dbPool, input.Body.Name, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to add resource")
+				}
+				logger.Err(err).Msg("unable to add customer")
+				return nil, err
+			}
+			resp := &customerOutput{}
+			resp.Body.ID = id
+			resp.Body.Name = input.Body.Name
+			return resp, nil
+		},
+	)
+
+	huma.Get(api, "/api/v1/services", func(ctx context.Context, _ *struct{},
+	) (*servicesOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from getCustomerHandler")
+		}
+
+		services, err := selectServices(dbPool, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("not allowed to query for services")
+			}
+			logger.Err(err).Msg("unable to query services")
+			return nil, err
+		}
+
+		resp := &servicesOutput{
+			Body: services,
+		}
+		return resp, nil
+	})
+
+	huma.Get(api, "/api/v1/services/{service}", func(ctx context.Context, input *struct {
+		Service string `path:"service" example:"1" doc:"Service ID or name"`
+	},
+	) (*serviceOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from getCustomerHandler")
+		}
+
+		services, err := selectServiceByID(dbPool, input.Service, ad)
+		if err != nil {
+			if errors.Is(err, errNotFound) {
+				return nil, huma.Error404NotFound("service not found")
+			} else if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("access to this service is not allowed")
+			}
+			logger.Err(err).Msg("unable to query service by ID")
+			return nil, err
+		}
+
+		resp := &serviceOutput{
+			Body: services,
+		}
+		return resp, nil
+	})
+
+	postServicesPath := "/api/v1/services"
+	huma.Register(
+		api,
+		huma.Operation{
+			OperationID:   huma.GenerateOperationID(http.MethodPost, postServicesPath, &serviceOutput{}),
+			Summary:       huma.GenerateSummary(http.MethodPost, postServicesPath, &serviceOutput{}),
+			Method:        http.MethodPost,
+			Path:          postServicesPath,
+			DefaultStatus: http.StatusCreated,
+		},
+		func(ctx context.Context, input *struct {
+			Body struct {
+				Name     string  `json:"name" example:"Some name" doc:"Service name"`
+				Customer *string `json:"customer,omitempty" example:"Name or ID of customer" doc:"customer1"`
+			}
+		},
+		) (*customerOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				logger.Error().Msg("unable to read auth data from getCustomerHandler")
+				return nil, errors.New("unable to read auth data from getCustomerHandler")
+			}
+
+			id, err := insertService(dbPool, input.Body.Name, input.Body.Customer, ad)
+			if err != nil {
+				if errors.Is(err, errUnprocessable) {
+					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
+				} else if errors.Is(err, errServiceAlreadyExists) {
+					return nil, huma.Error400BadRequest("service already exists")
+				} else if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to create this service")
+				}
+				logger.Err(err).Msg("unable to add service")
+				return nil, err
+			}
+			resp := &customerOutput{}
+			resp.Body.ID = id
+			resp.Body.Name = input.Body.Name
+			return resp, nil
+		},
+	)
+
+	huma.Get(api, "/api/v1/service-versions", func(ctx context.Context, _ *struct{},
+	) (*serviceVersionsOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from getServiceVersions")
+			return nil, errors.New("unable to read auth data from getServiceVersions")
+		}
+
+		serviceVersions, err := selectServiceVersions(dbPool, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("not allowed to access resource")
+			}
+			logger.Err(err).Msg("unable to query customers")
+			return nil, err
+		}
+
+		resp := &serviceVersionsOutput{
+			Body: serviceVersions,
+		}
+		return resp, nil
+	})
+
+	return nil
 }
 
-func newMux(logger zerolog.Logger, dbPool *pgxpool.Pool) *http.ServeMux {
-	mux := http.NewServeMux()
+type customer struct {
+	ID   int64  `json:"id" example:"1" doc:"ID of customer"`
+	Name string `json:"name" example:"customer 1" doc:"name of customer"`
+}
 
-	hlogMiddlewares := newHlogMiddlewares(logger)
-	rootMiddlewares := newRootMiddlewares(hlogMiddlewares)
+type customerOutput struct {
+	Body customer
+}
 
-	rootChain := alice.New(rootMiddlewares...).ThenFunc(rootHandler)
-	getCustomersChain := alice.New(rootMiddlewares...).ThenFunc(getCustomersHandler(dbPool))
-	getCustomerChain := alice.New(rootMiddlewares...).ThenFunc(getCustomerHandler(dbPool))
-	postCustomersChain := alice.New(rootMiddlewares...).ThenFunc(postCustomersHandler(dbPool))
-	getServicesChain := alice.New(rootMiddlewares...).ThenFunc(getServicesHandler(dbPool))
-	getServiceChain := alice.New(rootMiddlewares...).ThenFunc(getServiceHandler(dbPool))
-	postServicesChain := alice.New(rootMiddlewares...).ThenFunc(postServicesHandler(dbPool))
+type customersOutput struct {
+	Body []customer
+}
 
-	mux.Handle("/", rootChain)
-	mux.Handle("GET /api/v1/customers", getCustomersChain)
-	mux.Handle("GET /api/v1/customers/{id}", getCustomerChain)
-	mux.Handle("POST /api/v1/customers", postCustomersChain)
-	mux.Handle("GET /api/v1/services", getServicesChain)
-	mux.Handle("GET /api/v1/services/{id}", getServiceChain)
-	mux.Handle("POST /api/v1/services", postServicesChain)
+type service struct {
+	ID   int64  `json:"id" example:"1" doc:"ID of service"`
+	Name string `json:"name" example:"service 1" doc:"name of service"`
+}
 
-	return mux
+type serviceOutput struct {
+	Body service
+}
+
+type servicesOutput struct {
+	Body []service
+}
+
+type serviceVersion struct {
+	ID          int64  `json:"id"`
+	Version     int64  `json:"version"`
+	Active      bool   `json:"active"`
+	ServiceName string `json:"service_name"`
+}
+
+type serviceVersionOutput struct {
+	Body serviceVersion
+}
+
+type serviceVersionsOutput struct {
+	Body []serviceVersion
 }
 
 func Run(logger zerolog.Logger) {
@@ -576,11 +870,16 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Err(err).Msg("unable to ping database connection")
 	}
 
-	mux := newMux(logger, dbPool)
+	router := newChiRouter(logger, dbPool)
+
+	err = setupHumaAPI(router, dbPool)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to setup Huma API")
+	}
 
 	srv := &http.Server{
 		Addr:         "127.0.0.1:8080",
-		Handler:      mux,
+		Handler:      router,
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
 		ErrorLog:     log.New(&zerologErrorWriter{&logger}, "", 0),

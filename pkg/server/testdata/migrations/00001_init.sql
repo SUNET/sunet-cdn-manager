@@ -4,6 +4,31 @@ CREATE TABLE customers (
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
 );
 
+CREATE TABLE roles (
+    id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
+    superuser boolean DEFAULT false NOT NULL
+);
+
+CREATE TABLE users (
+    id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    customer_id bigint REFERENCES customers(id),
+    role_id bigint NOT NULL REFERENCES roles(id),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
+);
+
+CREATE TABLE user_argon2keys (
+    id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    user_id bigint NOT NULL REFERENCES users(id),
+    key bytea NOT NULL CONSTRAINT non_empty_key CHECK(length(key)>0),
+    salt bytea NOT NULL CONSTRAINT non_empty_salt CHECK(length(salt)>0),
+    time bigint NOT NULL CONSTRAINT uint32_time CHECK(time >= 0 AND time <= 4294967295),
+    memory bigint NOT NULL CONSTRAINT uint32_memory CHECK(memory >= 0 AND memory <= 4294967295),
+    threads bigint NOT NULL CONSTRAINT uiint8_threads CHECK(threads >= 0 AND threads <= 255),
+    tag_size bigint NOT NULL CONSTRAINT uint32_tag_sizie CHECK(tag_size >= 0 AND tag_size <= 4294967295),
+    UNIQUE(user_id, key, salt)
+);
+
 CREATE TABLE services (
     id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     customer_id bigint NOT NULL REFERENCES customers(id),
@@ -39,4 +64,7 @@ DROP TABLE service_domains;
 DROP TABLE service_origins;
 DROP TABLE service_versions;
 DROP TABLE services;
+DROP TABLE user_argon2keys;
+DROP TABLE users;
+DROP TABLE roles;
 DROP TABLE customers;
