@@ -89,6 +89,289 @@ func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
 	return ts, dbPool, nil
 }
 
+func TestGetUsers(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "successful customer request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed customer request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetUser(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		nameOrID       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request with ID",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "username1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request for itself with ID",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "2",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request for itself with name",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "username1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed user request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			nameOrID:       "1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed lookup of another user with ID",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "1",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed lookup of another user with name",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "username1",
+			expectedStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		ident, err := parseNameOrID(test.nameOrID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !ident.isValid() {
+			t.Fatal("service ID or name is not valid")
+		}
+
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+ident.String(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", ident.String(), test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestPostUsers(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		addedUser        string
+		addedPassword    string
+		roleIDorName     string
+		customerIDorName string
+	}{
+		{
+			description:      "successful superuser request with IDs",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusCreated,
+			addedUser:        "admin-created-user-1",
+			addedPassword:    "admin-created-password-1",
+			roleIDorName:     "2",
+			customerIDorName: "2",
+		},
+		{
+			description:      "successful superuser request with names",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusCreated,
+			addedUser:        "admin-created-user-2",
+			addedPassword:    "admin-created-password-2",
+			roleIDorName:     "customer",
+			customerIDorName: "customer1",
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       "password1",
+			addedUser:      "user-created-user-1",
+			addedPassword:  "user-created-password-1",
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		newUser := struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+			Customer string `json:"customer"`
+		}{
+			Name:     test.addedUser,
+			Password: test.addedPassword,
+			Customer: test.customerIDorName,
+			Role:     test.roleIDorName,
+		}
+
+		b, err := json.Marshal(newUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/users", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("POST users unexpected status code: %d (%s)", resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
 func TestGetCustomers(t *testing.T) {
 	ts, dbPool, err := prepareServer()
 	if dbPool != nil {
@@ -146,7 +429,11 @@ func TestGetCustomers(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != test.expectedStatus {
-			t.Fatalf("GET customers unexpected status code: %d", resp.StatusCode)
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("GET customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -250,7 +537,11 @@ func TestGetCustomer(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != test.expectedStatus {
-			t.Fatalf("GET customer/1 unexpected status code: %d", resp.StatusCode)
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("GET customers/%s unexpected status code: %d (%s)", ident.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -307,8 +598,6 @@ func TestPostCustomers(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("b: %s\n", string(b))
-
 		r := bytes.NewReader(b)
 
 		req, err := http.NewRequest("POST", ts.URL+"/api/v1/customers", r)
@@ -325,10 +614,6 @@ func TestPostCustomers(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			t.Fatalf("POST customers unexpected status code: %d", resp.StatusCode)
-		}
 
 		if resp.StatusCode != test.expectedStatus {
 			r, err := io.ReadAll(resp.Body)
@@ -404,7 +689,11 @@ func TestGetServices(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != test.expectedStatus {
-			t.Fatalf("GET customers unexpected status code: %d", resp.StatusCode)
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("GET customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -519,7 +808,11 @@ func TestGetService(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != test.expectedStatus {
-			t.Fatalf("GET service by ID unexpected status code: %d", resp.StatusCode)
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("GET service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
