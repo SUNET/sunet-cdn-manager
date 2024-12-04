@@ -1,17 +1,20 @@
 -- +goose up
 CREATE TABLE organizations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
 );
 
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
     superuser boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid REFERENCES organizations(id),
     role_id uuid NOT NULL REFERENCES roles(id),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
@@ -19,6 +22,7 @@ CREATE TABLE users (
 
 CREATE TABLE user_argon2keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     user_id uuid NOT NULL REFERENCES users(id),
     key bytea NOT NULL CONSTRAINT non_empty_key CHECK(length(key)>0),
     salt bytea NOT NULL CONSTRAINT non_empty_salt CHECK(length(salt)>0),
@@ -31,6 +35,7 @@ CREATE TABLE user_argon2keys (
 
 CREATE TABLE services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES organizations(id),
     name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
     version_counter BIGINT DEFAULT 0 NOT NULL,
@@ -39,6 +44,7 @@ CREATE TABLE services (
 
 CREATE TABLE service_versions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     service_id uuid NOT NULL REFERENCES services(id),
     version bigint NOT NULL,
     active boolean,
@@ -48,6 +54,7 @@ CREATE TABLE service_versions (
 
 CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id),
     domain text NOT NULL CONSTRAINT non_empty CHECK(length(domain)>0),
     UNIQUE(service_version_id, domain)
@@ -55,6 +62,7 @@ CREATE TABLE service_domains (
 
 CREATE TABLE service_origins (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id),
     origin text NOT NULL CONSTRAINT non_empty CHECK(length(origin)>0),
     UNIQUE(service_version_id, origin)

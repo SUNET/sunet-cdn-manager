@@ -225,13 +225,13 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 	var rows pgx.Rows
 	var err error
 	if ad.superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY id")
+		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY users.ts")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
 	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.id", ad.userID)
+		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.ts", ad.userID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -424,12 +424,12 @@ func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, err
 	var rows pgx.Rows
 	var err error
 	if ad.superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY id")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY ts")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
 	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY id", *ad.orgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY ts", *ad.orgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
@@ -496,12 +496,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY id")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY ts")
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
 	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY id", *ad.orgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY ts", *ad.orgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
