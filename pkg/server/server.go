@@ -29,10 +29,10 @@ import (
 )
 
 var (
-	errForbidden            = errors.New("access to resource is not allowed")
-	errNotFound             = errors.New("resource not found")
-	errUnprocessable        = errors.New("resource not processable")
-	errServiceAlreadyExists = errors.New("service already exists")
+	errForbidden     = errors.New("access to resource is not allowed")
+	errNotFound      = errors.New("resource not found")
+	errUnprocessable = errors.New("resource not processable")
+	errAlreadyExists = errors.New("resource already exists")
 )
 
 type config struct {
@@ -689,7 +689,7 @@ func insertService(dbPool *pgxpool.Pool, name string, customerNameOrID *string, 
 				// https://www.postgresql.org/docs/current/errcodes-appendix.html
 				// unique_violation: 23505
 				if pgErr.Code == "23505" {
-					return 0, errServiceAlreadyExists
+					return 0, errAlreadyExists
 				}
 			}
 			return 0, fmt.Errorf("unable to INSERT service for customer with id: %w", err)
@@ -1048,7 +1048,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 			if err != nil {
 				if errors.Is(err, errUnprocessable) {
 					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
-				} else if errors.Is(err, errServiceAlreadyExists) {
+				} else if errors.Is(err, errAlreadyExists) {
 					return nil, huma.Error400BadRequest("service already exists")
 				} else if errors.Is(err, errForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to create this service")
@@ -1078,7 +1078,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 			if errors.Is(err, errForbidden) {
 				return nil, huma.Error403Forbidden("not allowed to access resource")
 			}
-			logger.Err(err).Msg("unable to query customers")
+			logger.Err(err).Msg("unable to query service-versions")
 			return nil, err
 		}
 
@@ -1137,10 +1137,6 @@ type serviceVersion struct {
 	Version     int64  `json:"version"`
 	Active      bool   `json:"active"`
 	ServiceName string `json:"service_name"`
-}
-
-type serviceVersionOutput struct {
-	Body serviceVersion
 }
 
 type serviceVersionsOutput struct {
