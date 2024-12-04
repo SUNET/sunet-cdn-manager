@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,8 +17,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
@@ -110,11 +111,11 @@ type authDataKey struct{}
 
 type authData struct {
 	username  string
-	userID    int64
-	orgID     *int64
+	userID    pgtype.UUID
+	orgID     *pgtype.UUID
 	orgName   *string
 	superuser bool
-	roleID    int64
+	roleID    pgtype.UUID
 	roleName  string
 }
 
@@ -129,9 +130,9 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 				return
 			}
 
-			var userID, roleID int64
-			var orgID *int64    // can be nil if not belonging to a organization
-			var orgName *string // same as above
+			var userID, roleID pgtype.UUID
+			var orgID *pgtype.UUID // can be nil if not belonging to a organization
+			var orgName *string    // same as above
 			var argon2Key, argon2Salt []byte
 			var argon2Time, argon2Memory, argon2TagSize uint32
 			var argon2Threads uint8
@@ -273,7 +274,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 			return user{}, errNotFound
 		}
 
-		var userID int64
+		var userID pgtype.UUID
 		err := dbPool.QueryRow(context.Background(), "SELECT users.id, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.name=$1", inputID).Scan(&userID, &roleName, &superuser)
 		if err != nil {
 			logger.Err(err).Str("id", inputID).Msg("unable to SELECT user by name")
@@ -317,43 +318,43 @@ func passwordToArgon2(password string) (argon2Data, error) {
 	}, nil
 }
 
-func insertUserWithArgon2(tx pgx.Tx, name string, orgID int64, roleID int64, a2Data argon2Data) (int64, error) {
-	var userID int64
+func insertUserWithArgon2(tx pgx.Tx, name string, orgID pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
+	var userID pgtype.UUID
 
 	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, orgID, roleID).Scan(&userID)
 	if err != nil {
-		return 0, fmt.Errorf("unable to INSERT user with IDs: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user with IDs: %w", err)
 	}
 
 	err = tx.QueryRow(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", userID, a2Data.key, a2Data.salt, a2Data.argonTime, a2Data.argonMemory, a2Data.argonThreads, a2Data.argonTagSize).Scan(&userID)
 	if err != nil {
-		return 0, fmt.Errorf("unable to INSERT user argon2 data with IDs: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user argon2 data with IDs: %w", err)
 	}
 
 	return userID, nil
 }
 
-func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, organization string, ad authData) (int64, error) {
+func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, organization string, ad authData) (pgtype.UUID, error) {
 	if !ad.superuser {
-		return 0, errForbidden
+		return pgtype.UUID{}, errForbidden
 	}
 
 	orgIdent, err := parseNameOrID(organization)
 	if err != nil {
-		return 0, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
 	}
 
 	roleIdent, err := parseNameOrID(role)
 	if err != nil {
-		return 0, fmt.Errorf("unable to parse role for user INSERT: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to parse role for user INSERT: %w", err)
 	}
 
 	a2Data, err := passwordToArgon2(password)
 	if err != nil {
-		return 0, fmt.Errorf("unable to create password data for user INSERT: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to create password data for user INSERT: %w", err)
 	}
 
-	var userID int64
+	var userID pgtype.UUID
 	// If we already have all the IDs needed just insert them via VALUES
 	if orgIdent.isID() && roleIdent.isID() {
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -365,11 +366,11 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 			return nil
 		})
 		if err != nil {
-			return 0, fmt.Errorf("user with IDs INSERT transaction failed: %w", err)
+			return pgtype.UUID{}, fmt.Errorf("user with IDs INSERT transaction failed: %w", err)
 		}
 	} else {
-		var roleID int64
-		var orgID int64
+		var roleID pgtype.UUID
+		var orgID pgtype.UUID
 		// Fetch the missing IDs based on names instead where necessary
 		// Use single transaction with FOR SHARE selects to make sure
 		// the INSERT uses consistent data. To avoid deadlocks make
@@ -412,7 +413,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 			return nil
 		})
 		if err != nil {
-			return 0, fmt.Errorf("user INSERT transaction failed: %w", err)
+			return pgtype.UUID{}, fmt.Errorf("user INSERT transaction failed: %w", err)
 		}
 	}
 
@@ -466,7 +467,7 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 		if !ad.superuser && (ad.orgName == nil || *ad.orgName != inputID) {
 			return organization{}, errNotFound
 		}
-		var id int64
+		var id pgtype.UUID
 		err := dbPool.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", inputID).Scan(&id)
 		if err != nil {
 			return organization{}, fmt.Errorf("unable to SELECT organization by name: %w", err)
@@ -478,14 +479,14 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 	return o, nil
 }
 
-func insertOrganization(dbPool *pgxpool.Pool, name string, ad authData) (int64, error) {
-	var id int64
+func insertOrganization(dbPool *pgxpool.Pool, name string, ad authData) (pgtype.UUID, error) {
+	var id pgtype.UUID
 	if !ad.superuser {
-		return 0, errForbidden
+		return pgtype.UUID{}, errForbidden
 	}
 	err := dbPool.QueryRow(context.Background(), "INSERT INTO organizations (name) VALUES ($1) RETURNING id", name).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("unable to INSERT organization: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to INSERT organization: %w", err)
 	}
 
 	return id, nil
@@ -509,7 +510,7 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	}
 
 	services := []service{}
-	var serviceID int64
+	var serviceID pgtype.UUID
 	var serviceName string
 	_, err = pgx.ForEachRow(rows, []any{&serviceID, &serviceName}, func() error {
 		services = append(
@@ -531,7 +532,7 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (service, error) {
 	s := service{}
 	var serviceName string
-	var serviceID int64
+	var serviceID pgtype.UUID
 
 	ident, err := parseNameOrID(inputID)
 	if err != nil {
@@ -586,25 +587,24 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 
 type identifier struct {
 	name *string
-	id   *int64
+	id   *pgtype.UUID
 }
 
 func parseNameOrID(inputID string) (identifier, error) {
-	id, err := strconv.ParseInt(inputID, 10, 64)
+	if inputID == "" {
+		return identifier{}, errors.New("input id is empty")
+	}
+
+	id := new(pgtype.UUID)
+	err := id.Scan(inputID)
 	if err == nil {
-		// This is a numeric identifer, treat it as an ID as long as it is non-zero
-		if id == 0 {
-			return identifier{}, errors.New("input ID is 0")
-		}
+		// This is a UUID, treat it as an ID
 		return identifier{
-			id: &id,
+			id: id,
 		}, nil
 	}
 
-	// This is not a numeric ID, treat it as a name if it is not empty
-	if inputID == "" {
-		return identifier{}, errors.New("input name is empty")
-	}
+	// This is not a UUID, treat it as a name
 	return identifier{
 		name: &inputID,
 	}, nil
@@ -624,14 +624,22 @@ func (i identifier) String() string {
 	}
 
 	if i.id != nil {
-		return strconv.FormatInt(*i.id, 10)
+		// We can drop the uuid module when
+		// https://github.com/jackc/pgx/commit/8723855d957fc7a076a0e6998a016d8c4b138dca
+		// is available in a release.
+		u, err := uuid.FromBytes(i.id.Bytes[:])
+		if err != nil {
+			// Should not happen as parseNameOrID() would have errored out if it was unable to parse the UUID
+			panic(err)
+		}
+		return u.String()
 	}
 
 	return ""
 }
 
-func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (int64, error) {
-	var id int64
+func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
+	var id pgtype.UUID
 
 	var ident identifier
 	var err error
@@ -639,38 +647,38 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 	if orgNameOrID != nil {
 		ident, err = parseNameOrID(*orgNameOrID)
 		if err != nil {
-			return 0, errUnprocessable
+			return pgtype.UUID{}, errUnprocessable
 		}
 	}
 
 	if ad.superuser {
 		if !ident.isValid() {
-			return 0, errUnprocessable
+			return pgtype.UUID{}, errUnprocessable
 		}
 		if ident.isID() {
 			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *ident.id).Scan(&id)
 			if err != nil {
-				return 0, fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
+				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
 			}
 		} else {
 			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) SELECT $1, organizations.id FROM organizations WHERE organizations.name=$2 returning id", name, *ident.name).Scan(&id)
 			if err != nil {
-				return 0, fmt.Errorf("unable to INSERT service for superuser with organization name: %w", err)
+				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organization name: %w", err)
 			}
 		}
 	} else {
 		if ad.orgID == nil {
-			return 0, errForbidden
+			return pgtype.UUID{}, errForbidden
 		}
 
 		if ident.isValid() {
 			if ident.isID() {
 				if *ad.orgID != *ident.id {
-					return 0, errForbidden
+					return pgtype.UUID{}, errForbidden
 				}
 			} else {
 				if *ad.orgName != *ident.name {
-					return 0, errForbidden
+					return pgtype.UUID{}, errForbidden
 				}
 			}
 		}
@@ -682,14 +690,14 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 				// https://www.postgresql.org/docs/current/errcodes-appendix.html
 				// unique_violation: 23505
 				if pgErr.Code == "23505" {
-					return 0, errAlreadyExists
+					return pgtype.UUID{}, errAlreadyExists
 				}
 			}
-			return 0, fmt.Errorf("unable to INSERT service for organization with id: %w", err)
+			return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for organization with id: %w", err)
 		}
 	}
 
-	return id, nil
+	return pgtype.UUID{}, nil
 }
 
 func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion, error) {
@@ -710,7 +718,8 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	}
 
 	serviceVersions := []serviceVersion{}
-	var id, version int64
+	var id pgtype.UUID
+	var version int64
 	// active can be NULL in the database so that we can force uniqeness on
 	// the TRUE value. Treat NULL as false in the API.
 	var active *bool
@@ -1076,10 +1085,10 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 }
 
 type user struct {
-	ID        int64  `json:"id" example:"1" doc:"ID of user"`
-	Name      string `json:"name" example:"user1" doc:"name of user"`
-	RoleName  string `json:"role_name" example:"customer"`
-	Superuser bool   `json:"superuser" example:"true" doc:"if user is a superuser"`
+	ID        pgtype.UUID `json:"id" doc:"ID of user"`
+	Name      string      `json:"name" example:"user1" doc:"name of user"`
+	RoleName  string      `json:"role_name" example:"customer"`
+	Superuser bool        `json:"superuser" example:"true" doc:"if user is a superuser"`
 }
 
 type userOutput struct {
@@ -1091,8 +1100,8 @@ type usersOutput struct {
 }
 
 type organization struct {
-	ID   int64  `json:"id" example:"1" doc:"ID of organization"`
-	Name string `json:"name" example:"organization 1" doc:"name of organization"`
+	ID   pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
+	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
 }
 
 type organizationOutput struct {
@@ -1104,8 +1113,8 @@ type organizationsOutput struct {
 }
 
 type service struct {
-	ID   int64  `json:"id" example:"1" doc:"ID of service"`
-	Name string `json:"name" example:"service 1" doc:"name of service"`
+	ID   pgtype.UUID `json:"id" doc:"ID of service"`
+	Name string      `json:"name" example:"service 1" doc:"name of service"`
 }
 
 type serviceOutput struct {
@@ -1117,10 +1126,10 @@ type servicesOutput struct {
 }
 
 type serviceVersion struct {
-	ID          int64  `json:"id"`
-	Version     int64  `json:"version"`
-	Active      bool   `json:"active"`
-	ServiceName string `json:"service_name"`
+	ID          pgtype.UUID `json:"id"`
+	Version     int64       `json:"version"`
+	Active      bool        `json:"active"`
+	ServiceName string      `json:"service_name"`
 }
 
 type serviceVersionsOutput struct {
