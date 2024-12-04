@@ -1,5 +1,5 @@
 -- +goose up
-CREATE TABLE customers (
+CREATE TABLE organizations (
     id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
 );
@@ -12,7 +12,7 @@ CREATE TABLE roles (
 
 CREATE TABLE users (
     id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    customer_id bigint REFERENCES customers(id),
+    org_id bigint REFERENCES organizations(id),
     role_id bigint NOT NULL REFERENCES roles(id),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
 );
@@ -31,10 +31,10 @@ CREATE TABLE user_argon2keys (
 
 CREATE TABLE services (
     id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    customer_id bigint NOT NULL REFERENCES customers(id),
+    org_id bigint NOT NULL REFERENCES organizations(id),
     name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
     version_counter BIGINT DEFAULT 0 NOT NULL,
-    UNIQUE(customer_id, name)
+    UNIQUE(org_id, name)
 );
 
 CREATE TABLE service_versions (
@@ -67,4 +67,4 @@ DROP TABLE services;
 DROP TABLE user_argon2keys;
 DROP TABLE users;
 DROP TABLE roles;
-DROP TABLE customers;
+DROP TABLE organizations;

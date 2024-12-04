@@ -109,13 +109,13 @@ func newArgon2DefaultSettings() argon2Settings {
 type authDataKey struct{}
 
 type authData struct {
-	username     string
-	userID       int64
-	customerID   *int64
-	customerName *string
-	superuser    bool
-	roleID       int64
-	roleName     string
+	username  string
+	userID    int64
+	orgID     *int64
+	orgName   *string
+	superuser bool
+	roleID    int64
+	roleName  string
 }
 
 func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.Handler) http.Handler {
@@ -130,8 +130,8 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 			}
 
 			var userID, roleID int64
-			var customerID *int64    // can be nil if not belonging to a customer
-			var customerName *string // same as above
+			var orgID *int64    // can be nil if not belonging to a organization
+			var orgName *string // same as above
 			var argon2Key, argon2Salt []byte
 			var argon2Time, argon2Memory, argon2TagSize uint32
 			var argon2Threads uint8
@@ -144,8 +144,8 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 					context.Background(),
 					`SELECT
 						users.id,
-						users.customer_id,
-						customers.name,
+						users.org_id,
+						organizations.name,
 						users.role_id,
 						roles.name,
 						roles.superuser,
@@ -158,13 +158,13 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 					FROM users
 					JOIN user_argon2keys ON users.id = user_argon2keys.user_id
 					JOIN roles ON users.role_id = roles.id
-					LEFT JOIN customers ON users.customer_id = customers.id
+					LEFT JOIN organizations ON users.org_id = organizations.id
 					WHERE users.name=$1`,
 					username,
 				).Scan(
 					&userID,
-					&customerID,
-					&customerName,
+					&orgID,
+					&orgName,
 					&roleID,
 					&roleName,
 					&superuser,
@@ -198,13 +198,13 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 			}
 
 			ad := authData{
-				username:     username,
-				userID:       userID,
-				customerID:   customerID,
-				customerName: customerName,
-				roleID:       roleID,
-				roleName:     roleName,
-				superuser:    superuser,
+				username:  username,
+				userID:    userID,
+				orgID:     orgID,
+				orgName:   orgName,
+				roleID:    roleID,
+				roleName:  roleName,
+				superuser: superuser,
 			}
 
 			ctx := context.WithValue(r.Context(), authDataKey{}, ad)
@@ -229,11 +229,10 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
-	} else if ad.customerID != nil {
+	} else if ad.orgID != nil {
 		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.id", ad.userID)
 		if err != nil {
-			logger.Err(err).Msg("unable to Query for users for customer")
-			return nil, errors.New("unable to query for users")
+			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
 	} else {
 		return nil, errForbidden
@@ -265,8 +264,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		var userName string
 		err := dbPool.QueryRow(context.Background(), "SELECT users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1", *ident.id).Scan(&userName, &roleName, &superuser)
 		if err != nil {
-			logger.Err(err).Int64("id", *ident.id).Msg("unable to SELECT user by id")
-			return user{}, fmt.Errorf("unable to SELECT customer by id")
+			return user{}, fmt.Errorf("unable to SELECT user by id: %w", err)
 		}
 		u.ID = *ident.id
 		u.Name = userName
@@ -319,10 +317,10 @@ func passwordToArgon2(password string) (argon2Data, error) {
 	}, nil
 }
 
-func insertUserWithArgon2(tx pgx.Tx, name string, customerID int64, roleID int64, a2Data argon2Data) (int64, error) {
+func insertUserWithArgon2(tx pgx.Tx, name string, orgID int64, roleID int64, a2Data argon2Data) (int64, error) {
 	var userID int64
 
-	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, customer_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, customerID, roleID).Scan(&userID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, orgID, roleID).Scan(&userID)
 	if err != nil {
 		return 0, fmt.Errorf("unable to INSERT user with IDs: %w", err)
 	}
@@ -335,14 +333,14 @@ func insertUserWithArgon2(tx pgx.Tx, name string, customerID int64, roleID int64
 	return userID, nil
 }
 
-func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, customer string, ad authData) (int64, error) {
+func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, organization string, ad authData) (int64, error) {
 	if !ad.superuser {
 		return 0, errForbidden
 	}
 
-	custIdent, err := parseNameOrID(customer)
+	orgIdent, err := parseNameOrID(organization)
 	if err != nil {
-		return 0, fmt.Errorf("unable to parse customer for user INSERT: %w", err)
+		return 0, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
 	}
 
 	roleIdent, err := parseNameOrID(role)
@@ -357,9 +355,9 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 
 	var userID int64
 	// If we already have all the IDs needed just insert them via VALUES
-	if custIdent.isID() && roleIdent.isID() {
+	if orgIdent.isID() && roleIdent.isID() {
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			userID, err = insertUserWithArgon2(tx, name, *custIdent.id, *roleIdent.id, a2Data)
+			userID, err = insertUserWithArgon2(tx, name, *orgIdent.id, *roleIdent.id, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user with IDs: %w", err)
 			}
@@ -371,25 +369,25 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 		}
 	} else {
 		var roleID int64
-		var customerID int64
+		var orgID int64
 		// Fetch the missing IDs based on names instead where necessary
 		// Use single transaction with FOR SHARE selects to make sure
 		// the INSERT uses consistent data. To avoid deadlocks make
 		// sure all code performans FOR SHARE selects in the same
 		// order (alphabetical).
 		err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			if !custIdent.isID() {
+			if !orgIdent.isID() {
 				err := tx.QueryRow(
 					context.Background(),
-					`SELECT id FROM customers WHERE name=$1 FOR SHARE`, *custIdent.name,
+					`SELECT id FROM organizations WHERE name=$1 FOR SHARE`, *orgIdent.name,
 				).Scan(
-					&customerID,
+					&orgID,
 				)
 				if err != nil {
-					return fmt.Errorf("unable to lookup customer ID from name for user INSERT: %w", err)
+					return fmt.Errorf("unable to lookup organization ID from name for user INSERT: %w", err)
 				}
 			} else {
-				customerID = *custIdent.id
+				orgID = *orgIdent.id
 			}
 
 			if !roleIdent.isID() {
@@ -406,7 +404,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 				roleID = *roleIdent.id
 			}
 
-			userID, err = insertUserWithArgon2(tx, name, customerID, roleID, a2Data)
+			userID, err = insertUserWithArgon2(tx, name, orgID, roleID, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user after looking up IDs: %w", err)
 			}
@@ -421,78 +419,73 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 	return userID, nil
 }
 
-func selectCustomers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]customer, error) {
+func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM customers ORDER BY id")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY id")
 		if err != nil {
-			logger.Err(err).Msg("unable to Query for customers")
-			return nil, fmt.Errorf("unable to query for customers: %w", err)
+			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
-	} else if ad.customerID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM customers WHERE id=$1 ORDER BY id", *ad.customerID)
+	} else if ad.orgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY id", *ad.orgID)
 		if err != nil {
-			logger.Err(err).Msg("unable to Query for customers")
-			return nil, fmt.Errorf("unable to query for customers: %w", err)
+			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
 	} else {
 		return nil, errForbidden
 	}
 
-	customers, err := pgx.CollectRows(rows, pgx.RowToStructByName[customer])
+	organizations, err := pgx.CollectRows(rows, pgx.RowToStructByName[organization])
 	if err != nil {
-		logger.Err(err).Msg("unable to CollectRows for customers")
-		return nil, fmt.Errorf("unable to CollectRows for customers: %w", err)
+		return nil, fmt.Errorf("unable to CollectRows for organizations: %w", err)
 	}
 
-	return customers, nil
+	return organizations, nil
 }
 
-func selectCustomerByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string, ad authData) (customer, error) {
-	c := customer{}
+func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (organization, error) {
+	o := organization{}
 	ident, err := parseNameOrID(inputID)
 	if err != nil {
-		return customer{}, fmt.Errorf("unable to parse name or id")
+		return organization{}, fmt.Errorf("unable to parse name or id")
 	}
 	if ident.isID() {
-		if !ad.superuser && (ad.customerID == nil || *ad.customerID != *ident.id) {
-			return customer{}, errNotFound
+		if !ad.superuser && (ad.orgID == nil || *ad.orgID != *ident.id) {
+			return organization{}, errNotFound
 		}
 
 		var name string
-		err := dbPool.QueryRow(context.Background(), "SELECT name FROM customers WHERE id=$1", *ident.id).Scan(&name)
+		err := dbPool.QueryRow(context.Background(), "SELECT name FROM organizations WHERE id=$1", *ident.id).Scan(&name)
 		if err != nil {
-			logger.Err(err).Int64("id", *ident.id).Msg("unable to SELECT customer by id")
-			return customer{}, fmt.Errorf("unable to SELECT customer by id")
+			return organization{}, fmt.Errorf("unable to SELECT organization by id")
 		}
-		c.Name = name
-		c.ID = *ident.id
+		o.Name = name
+		o.ID = *ident.id
 	} else {
-		if !ad.superuser && (ad.customerName == nil || *ad.customerName != inputID) {
-			return customer{}, errNotFound
+		if !ad.superuser && (ad.orgName == nil || *ad.orgName != inputID) {
+			return organization{}, errNotFound
 		}
 		var id int64
-		err := dbPool.QueryRow(context.Background(), "SELECT id FROM customers WHERE name=$1", inputID).Scan(&id)
+		err := dbPool.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", inputID).Scan(&id)
 		if err != nil {
-			logger.Err(err).Str("id", inputID).Msg("unable to SELECT customer by name")
-			return customer{}, fmt.Errorf("unable to SELECT customer by name")
+			return organization{}, fmt.Errorf("unable to SELECT organization by name: %w", err)
 		}
-		c.Name = inputID
-		c.ID = id
+		o.Name = inputID
+		o.ID = id
 	}
 
-	return c, nil
+	return o, nil
 }
 
-func insertCustomer(dbPool *pgxpool.Pool, name string, ad authData) (int64, error) {
+func insertOrganization(dbPool *pgxpool.Pool, name string, ad authData) (int64, error) {
 	var id int64
 	if !ad.superuser {
 		return 0, errForbidden
 	}
-	err := dbPool.QueryRow(context.Background(), "INSERT INTO customers (name) VALUES ($1) RETURNING id", name).Scan(&id)
+	err := dbPool.QueryRow(context.Background(), "INSERT INTO organizations (name) VALUES ($1) RETURNING id", name).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("unable to INSERT customer: %w", err)
+		return 0, fmt.Errorf("unable to INSERT organization: %w", err)
 	}
 
 	return id, nil
@@ -506,8 +499,8 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
-	} else if ad.customerID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE customer_id=$1 ORDER BY id", *ad.customerID)
+	} else if ad.orgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY id", *ad.orgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
@@ -552,13 +545,13 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			}
 			s.Name = serviceName
 			s.ID = *ident.id
-		} else if ad.customerID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN customers ON services.customer_id = customers.id WHERE services.id=$1 AND customers.id=$2", *ident.id, ad.customerID).Scan(&serviceName)
+		} else if ad.orgID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.id=$1 AND organizations.id=$2", *ident.id, ad.orgID).Scan(&serviceName)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return service{}, errNotFound
 				}
-				return service{}, fmt.Errorf("unable to SELECT service by id for customer")
+				return service{}, fmt.Errorf("unable to SELECT service by id for organization")
 			}
 			s.Name = serviceName
 			s.ID = *ident.id
@@ -573,13 +566,13 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			}
 			s.Name = inputID
 			s.ID = serviceID
-		} else if ad.customerID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN customers ON services.customer_id = customers.id WHERE services.name=$1 AND customers.id=$2", inputID, ad.customerID).Scan(&serviceID)
+		} else if ad.orgID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.name=$1 AND organizations.id=$2", inputID, ad.orgID).Scan(&serviceID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return service{}, errNotFound
 				}
-				return service{}, fmt.Errorf("unable to SELECT service by name for customer")
+				return service{}, fmt.Errorf("unable to SELECT service by name for organization")
 			}
 			s.Name = inputID
 			s.ID = serviceID
@@ -637,14 +630,14 @@ func (i identifier) String() string {
 	return ""
 }
 
-func insertService(dbPool *pgxpool.Pool, name string, customerNameOrID *string, ad authData) (int64, error) {
+func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (int64, error) {
 	var id int64
 
 	var ident identifier
 	var err error
 
-	if customerNameOrID != nil {
-		ident, err = parseNameOrID(*customerNameOrID)
+	if orgNameOrID != nil {
+		ident, err = parseNameOrID(*orgNameOrID)
 		if err != nil {
 			return 0, errUnprocessable
 		}
@@ -655,34 +648,34 @@ func insertService(dbPool *pgxpool.Pool, name string, customerNameOrID *string, 
 			return 0, errUnprocessable
 		}
 		if ident.isID() {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", name, *ident.id).Scan(&id)
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *ident.id).Scan(&id)
 			if err != nil {
-				return 0, fmt.Errorf("unable to INSERT service for superuser with customer id: %w", err)
+				return 0, fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
 			}
 		} else {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) SELECT $1, customers.id FROM customers where customers.name=$2 returning id", name, *ident.name).Scan(&id)
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) SELECT $1, organizations.id FROM organizations WHERE organizations.name=$2 returning id", name, *ident.name).Scan(&id)
 			if err != nil {
-				return 0, fmt.Errorf("unable to INSERT service for superuser with customer name: %w", err)
+				return 0, fmt.Errorf("unable to INSERT service for superuser with organization name: %w", err)
 			}
 		}
 	} else {
-		if ad.customerID == nil {
+		if ad.orgID == nil {
 			return 0, errForbidden
 		}
 
 		if ident.isValid() {
 			if ident.isID() {
-				if *ad.customerID != *ident.id {
+				if *ad.orgID != *ident.id {
 					return 0, errForbidden
 				}
 			} else {
-				if *ad.customerName != *ident.name {
+				if *ad.orgName != *ident.name {
 					return 0, errForbidden
 				}
 			}
 		}
 
-		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, customer_id) VALUES ($1, $2) RETURNING id", name, ad.customerID).Scan(&id)
+		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.orgID).Scan(&id)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -692,7 +685,7 @@ func insertService(dbPool *pgxpool.Pool, name string, customerNameOrID *string, 
 					return 0, errAlreadyExists
 				}
 			}
-			return 0, fmt.Errorf("unable to INSERT service for customer with id: %w", err)
+			return 0, fmt.Errorf("unable to INSERT service for organization with id: %w", err)
 		}
 	}
 
@@ -707,8 +700,8 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for service versions as superuser: %w", err)
 		}
-	} else if ad.customerID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.customer_id=$1 ORDER BY service_versions.version", ad.customerID)
+	} else if ad.orgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.orgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
@@ -809,11 +802,10 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getCustomerHandler")
-			return nil, errors.New("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from user GET handler")
 		}
 
-		customer, err := selectUserByID(dbPool, logger, input.User, ad)
+		org, err := selectUserByID(dbPool, logger, input.User, ad)
 		if err != nil {
 			if errors.Is(err, errForbidden) {
 				return nil, huma.Error403Forbidden("not allowed to access resource")
@@ -824,8 +816,8 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 			return nil, err
 		}
 		resp := &userOutput{}
-		resp.Body.ID = customer.ID
-		resp.Body.Name = customer.Name
+		resp.Body.ID = org.ID
+		resp.Body.Name = org.Name
 		return resp, nil
 	})
 
@@ -834,18 +826,18 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 	huma.Register(
 		api,
 		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postUsersPath, &customerOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postUsersPath, &customerOutput{}),
+			OperationID:   huma.GenerateOperationID(http.MethodPost, postUsersPath, &userOutput{}),
+			Summary:       huma.GenerateSummary(http.MethodPost, postUsersPath, &userOutput{}),
 			Method:        http.MethodPost,
 			Path:          postUsersPath,
 			DefaultStatus: http.StatusCreated,
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name     string `json:"name" example:"you@example.com" doc:"The username"`
-				Role     string `json:"role" example:"customer" doc:"Role ID or name"`
-				Customer string `json:"customer" example:"Some name" doc:"Customer ID or name"`
-				Password string `json:"password" example:"verysecret" doc:"The user password"`
+				Name         string `json:"name" example:"you@example.com" doc:"The username"`
+				Role         string `json:"role" example:"customer" doc:"Role ID or name"`
+				Organization string `json:"organization" example:"Some name" doc:"Organization ID or name"`
+				Password     string `json:"password" example:"verysecret" doc:"The user password"`
 			}
 		},
 		) (*userOutput, error) {
@@ -853,11 +845,10 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				logger.Error().Msg("unable to read auth data from getCustomerHandler")
-				return nil, errors.New("unable to read auth data from getCustomerHandler")
+				return nil, errors.New("unable to read auth data from users POST handler")
 			}
 
-			id, err := insertUser(dbPool, input.Body.Name, input.Body.Password, input.Body.Role, input.Body.Customer, ad)
+			id, err := insertUser(dbPool, input.Body.Name, input.Body.Password, input.Body.Role, input.Body.Organization, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to add resource")
@@ -872,93 +863,90 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 	)
 
-	huma.Get(api, "/api/v1/customers", func(ctx context.Context, _ *struct{},
-	) (*customersOutput, error) {
+	huma.Get(api, "/api/v1/organizations", func(ctx context.Context, _ *struct{},
+	) (*organizationsOutput, error) {
 		logger := zlog.Ctx(ctx)
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getCustomersHandler")
-			return nil, errors.New("unable to read auth data from getCustomersHandler")
+			return nil, errors.New("unable to read auth data from organizations GET handler")
 		}
 
-		customers, err := selectCustomers(dbPool, logger, ad)
+		orgs, err := selectOrganizations(dbPool, ad)
 		if err != nil {
 			if errors.Is(err, errForbidden) {
 				return nil, huma.Error403Forbidden("not allowed to access resource")
 			}
-			logger.Err(err).Msg("unable to query customers")
+			logger.Err(err).Msg("unable to query organizations")
 			return nil, err
 		}
 
-		resp := &customersOutput{
-			Body: customers,
+		resp := &organizationsOutput{
+			Body: orgs,
 		}
 		return resp, nil
 	})
 
-	huma.Get(api, "/api/v1/customers/{customer}", func(ctx context.Context, input *struct {
-		Customer string `path:"customer" example:"1" doc:"Customer ID or name"`
+	huma.Get(api, "/api/v1/organizations/{organization}", func(ctx context.Context, input *struct {
+		Organization string `path:"organization" example:"1" doc:"Organization ID or name"`
 	},
-	) (*customerOutput, error) {
+	) (*organizationOutput, error) {
 		logger := zlog.Ctx(ctx)
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getCustomerHandler")
-			return nil, errors.New("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from organization GET handler")
 		}
 
-		customer, err := selectCustomerByID(dbPool, logger, input.Customer, ad)
+		org, err := selectOrganizationByID(dbPool, input.Organization, ad)
 		if err != nil {
 			if errors.Is(err, errForbidden) {
 				return nil, huma.Error403Forbidden("not allowed to access resource")
 			} else if errors.Is(err, errNotFound) {
-				return nil, huma.Error404NotFound("customer not found")
+				return nil, huma.Error404NotFound("organization not found")
 			}
-			logger.Err(err).Msg("unable to query customers")
+			logger.Err(err).Msg("unable to query organization")
 			return nil, err
 		}
-		resp := &customerOutput{}
-		resp.Body.ID = customer.ID
-		resp.Body.Name = customer.Name
+		resp := &organizationOutput{}
+		resp.Body.ID = org.ID
+		resp.Body.Name = org.Name
 		return resp, nil
 	})
 
 	// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
-	postCustomersPath := "/api/v1/customers"
+	postOrganizationsPath := "/api/v1/organizations"
 	huma.Register(
 		api,
 		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postCustomersPath, &customerOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postCustomersPath, &customerOutput{}),
+			OperationID:   huma.GenerateOperationID(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
+			Summary:       huma.GenerateSummary(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
 			Method:        http.MethodPost,
-			Path:          postCustomersPath,
+			Path:          postOrganizationsPath,
 			DefaultStatus: http.StatusCreated,
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name string `json:"name" example:"Some name" doc:"Customer name"`
+				Name string `json:"name" example:"Some name" doc:"Organization name"`
 			}
 		},
-		) (*customerOutput, error) {
+		) (*organizationOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				logger.Error().Msg("unable to read auth data from getCustomerHandler")
-				return nil, errors.New("unable to read auth data from getCustomerHandler")
+				return nil, errors.New("unable to read auth data from organization POST handler: %w")
 			}
 
-			id, err := insertCustomer(dbPool, input.Body.Name, ad)
+			id, err := insertOrganization(dbPool, input.Body.Name, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to add resource")
 				}
-				logger.Err(err).Msg("unable to add customer")
+				logger.Err(err).Msg("unable to add organization")
 				return nil, err
 			}
-			resp := &customerOutput{}
+			resp := &organizationOutput{}
 			resp.Body.ID = id
 			resp.Body.Name = input.Body.Name
 			return resp, nil
@@ -971,8 +959,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getCustomerHandler")
-			return nil, errors.New("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from services GET handler")
 		}
 
 		services, err := selectServices(dbPool, ad)
@@ -998,8 +985,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getCustomerHandler")
-			return nil, errors.New("unable to read auth data from getCustomerHandler")
+			return nil, errors.New("unable to read auth data from service GET handler")
 		}
 
 		services, err := selectServiceByID(dbPool, input.Service, ad)
@@ -1031,20 +1017,19 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name     string  `json:"name" example:"Some name" doc:"Service name"`
-				Customer *string `json:"customer,omitempty" example:"Name or ID of customer" doc:"customer1"`
+				Name         string  `json:"name" example:"Some name" doc:"Service name"`
+				Organization *string `json:"organization,omitempty" example:"Name or ID of organization" doc:"org1"`
 			}
 		},
-		) (*customerOutput, error) {
+		) (*organizationOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				logger.Error().Msg("unable to read auth data from getCustomerHandler")
-				return nil, errors.New("unable to read auth data from getCustomerHandler")
+				return nil, errors.New("unable to read auth data from service GET handler")
 			}
 
-			id, err := insertService(dbPool, input.Body.Name, input.Body.Customer, ad)
+			id, err := insertService(dbPool, input.Body.Name, input.Body.Organization, ad)
 			if err != nil {
 				if errors.Is(err, errUnprocessable) {
 					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
@@ -1056,7 +1041,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 				logger.Err(err).Msg("unable to add service")
 				return nil, err
 			}
-			resp := &customerOutput{}
+			resp := &organizationOutput{}
 			resp.Body.ID = id
 			resp.Body.Name = input.Body.Name
 			return resp, nil
@@ -1069,8 +1054,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 
 		ad, ok := ctx.Value(authDataKey{}).(authData)
 		if !ok {
-			logger.Error().Msg("unable to read auth data from getServiceVersions")
-			return nil, errors.New("unable to read auth data from getServiceVersions")
+			return nil, errors.New("unable to read auth data from service-versions GET handler")
 		}
 
 		serviceVersions, err := selectServiceVersions(dbPool, ad)
@@ -1106,17 +1090,17 @@ type usersOutput struct {
 	Body []user
 }
 
-type customer struct {
-	ID   int64  `json:"id" example:"1" doc:"ID of customer"`
-	Name string `json:"name" example:"customer 1" doc:"name of customer"`
+type organization struct {
+	ID   int64  `json:"id" example:"1" doc:"ID of organization"`
+	Name string `json:"name" example:"organization 1" doc:"name of organization"`
 }
 
-type customerOutput struct {
-	Body customer
+type organizationOutput struct {
+	Body organization
 }
 
-type customersOutput struct {
-	Body []customer
+type organizationsOutput struct {
+	Body []organization
 }
 
 type service struct {

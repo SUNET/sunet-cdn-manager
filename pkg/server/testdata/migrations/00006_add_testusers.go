@@ -10,11 +10,11 @@ import (
 )
 
 type localUser struct {
-	name       string
-	password   string
-	customerID *int64
-	role       string
-	superuser  bool
+	name      string
+	password  string
+	orgID     *int64
+	role      string
+	superuser bool
 }
 
 func init() {
@@ -35,19 +35,19 @@ func upAddTestusers(ctx context.Context, tx *sql.Tx) error {
 			role:     "admin",
 		},
 		{
-			name:       "username1",
-			password:   "password1",
-			role:       "customer",
-			customerID: int64Ptr(1),
+			name:     "username1",
+			password: "password1",
+			role:     "customer",
+			orgID:    int64Ptr(1),
 		},
 		{
-			name:       "username2",
-			password:   "password2",
-			role:       "customer",
-			customerID: int64Ptr(2),
+			name:     "username2",
+			password: "password2",
+			role:     "customer",
+			orgID:    int64Ptr(2),
 		},
 		{
-			name:     "username3-no-customer",
+			name:     "username3-no-org",
 			password: "password3",
 			role:     "customer",
 		},
@@ -55,7 +55,7 @@ func upAddTestusers(ctx context.Context, tx *sql.Tx) error {
 
 	for _, localUser := range localUsers {
 		var userID int64
-		err := tx.QueryRow("INSERT INTO users (customer_id, name, role_id) SELECT $1, $2, id FROM roles WHERE name=$3 RETURNING id", localUser.customerID, localUser.name, localUser.role).Scan(&userID)
+		err := tx.QueryRow("INSERT INTO users (org_id, name, role_id) SELECT $1, $2, id FROM roles WHERE name=$3 RETURNING id", localUser.orgID, localUser.name, localUser.role).Scan(&userID)
 		if err != nil {
 			return err
 		}

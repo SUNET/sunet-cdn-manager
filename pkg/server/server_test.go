@@ -118,13 +118,13 @@ func TestGetUsers(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful organization request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request, bad password",
+			description:    "failed organization request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
@@ -281,34 +281,34 @@ func TestPostUsers(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description      string
-		username         string
-		password         string
-		expectedStatus   int
-		addedUser        string
-		addedPassword    string
-		roleIDorName     string
-		customerIDorName string
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		addedUser      string
+		addedPassword  string
+		roleIDorName   string
+		orgIDorName    string
 	}{
 		{
-			description:      "successful superuser request with IDs",
-			username:         "admin",
-			password:         "adminpass1",
-			expectedStatus:   http.StatusCreated,
-			addedUser:        "admin-created-user-1",
-			addedPassword:    "admin-created-password-1",
-			roleIDorName:     "2",
-			customerIDorName: "2",
+			description:    "successful superuser request with IDs",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			addedUser:      "admin-created-user-1",
+			addedPassword:  "admin-created-password-1",
+			roleIDorName:   "2",
+			orgIDorName:    "2",
 		},
 		{
-			description:      "successful superuser request with names",
-			username:         "admin",
-			password:         "adminpass1",
-			expectedStatus:   http.StatusCreated,
-			addedUser:        "admin-created-user-2",
-			addedPassword:    "admin-created-password-2",
-			roleIDorName:     "customer",
-			customerIDorName: "customer1",
+			description:    "successful superuser request with names",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			addedUser:      "admin-created-user-2",
+			addedPassword:  "admin-created-password-2",
+			roleIDorName:   "customer",
+			orgIDorName:    "org1",
 		},
 		{
 			description:    "failed non-superuser request",
@@ -322,15 +322,15 @@ func TestPostUsers(t *testing.T) {
 
 	for _, test := range tests {
 		newUser := struct {
-			Name     string `json:"name"`
-			Password string `json:"password"`
-			Role     string `json:"role"`
-			Customer string `json:"customer"`
+			Name         string `json:"name"`
+			Password     string `json:"password"`
+			Role         string `json:"role"`
+			Organization string `json:"organization"`
 		}{
-			Name:     test.addedUser,
-			Password: test.addedPassword,
-			Customer: test.customerIDorName,
-			Role:     test.roleIDorName,
+			Name:         test.addedUser,
+			Password:     test.addedPassword,
+			Organization: test.orgIDorName,
+			Role:         test.roleIDorName,
 		}
 
 		b, err := json.Marshal(newUser)
@@ -372,7 +372,7 @@ func TestPostUsers(t *testing.T) {
 	}
 }
 
-func TestGetCustomers(t *testing.T) {
+func TestGetOrganizations(t *testing.T) {
 	ts, dbPool, err := prepareServer()
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -401,13 +401,13 @@ func TestGetCustomers(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful organization request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request, bad password",
+			description:    "failed organization request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
@@ -415,7 +415,7 @@ func TestGetCustomers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/customers", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -433,7 +433,7 @@ func TestGetCustomers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("GET organizations unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -445,7 +445,7 @@ func TestGetCustomers(t *testing.T) {
 	}
 }
 
-func TestGetCustomer(t *testing.T) {
+func TestGetOrganization(t *testing.T) {
 	ts, dbPool, err := prepareServer()
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -473,42 +473,42 @@ func TestGetCustomer(t *testing.T) {
 			description:    "successful superuser request with name",
 			username:       "admin",
 			password:       "adminpass1",
-			nameOrID:       "customer1",
+			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request with ID",
+			description:    "successful organization request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request with name",
+			description:    "successful organization request with name",
 			username:       "username1",
 			password:       "password1",
-			nameOrID:       "customer1",
+			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request, bad password",
+			description:    "failed organization request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "failed lookup of customer you do not belong to with ID",
+			description:    "failed lookup of organization you do not belong to with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed lookup of customer you do not belong to with name",
+			description:    "failed lookup of organization you do not belong to with name",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "customer1",
+			nameOrID:       "org1",
 			expectedStatus: http.StatusNotFound,
 		},
 	}
@@ -523,7 +523,7 @@ func TestGetCustomer(t *testing.T) {
 			t.Fatal("service ID or name is not valid")
 		}
 
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/customers/"+ident.String(), nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations/"+ident.String(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -541,7 +541,7 @@ func TestGetCustomer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET customers/%s unexpected status code: %d (%s)", ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("GET organizations/%s unexpected status code: %d (%s)", ident.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -553,7 +553,7 @@ func TestGetCustomer(t *testing.T) {
 	}
 }
 
-func TestPostCustomers(t *testing.T) {
+func TestPostOrganizations(t *testing.T) {
 	ts, dbPool, err := prepareServer()
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -564,43 +564,43 @@ func TestPostCustomers(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		expectedStatus int
-		addedCustomer  string
+		description       string
+		username          string
+		password          string
+		expectedStatus    int
+		addedOrganization string
 	}{
 		{
-			description:    "successful superuser request",
-			username:       "admin",
-			password:       "adminpass1",
-			expectedStatus: http.StatusCreated,
-			addedCustomer:  "admincust",
+			description:       "successful superuser request",
+			username:          "admin",
+			password:          "adminpass1",
+			expectedStatus:    http.StatusCreated,
+			addedOrganization: "adminorg",
 		},
 		{
-			description:    "failed non-superuser request",
-			username:       "username1",
-			password:       "password1",
-			addedCustomer:  "username1cust",
-			expectedStatus: http.StatusForbidden,
+			description:       "failed non-superuser request",
+			username:          "username1",
+			password:          "password1",
+			addedOrganization: "username1org",
+			expectedStatus:    http.StatusForbidden,
 		},
 	}
 
 	for _, test := range tests {
-		newCustomer := struct {
+		newOrganization := struct {
 			Name string `json:"name"`
 		}{
-			Name: test.addedCustomer,
+			Name: test.addedOrganization,
 		}
 
-		b, err := json.Marshal(newCustomer)
+		b, err := json.Marshal(newOrganization)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/customers", r)
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/organizations", r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -620,7 +620,7 @@ func TestPostCustomers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("POST customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("POST organizations unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -655,20 +655,20 @@ func TestGetServices(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful organization request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request, bad auth",
+			description:    "failed organization request, bad auth",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "failed user request (not assigned to customer)",
-			username:       "username3-no-customer",
+			description:    "failed user request (not assigned to organization)",
+			username:       "username3-no-org",
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
 		},
@@ -693,7 +693,7 @@ func TestGetServices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET customers unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("GET services unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -733,49 +733,49 @@ func TestGetService(t *testing.T) {
 			description:    "successful superuser request with name",
 			username:       "admin",
 			password:       "adminpass1",
-			nameOrID:       "customer1-service1",
+			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request with ID",
+			description:    "successful organization request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request with name",
+			description:    "successful organization request with name",
 			username:       "username1",
 			password:       "password1",
-			nameOrID:       "customer1-service1",
+			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request for service belonging to other customer with ID",
+			description:    "failed organization request for service belonging to other organization with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed customer request for service belonging to other customer with name",
+			description:    "failed organization request for service belonging to other organization with name",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "customer1-service1",
+			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed customer request not assigned to customer with ID",
-			username:       "username3-no-customer",
+			description:    "failed organization request not assigned to organization with ID",
+			username:       "username3-no-org",
 			password:       "password3",
 			nameOrID:       "1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed customer request not assigned to customer with name",
-			username:       "username3-no-customer",
+			description:    "failed organization request not assigned to organization with name",
+			username:       "username3-no-org",
 			password:       "password3",
-			nameOrID:       "customer1-service1",
+			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusNotFound,
 		},
 	}
@@ -840,7 +840,7 @@ func TestPostServices(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		customer       string
+		organization   string
 	}{
 		{
 			description:    "successful superuser request",
@@ -848,48 +848,48 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-admin-service",
-			customer:       "customer1",
+			organization:   "org1",
 		},
 		{
-			description:    "failed superuser request without customer",
+			description:    "failed superuser request without organization",
 			username:       "admin",
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-admin-service",
 		},
 		{
-			description:    "successful customer request (customer based on auth)",
+			description:    "successful organization request (organization based on auth)",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-username1-service1",
 		},
 		{
-			description:    "failed customer request with duplciate service name",
+			description:    "failed organization request with duplciate service name",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusBadRequest,
 			newService:     "new-username1-service1",
 		},
 		{
-			description:    "successful customer request with customer matching auth",
+			description:    "successful organization request with organization matching auth",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-username1-service2",
-			customer:       "customer1",
+			organization:   "org1",
 		},
 		{
-			description:    "failed customer request with customer not matching auth",
+			description:    "failed organization request with organization not matching auth",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusForbidden,
 			newService:     "new-username1-service3",
-			customer:       "customer2",
+			organization:   "org2",
 		},
 		{
-			description:    "failed customer request not assigned to customer",
-			username:       "username3-no-customer",
+			description:    "failed organization request not assigned to organization",
+			username:       "username3-no-org",
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
 		},
@@ -897,14 +897,14 @@ func TestPostServices(t *testing.T) {
 
 	for _, test := range tests {
 		newService := struct {
-			Name     string  `json:"name"`
-			Customer *string `json:"customer,omitempty"`
+			Name         string  `json:"name"`
+			Organization *string `json:"organization,omitempty"`
 		}{
 			Name: test.newService,
 		}
 
-		if test.customer != "" {
-			newService.Customer = &test.customer
+		if test.organization != "" {
+			newService.Organization = &test.organization
 		}
 
 		b, err := json.Marshal(newService)
@@ -960,7 +960,7 @@ func TestGetServiceVersions(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		customer       string
+		organization   string
 	}{
 		{
 			description:    "successful superuser request",
@@ -969,14 +969,14 @@ func TestGetServiceVersions(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful customer request",
+			description:    "successful organization request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed customer request not assigned to customer",
-			username:       "username3-no-customer",
+			description:    "failed organization request not assigned to organization",
+			username:       "username3-no-org",
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
 		},

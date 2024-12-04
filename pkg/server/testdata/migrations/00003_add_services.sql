@@ -1,12 +1,12 @@
 -- +goose up
-INSERT INTO services (customer_id, name) SELECT id, 'customer1-service1' FROM customers WHERE name='customer1';
-INSERT INTO services (customer_id, name) SELECT id, 'customer1-service2' FROM customers WHERE name='customer1';
-INSERT INTO services (customer_id, name) SELECT id, 'customer1-service3' FROM customers WHERE name='customer1';
-INSERT INTO services (customer_id, name) SELECT id, 'customer2-service1' FROM customers WHERE name='customer2';
-INSERT INTO services (customer_id, name) SELECT id, 'customer2-service2' FROM customers WHERE name='customer2';
-INSERT INTO services (customer_id, name) SELECT id, 'customer2-service3' FROM customers WHERE name='customer2';
-INSERT INTO services (customer_id, name) SELECT id, 'customer3-service1' FROM customers WHERE name='customer3';
-INSERT INTO services (customer_id, name) SELECT id, 'customer3-service2' FROM customers WHERE name='customer3';
-INSERT INTO services (customer_id, name) SELECT id, 'customer3-service3' FROM customers WHERE name='customer3';
+INSERT INTO services (org_id, name) SELECT id, 'org1-service1' FROM organizations WHERE name='org1';
+INSERT INTO services (org_id, name) SELECT id, 'org1-service2' FROM organizations WHERE name='org1';
+INSERT INTO services (org_id, name) SELECT id, 'org1-service3' FROM organizations WHERE name='org1';
+INSERT INTO services (org_id, name) SELECT id, 'org2-service1' FROM organizations WHERE name='org2';
+INSERT INTO services (org_id, name) SELECT id, 'org2-service2' FROM organizations WHERE name='org2';
+INSERT INTO services (org_id, name) SELECT id, 'org2-service3' FROM organizations WHERE name='org2';
+INSERT INTO services (org_id, name) SELECT id, 'org3-service1' FROM organizations WHERE name='org3';
+INSERT INTO services (org_id, name) SELECT id, 'org3-service2' FROM organizations WHERE name='org3';
+INSERT INTO services (org_id, name) SELECT id, 'org3-service3' FROM organizations WHERE name='org3';
 -- +goose down
 DELETE FROM services;
