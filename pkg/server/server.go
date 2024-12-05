@@ -139,49 +139,41 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 			var superuser bool
 			var roleName string
 
-			// Use RepeatableRead to make sure the databases does not change while we look up things spread over multiple SELECTs
-			err := pgx.BeginTxFunc(context.Background(), dbPool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx pgx.Tx) error {
-				err := tx.QueryRow(
-					context.Background(),
-					`SELECT
-						users.id,
-						users.org_id,
-						organizations.name,
-						users.role_id,
-						roles.name,
-						roles.superuser,
-						user_argon2keys.key,
-						user_argon2keys.salt,
-						user_argon2keys.time,
-						user_argon2keys.memory,
-						user_argon2keys.threads,
-						user_argon2keys.tag_size
-					FROM users
-					JOIN user_argon2keys ON users.id = user_argon2keys.user_id
-					JOIN roles ON users.role_id = roles.id
-					LEFT JOIN organizations ON users.org_id = organizations.id
-					WHERE users.name=$1`,
-					username,
-				).Scan(
-					&userID,
-					&orgID,
-					&orgName,
-					&roleID,
-					&roleName,
-					&superuser,
-					&argon2Key,
-					&argon2Salt,
-					&argon2Time,
-					&argon2Memory,
-					&argon2Threads,
-					&argon2TagSize,
-				)
-				if err != nil {
-					return err
-				}
-
-				return nil
-			})
+			err := dbPool.QueryRow(
+				context.Background(),
+				`SELECT
+				users.id,
+				users.org_id,
+				organizations.name,
+				users.role_id,
+				roles.name,
+				roles.superuser,
+				user_argon2keys.key,
+				user_argon2keys.salt,
+				user_argon2keys.time,
+				user_argon2keys.memory,
+				user_argon2keys.threads,
+				user_argon2keys.tag_size
+			FROM users
+			JOIN user_argon2keys ON users.id = user_argon2keys.user_id
+			JOIN roles ON users.role_id = roles.id
+			LEFT JOIN organizations ON users.org_id = organizations.id
+			WHERE users.name=$1`,
+				username,
+			).Scan(
+				&userID,
+				&orgID,
+				&orgName,
+				&roleID,
+				&roleName,
+				&superuser,
+				&argon2Key,
+				&argon2Salt,
+				&argon2Time,
+				&argon2Memory,
+				&argon2Threads,
+				&argon2TagSize,
+			)
 			if err != nil {
 				logger.Err(err).Msg("failed looking up username for authentication")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
