@@ -310,7 +310,7 @@ func passwordToArgon2(password string) (argon2Data, error) {
 	}, nil
 }
 
-func insertUserWithArgon2(tx pgx.Tx, name string, orgID pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
+func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
 	var userID pgtype.UUID
 
 	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, orgID, roleID).Scan(&userID)
@@ -350,7 +350,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 	// If we already have all the IDs needed just insert them via VALUES
 	if orgIdent.isID() && roleIdent.isID() {
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			userID, err = insertUserWithArgon2(tx, name, *orgIdent.id, *roleIdent.id, a2Data)
+			userID, err = insertUserWithArgon2Tx(tx, name, *orgIdent.id, *roleIdent.id, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user with IDs: %w", err)
 			}
@@ -397,7 +397,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 				roleID = *roleIdent.id
 			}
 
-			userID, err = insertUserWithArgon2(tx, name, orgID, roleID, a2Data)
+			userID, err = insertUserWithArgon2Tx(tx, name, orgID, roleID, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user after looking up IDs: %w", err)
 			}
