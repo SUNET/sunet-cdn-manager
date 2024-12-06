@@ -742,6 +742,190 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	return serviceVersions, nil
 }
 
+type serviceVersionInsertResult struct {
+	versionID     pgtype.UUID
+	version       int64
+	active        bool
+	domainIDs     []pgtype.UUID
+	originIDs     []pgtype.UUID
+	deactivatedID pgtype.UUID
+}
+
+func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID, domains []string, origins []origin, active *bool) (serviceVersionInsertResult, error) {
+	var serviceVersionID pgtype.UUID
+	var versionCounter int64
+	var deactivatedServiceVersion pgtype.UUID
+
+	err := tx.QueryRow(
+		context.Background(),
+		"UPDATE services SET version_counter=version_counter+1 WHERE id=$1 AND org_id=$2 RETURNING version_counter",
+		serviceID,
+		orgID,
+	).Scan(&versionCounter)
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE version_counter for service version: %w", err)
+	}
+
+	err = tx.QueryRow(
+		context.Background(),
+		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
+		serviceID,
+		versionCounter,
+		active,
+	).Scan(&serviceVersionID)
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
+	}
+
+	// If the new version is expected to be active we need to unset the currently active version
+	if active != nil && *active {
+		err := tx.QueryRow(
+			context.Background(),
+			"UPDATE service_versions SET active=NULL WHERE service_id=$1 AND active=true returning id",
+			serviceID,
+		).Scan(&deactivatedServiceVersion)
+		if err != nil {
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
+		}
+	}
+
+	var serviceDomainIDs []pgtype.UUID
+	for _, domain := range domains {
+		var serviceDomainID pgtype.UUID
+		err = tx.QueryRow(
+			context.Background(),
+			"INSERT INTO service_domains (service_version_id, domain) VALUES ($1, $2) RETURNING id",
+			serviceVersionID,
+			domain,
+		).Scan(&serviceDomainID)
+		if err != nil {
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
+		}
+		serviceDomainIDs = append(serviceDomainIDs, serviceDomainID)
+	}
+
+	var serviceOriginIDs []pgtype.UUID
+	for _, origin := range origins {
+		var serviceOriginID pgtype.UUID
+		err = tx.QueryRow(
+			context.Background(),
+			"INSERT INTO service_origins (service_version_id, host, tls) VALUES ($1, $2, $3) RETURNING id",
+			serviceVersionID,
+			origin.Host,
+			origin.TLS,
+		).Scan(&serviceOriginID)
+		if err != nil {
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
+		}
+		serviceOriginIDs = append(serviceOriginIDs, serviceOriginID)
+	}
+
+	res := serviceVersionInsertResult{
+		versionID:     serviceVersionID,
+		version:       versionCounter,
+		domainIDs:     serviceDomainIDs,
+		originIDs:     serviceOriginIDs,
+		deactivatedID: deactivatedServiceVersion,
+	}
+
+	if active != nil && *active {
+		res.active = *active
+	}
+
+	return res, nil
+}
+
+func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOrID *string, domains []string, origins []origin, active *bool, ad authData) (serviceVersionInsertResult, error) {
+	var serviceVersionResult serviceVersionInsertResult
+
+	var orgIdent identifier
+	var err error
+
+	// The "active" column in the database uses NULL to represent "false"
+	// so we can have a UNIQUE constraint for "true". For this reason,
+	// translate boolean "false" to nil if necessary:
+	if active != nil && !*active {
+		active = nil
+	}
+
+	if orgNameOrID != nil {
+		orgIdent, err = parseNameOrID(*orgNameOrID)
+		if err != nil {
+			return serviceVersionInsertResult{}, errUnprocessable
+		}
+	}
+
+	if ad.superuser {
+		if !orgIdent.isValid() {
+			return serviceVersionInsertResult{}, errUnprocessable
+		}
+		if orgIdent.isID() {
+			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+				serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, *orgIdent.id, domains, origins, active)
+				if err != nil {
+					return fmt.Errorf("unable to INSERT service version with org ID for superuser: %w", err)
+				}
+
+				return nil
+			})
+			if err != nil {
+				return serviceVersionInsertResult{}, fmt.Errorf("service version with ID INSERT transaction failed: %w", err)
+			}
+		} else {
+			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+				var orgID pgtype.UUID
+				err := tx.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1 FOR UPDATE", *orgIdent.name).Scan(&orgID)
+				if err != nil {
+					return fmt.Errorf("unable to SELECT org ID based on name for superuser: %w", err)
+				}
+
+				serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, orgID, domains, origins, active)
+				if err != nil {
+					return fmt.Errorf("unable to INSERT service version with org name: %w", err)
+				}
+
+				return nil
+			})
+			if err != nil {
+				return serviceVersionInsertResult{}, fmt.Errorf("service version with name INSERT transaction failed: %w", err)
+			}
+		}
+	} else {
+		if ad.orgID == nil {
+			return serviceVersionInsertResult{}, errForbidden
+		}
+
+		// If a user is trying to supply an org id for an org they are
+		// not part of just error out to signal they are sending bad
+		// data.
+		if orgIdent.isValid() {
+			if orgIdent.isID() {
+				if *ad.orgID != *orgIdent.id {
+					return serviceVersionInsertResult{}, errForbidden
+				}
+			} else {
+				if *ad.orgName != *orgIdent.name {
+					return serviceVersionInsertResult{}, errForbidden
+				}
+			}
+		}
+
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, *ad.orgID, domains, origins, active)
+			if err != nil {
+				return fmt.Errorf("unable to INSERT service version with org ID for user: %w", err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return serviceVersionInsertResult{}, fmt.Errorf("service version with INSERT transaction for user failed: %w", err)
+		}
+	}
+
+	return serviceVersionResult, nil
+}
+
 func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
 	router := chi.NewMux()
 
@@ -1076,6 +1260,67 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		return resp, nil
 	})
 
+	postServiceVersionsPath := "/api/v1/service-versions"
+	huma.Register(
+		api,
+		huma.Operation{
+			OperationID:   huma.GenerateOperationID(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
+			Summary:       huma.GenerateSummary(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
+			Method:        http.MethodPost,
+			Path:          postServiceVersionsPath,
+			DefaultStatus: http.StatusCreated,
+		},
+		func(ctx context.Context, input *struct {
+			Body struct {
+				ServiceID    uuid.UUID `json:"service_id" doc:"Service ID"`
+				Organization *string   `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization"`
+				Domains      []string  `json:"domains" doc:"List of domains handled by the service"`
+				Origins      []origin  `json:"origins" doc:"List of origin hosts for this service"`
+				Active       *bool     `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+			}
+		},
+		) (*serviceVersionOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service GET handler")
+			}
+
+			// Seems we can not use pgtype.UUID as the type in the
+			// input body directly, so go via google/uuid module
+			// instead and convert here.
+			//
+			// Might be possible to make this work with pgtype.UUID
+			// directly if it would implment
+			// encoding.TextUnmarshaler as described here:
+			// https://github.com/danielgtaylor/huma/issues/654
+			var pgServiceID pgtype.UUID
+			err := pgServiceID.Scan(input.Body.ServiceID.String())
+			if err != nil {
+				return nil, errors.New("unable to convert uuid to pgtype")
+			}
+
+			serviceVersionInsertRes, err := insertServiceVersion(dbPool, pgServiceID, input.Body.Organization, input.Body.Domains, input.Body.Origins, input.Body.Active, ad)
+			if err != nil {
+				if errors.Is(err, errUnprocessable) {
+					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
+				} else if errors.Is(err, errAlreadyExists) {
+					return nil, huma.Error400BadRequest("service version already exists")
+				} else if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to create this service version")
+				}
+				logger.Err(err).Msg("unable to add service")
+				return nil, err
+			}
+			resp := &serviceVersionOutput{}
+			resp.Body.ID = serviceVersionInsertRes.versionID
+			resp.Body.Version = serviceVersionInsertRes.version
+			resp.Body.Active = serviceVersionInsertRes.active
+			return resp, nil
+		},
+	)
+
 	return nil
 }
 
@@ -1124,11 +1369,20 @@ type serviceVersion struct {
 	ID          pgtype.UUID `json:"id"`
 	Version     int64       `json:"version"`
 	Active      bool        `json:"active"`
-	ServiceName string      `json:"service_name"`
+	ServiceName string      `json:"service_name,omitempty"`
+}
+
+type serviceVersionOutput struct {
+	Body serviceVersion
 }
 
 type serviceVersionsOutput struct {
 	Body []serviceVersion
+}
+
+type origin struct {
+	Host string `json:"host"`
+	TLS  bool   `json:"tls"`
 }
 
 func Run(logger zerolog.Logger) {

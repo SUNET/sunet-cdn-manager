@@ -1012,3 +1012,137 @@ func TestGetServiceVersions(t *testing.T) {
 		fmt.Printf("%s\n", jsonData)
 	}
 }
+
+func TestPostServiceVersion(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		newService     string
+		organization   string
+		serviceID      string
+		domains        []string
+		origins        []origin
+		active         bool
+	}{
+		{
+			description:  "successful superuser request",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000000-0000-0000-0000-000000000004",
+			organization: "org1",
+			domains:      []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusCreated,
+			active:         true,
+		},
+		{
+			description: "successful organization request",
+			username:    "username1",
+			password:    "password1",
+			serviceID:   "00000000-0000-0000-0000-000000000004",
+			domains:     []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusCreated,
+			active:         true,
+		},
+		{
+			description: "failed organization request not assigned to organization",
+			username:    "username3-no-org",
+			password:    "password3",
+			serviceID:   "00000000-0000-0000-0000-000000000004",
+			domains:     []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusForbidden,
+			active:         true,
+		},
+	}
+
+	for _, test := range tests {
+		newServiceVersion := struct {
+			ServiceID    string   `json:"service_id"`
+			Organization string   `json:"organization,omitempty"`
+			Domains      []string `json:"domains"`
+			Origins      []origin `json:"origins"`
+		}{
+			ServiceID:    test.serviceID,
+			Organization: test.organization,
+			Domains:      test.domains,
+			Origins:      test.origins,
+		}
+
+		b, err := json.Marshal(newServiceVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Println(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/service-versions", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
