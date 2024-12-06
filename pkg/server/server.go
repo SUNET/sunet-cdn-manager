@@ -692,7 +692,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		}
 	}
 
-	return pgtype.UUID{}, nil
+	return serviceID, nil
 }
 
 func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion, error) {
