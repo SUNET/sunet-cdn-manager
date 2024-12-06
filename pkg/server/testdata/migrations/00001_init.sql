@@ -28,7 +28,7 @@ CREATE TABLE user_argon2keys (
     salt bytea NOT NULL CONSTRAINT non_empty_salt CHECK(length(salt)>0),
     time bigint NOT NULL CONSTRAINT uint32_time CHECK(time >= 0 AND time <= 4294967295),
     memory bigint NOT NULL CONSTRAINT uint32_memory CHECK(memory >= 0 AND memory <= 4294967295),
-    threads bigint NOT NULL CONSTRAINT uiint8_threads CHECK(threads >= 0 AND threads <= 255),
+    threads bigint NOT NULL CONSTRAINT uint8_threads CHECK(threads >= 0 AND threads <= 255),
     tag_size bigint NOT NULL CONSTRAINT uint32_tag_sizie CHECK(tag_size >= 0 AND tag_size <= 4294967295),
     UNIQUE(user_id, key, salt)
 );
