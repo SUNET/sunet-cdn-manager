@@ -809,9 +809,10 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID,
 		var serviceOriginID pgtype.UUID
 		err = tx.QueryRow(
 			context.Background(),
-			"INSERT INTO service_origins (service_version_id, host, tls) VALUES ($1, $2, $3) RETURNING id",
+			"INSERT INTO service_origins (service_version_id, host, port, tls) VALUES ($1, $2, $3, $4) RETURNING id",
 			serviceVersionID,
 			origin.Host,
+			origin.Port,
 			origin.TLS,
 		).Scan(&serviceOriginID)
 		if err != nil {
@@ -1382,6 +1383,7 @@ type serviceVersionsOutput struct {
 
 type origin struct {
 	Host string `json:"host"`
+	Port int    `json:"port" minimum:"1" maximum:"65535"`
 	TLS  bool   `json:"tls"`
 }
 

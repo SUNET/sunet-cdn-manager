@@ -1045,10 +1045,12 @@ func TestPostServiceVersion(t *testing.T) {
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
+					Port: 443,
 					TLS:  true,
 				},
 				{
 					Host: "srv2.example.com",
+					Port: 80,
 					TLS:  false,
 				},
 			},
@@ -1064,10 +1066,12 @@ func TestPostServiceVersion(t *testing.T) {
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
+					Port: 443,
 					TLS:  true,
 				},
 				{
 					Host: "srv2.example.com",
+					Port: 80,
 					TLS:  false,
 				},
 			},
@@ -1083,10 +1087,12 @@ func TestPostServiceVersion(t *testing.T) {
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
+					Port: 443,
 					TLS:  true,
 				},
 				{
 					Host: "srv2.example.com",
+					Port: 80,
 					TLS:  false,
 				},
 			},

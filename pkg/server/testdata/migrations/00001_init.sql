@@ -65,6 +65,7 @@ CREATE TABLE service_origins (
     ts timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id),
     host text NOT NULL CONSTRAINT non_empty CHECK(length(host)>0),
+    port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
     UNIQUE(service_version_id, host)
 );
