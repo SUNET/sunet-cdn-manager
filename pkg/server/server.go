@@ -242,24 +242,24 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 
 func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string, ad authData) (user, error) {
 	u := user{}
-	ident, err := parseNameOrID(inputID)
+	userIdent, err := parseNameOrID(inputID)
 	if err != nil {
 		return user{}, fmt.Errorf("unable to parse name or id")
 	}
 
 	var roleName string
 	var superuser bool
-	if ident.isID() {
-		if !ad.superuser && (ad.userID != *ident.id) {
+	if userIdent.isID() {
+		if !ad.superuser && (ad.userID != *userIdent.id) {
 			return user{}, errNotFound
 		}
 
 		var userName string
-		err := dbPool.QueryRow(context.Background(), "SELECT users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1", *ident.id).Scan(&userName, &roleName, &superuser)
+		err := dbPool.QueryRow(context.Background(), "SELECT users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1", *userIdent.id).Scan(&userName, &roleName, &superuser)
 		if err != nil {
 			return user{}, fmt.Errorf("unable to SELECT user by id: %w", err)
 		}
-		u.ID = *ident.id
+		u.ID = *userIdent.id
 		u.Name = userName
 	} else {
 		if !ad.superuser && (ad.username != inputID) {
@@ -273,7 +273,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 			return user{}, fmt.Errorf("unable to SELECT user by name")
 		}
 		u.ID = userID
-		u.Name = *ident.name
+		u.Name = *userIdent.name
 	}
 
 	u.RoleName = roleName
@@ -439,22 +439,22 @@ func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, err
 
 func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (organization, error) {
 	o := organization{}
-	ident, err := parseNameOrID(inputID)
+	orgIdent, err := parseNameOrID(inputID)
 	if err != nil {
 		return organization{}, fmt.Errorf("unable to parse name or id")
 	}
-	if ident.isID() {
-		if !ad.superuser && (ad.orgID == nil || *ad.orgID != *ident.id) {
+	if orgIdent.isID() {
+		if !ad.superuser && (ad.orgID == nil || *ad.orgID != *orgIdent.id) {
 			return organization{}, errNotFound
 		}
 
 		var name string
-		err := dbPool.QueryRow(context.Background(), "SELECT name FROM organizations WHERE id=$1", *ident.id).Scan(&name)
+		err := dbPool.QueryRow(context.Background(), "SELECT name FROM organizations WHERE id=$1", *orgIdent.id).Scan(&name)
 		if err != nil {
 			return organization{}, fmt.Errorf("unable to SELECT organization by id")
 		}
 		o.Name = name
-		o.ID = *ident.id
+		o.ID = *orgIdent.id
 	} else {
 		if !ad.superuser && (ad.orgName == nil || *ad.orgName != inputID) {
 			return organization{}, errNotFound
@@ -526,20 +526,20 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 	var serviceName string
 	var serviceID pgtype.UUID
 
-	ident, err := parseNameOrID(inputID)
+	serviceIdent, err := parseNameOrID(inputID)
 	if err != nil {
 		return service{}, fmt.Errorf("unable to parse name or id")
 	}
-	if ident.isID() {
+	if serviceIdent.isID() {
 		if ad.superuser {
-			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *ident.id).Scan(&serviceName)
+			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *serviceIdent.id).Scan(&serviceName)
 			if err != nil {
 				return service{}, fmt.Errorf("unable to SELECT service by id for superuser")
 			}
 			s.Name = serviceName
-			s.ID = *ident.id
+			s.ID = *serviceIdent.id
 		} else if ad.orgID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.id=$1 AND organizations.id=$2", *ident.id, ad.orgID).Scan(&serviceName)
+			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.id=$1 AND organizations.id=$2", *serviceIdent.id, ad.orgID).Scan(&serviceName)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return service{}, errNotFound
@@ -547,7 +547,7 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 				return service{}, fmt.Errorf("unable to SELECT service by id for organization")
 			}
 			s.Name = serviceName
-			s.ID = *ident.id
+			s.ID = *serviceIdent.id
 		} else {
 			return service{}, errNotFound
 		}
@@ -631,29 +631,29 @@ func (i identifier) String() string {
 }
 
 func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
-	var id pgtype.UUID
+	var serviceID pgtype.UUID
 
-	var ident identifier
+	var orgIdent identifier
 	var err error
 
 	if orgNameOrID != nil {
-		ident, err = parseNameOrID(*orgNameOrID)
+		orgIdent, err = parseNameOrID(*orgNameOrID)
 		if err != nil {
 			return pgtype.UUID{}, errUnprocessable
 		}
 	}
 
 	if ad.superuser {
-		if !ident.isValid() {
+		if !orgIdent.isValid() {
 			return pgtype.UUID{}, errUnprocessable
 		}
-		if ident.isID() {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *ident.id).Scan(&id)
+		if orgIdent.isID() {
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *orgIdent.id).Scan(&serviceID)
 			if err != nil {
 				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
 			}
 		} else {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) SELECT $1, organizations.id FROM organizations WHERE organizations.name=$2 returning id", name, *ident.name).Scan(&id)
+			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) SELECT $1, organizations.id FROM organizations WHERE organizations.name=$2 returning id", name, *orgIdent.name).Scan(&serviceID)
 			if err != nil {
 				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organization name: %w", err)
 			}
@@ -663,19 +663,22 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 			return pgtype.UUID{}, errForbidden
 		}
 
-		if ident.isValid() {
-			if ident.isID() {
-				if *ad.orgID != *ident.id {
+		// If a user is trying to supply an org id for an org they are
+		// not part of just error out to signal they are sending bad
+		// data.
+		if orgIdent.isValid() {
+			if orgIdent.isID() {
+				if *ad.orgID != *orgIdent.id {
 					return pgtype.UUID{}, errForbidden
 				}
 			} else {
-				if *ad.orgName != *ident.name {
+				if *ad.orgName != *orgIdent.name {
 					return pgtype.UUID{}, errForbidden
 				}
 			}
 		}
 
-		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.orgID).Scan(&id)
+		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.orgID).Scan(&serviceID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
