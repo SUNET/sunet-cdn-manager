@@ -35,27 +35,27 @@ func upAddTestusers(ctx context.Context, tx *sql.Tx) error {
 			name:     "admin",
 			password: "adminpass1",
 			role:     "admin",
-			id:       "00000000-0000-0000-0000-000000000024",
+			id:       "00000006-0000-0000-0000-000000000001",
 		},
 		{
 			name:     "username1",
 			password: "password1",
 			role:     "customer",
 			orgName:  "org1",
-			id:       "00000000-0000-0000-0000-000000000025",
+			id:       "00000006-0000-0000-0000-000000000002",
 		},
 		{
 			name:     "username2",
 			password: "password2",
 			role:     "customer",
 			orgName:  "org2",
-			id:       "00000000-0000-0000-0000-000000000026",
+			id:       "00000006-0000-0000-0000-000000000003",
 		},
 		{
 			name:     "username3-no-org",
 			password: "password3",
 			role:     "customer",
-			id:       "00000000-0000-0000-0000-000000000027",
+			id:       "00000006-0000-0000-0000-000000000004",
 		},
 	}
 

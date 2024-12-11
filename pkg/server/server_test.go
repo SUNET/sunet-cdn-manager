@@ -185,7 +185,7 @@ func TestGetUser(t *testing.T) {
 			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       "adminpass1",
-			nameOrID:       "00000000-0000-0000-0000-000000000024",
+			nameOrID:       "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -199,7 +199,7 @@ func TestGetUser(t *testing.T) {
 			description:    "successful user request for itself with ID",
 			username:       "username1",
 			password:       "password1",
-			nameOrID:       "00000000-0000-0000-0000-000000000025",
+			nameOrID:       "00000006-0000-0000-0000-000000000002",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -213,14 +213,14 @@ func TestGetUser(t *testing.T) {
 			description:    "failed user request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
-			nameOrID:       "00000000-0000-0000-0000-000000000024",
+			nameOrID:       "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed lookup of another user with ID",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "00000000-0000-0000-0000-000000000024",
+			nameOrID:       "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
@@ -299,8 +299,8 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-1",
 			addedPassword:  "admin-created-password-1",
-			roleIDorName:   "00000000-0000-0000-0000-000000000023",
-			orgIDorName:    "00000000-0000-0000-0000-000000000001",
+			roleIDorName:   "00000005-0000-0000-0000-000000000002",
+			orgIDorName:    "00000002-0000-0000-0000-000000000001",
 		},
 		{
 			description:    "successful superuser request with names",
@@ -468,7 +468,7 @@ func TestGetOrganization(t *testing.T) {
 			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       "adminpass1",
-			nameOrID:       "00000000-0000-0000-0000-000000000001",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -482,7 +482,7 @@ func TestGetOrganization(t *testing.T) {
 			description:    "successful organization request with ID",
 			username:       "username1",
 			password:       "password1",
-			nameOrID:       "00000000-0000-0000-0000-000000000001",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -496,14 +496,14 @@ func TestGetOrganization(t *testing.T) {
 			description:    "failed organization request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
-			nameOrID:       "00000000-0000-0000-0000-000000000001",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed lookup of organization you do not belong to with ID",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "00000000-0000-0000-0000-000000000001",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
@@ -728,7 +728,7 @@ func TestGetService(t *testing.T) {
 			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       "adminpass1",
-			nameOrID:       "00000000-0000-0000-0000-000000000004",
+			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -742,7 +742,7 @@ func TestGetService(t *testing.T) {
 			description:    "successful organization request with ID",
 			username:       "username1",
 			password:       "password1",
-			nameOrID:       "00000000-0000-0000-0000-000000000004",
+			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -756,7 +756,7 @@ func TestGetService(t *testing.T) {
 			description:    "failed organization request for service belonging to other organization with ID",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "00000000-0000-0000-0000-000000000004",
+			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
@@ -770,7 +770,7 @@ func TestGetService(t *testing.T) {
 			description:    "failed organization request not assigned to organization with ID",
 			username:       "username3-no-org",
 			password:       "password3",
-			nameOrID:       "00000000-0000-0000-0000-000000000004",
+			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
@@ -1041,7 +1041,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:  "successful superuser request",
 			username:     "admin",
 			password:     "adminpass1",
-			serviceID:    "00000000-0000-0000-0000-000000000004",
+			serviceID:    "00000003-0000-0000-0000-000000000001",
 			organization: "org1",
 			domains:      []string{"example.com", "example.se"},
 			origins: []origin{
@@ -1063,7 +1063,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description: "successful organization request",
 			username:    "username1",
 			password:    "password1",
-			serviceID:   "00000000-0000-0000-0000-000000000004",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -1084,7 +1084,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description: "failed organization request not assigned to organization",
 			username:    "username3-no-org",
 			password:    "password3",
-			serviceID:   "00000000-0000-0000-0000-000000000004",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{

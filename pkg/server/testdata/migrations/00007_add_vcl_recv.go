@@ -24,8 +24,8 @@ func upAddVclRcv(ctx context.Context, tx *sql.Tx) error {
 
 	vclRcvs := []vclRcv{
 		{
-			id:               "00000000-0000-0000-0000-000000000028",
-			serviceVersionID: "00000000-0000-0000-0000-000000000015",
+			id:               "00000007-0000-0000-0000-000000000001",
+			serviceVersionID: "00000004-0000-0000-0000-000000000003",
 			file:             "testdata/vcl/vcl_recv/content1.vcl",
 		},
 	}
