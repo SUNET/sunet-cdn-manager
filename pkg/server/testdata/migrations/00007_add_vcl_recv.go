@@ -26,7 +26,7 @@ func upAddVclRcv(ctx context.Context, tx *sql.Tx) error {
 		{
 			id:               "00000000-0000-0000-0000-000000000028",
 			serviceVersionID: "00000000-0000-0000-0000-000000000015",
-			file:             "testdata/vcl/vcl_rcv/content1.vcl",
+			file:             "testdata/vcl/vcl_recv/content1.vcl",
 		},
 	}
 
@@ -47,7 +47,7 @@ func upAddVclRcv(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 
-		_, err = tx.Exec("INSERT INTO service_vcl_rcv (id, service_version_id, content) VALUES($1, $2, $3)", vclID, serviceVersionID, contentBytes)
+		_, err = tx.Exec("INSERT INTO service_vcl_recv (id, service_version_id, content) VALUES($1, $2, $3)", vclID, serviceVersionID, contentBytes)
 		if err != nil {
 			return err
 		}

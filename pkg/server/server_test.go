@@ -66,6 +66,8 @@ func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
 		return nil, nil, errors.New("unable to parse PostgreSQL config string")
 	}
 
+	fmt.Println(pgConfig.ConnString())
+
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
 		return nil, nil, errors.New("unable to create database pool")
@@ -1150,5 +1152,93 @@ func TestPostServiceVersion(t *testing.T) {
 		}
 
 		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetVcls(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "successful organization request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed organization request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/vcls", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET vcls unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+
+		if resp.StatusCode == http.StatusOK {
+			s := []struct {
+				Content string
+			}{}
+
+			err = json.Unmarshal(jsonData, &s)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, content := range s {
+				fmt.Println(content.Content)
+			}
+		}
 	}
 }

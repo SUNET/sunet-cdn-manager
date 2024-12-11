@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -234,7 +235,7 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[user])
 	if err != nil {
 		logger.Err(err).Msg("unable to CollectRows for users")
-		return nil, errors.New("unable to get rows for for users")
+		return nil, errors.New("unable to get rows for users")
 	}
 
 	return users, nil
@@ -927,6 +928,164 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 	return serviceVersionResult, nil
 }
 
+func generateCompleteVcl(sv selectVcl) (string, error) {
+	var b strings.Builder
+
+	b.WriteString("vcl 4.1;\n")
+	b.WriteString("import std;\n")
+	b.WriteString("import proxy;\n")
+	b.WriteString("\n")
+	b.WriteString("backend haproxy_https {\n")
+	b.WriteString("  .path = \"/shared/haproxy_https\"\n")
+	b.WriteString("}\n")
+	b.WriteString("backend haproxy_http {\n")
+	b.WriteString("  .path = \"/shared/haproxy_http\"\n")
+	b.WriteString("}\n")
+	b.WriteString("\n")
+
+	for i, origin := range sv.Origins {
+		b.WriteString(fmt.Sprintf("backend backend_%d {\n", i))
+		b.WriteString(fmt.Sprintf("  .host = \"%s\";\n", origin.Host))
+		b.WriteString(fmt.Sprintf("  .port = \"%d\";\n", origin.Port))
+		if origin.TLS {
+			b.WriteString("  .via = haproxy_https;\n")
+		} else {
+			b.WriteString("  .via = haproxy_http;\n")
+		}
+		b.WriteString("}\n")
+	}
+	if len(sv.Origins) > 0 {
+		b.WriteString("\n")
+	}
+
+	b.WriteString("sub vcl_recv {\n")
+	if len(sv.Domains) > 0 {
+		b.WriteString("  if ")
+		for i, domain := range sv.Domains {
+			if i > 0 {
+				b.WriteString(" && ")
+			}
+			b.WriteString(fmt.Sprintf("req.http.host != \"%s\"", domain))
+		}
+		b.WriteString(" {\n")
+		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
+		b.WriteString("  }\n")
+	}
+
+	if sv.VclRecvContent != "" {
+		b.WriteString("  # vcl_recv content from database\n")
+		scanner := bufio.NewScanner(strings.NewReader(sv.VclRecvContent))
+		for scanner.Scan() {
+			if scanner.Text() != "" {
+				b.WriteString("  " + scanner.Text() + "\n")
+			} else {
+				b.WriteString("\n")
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return "", fmt.Errorf("scanning VclRecvContent failed: %w", err)
+		}
+	}
+	b.WriteString("}\n")
+
+	return b.String(), nil
+}
+
+func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.superuser {
+		// Usage of JOIN with subqueries based on
+		// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
+		// (including separate version when having WHERE statement based on org).
+		rows, err = dbPool.Query(
+			context.Background(),
+			`SELECT
+				organizations.id AS org_id,
+				services.id AS service_id,
+				service_versions.version,
+				service_versions.active,
+				service_vcl_recv.content AS vcl_recv_content,
+				agg_domains.domains,
+				agg_origins.origins
+			FROM
+				organizations
+				JOIN services ON organizations.id = services.org_id
+				JOIN service_versions ON services.id = service_versions.service_id
+				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+				JOIN (
+					SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
+					FROM service_domains
+					GROUP BY service_version_id
+				) AS agg_domains ON agg_domains.service_version_id = service_versions.id
+				JOIN (
+					SELECT service_version_id, array_agg((host, port, tls) ORDER BY host, port) AS origins
+					FROM service_origins
+					GROUP BY service_version_id
+				) AS agg_origins ON agg_origins.service_version_id = service_versions.id
+			ORDER BY organizations.name`,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for vcls as superuser: %w", err)
+		}
+	} else if ad.orgID != nil {
+		rows, err = dbPool.Query(
+			context.Background(),
+			`SELECT
+				organizations.id AS org_id,
+				services.id AS service_id,
+				service_versions.version,
+				service_versions.active,
+				service_vcl_recv.content AS vcl_recv_content,
+				(SELECT
+					array_agg(domain ORDER BY domain)
+					FROM service_domains
+					WHERE service_version_id = service_versions.id
+				) AS domains,
+				(SELECT
+					array_agg((host, port, tls) ORDER BY host, port)
+					FROM service_origins
+					WHERE service_version_id = service_versions.id
+				) AS origins
+			FROM
+				organizations
+				JOIN services ON organizations.id = services.org_id
+				JOIN service_versions ON services.id = service_versions.service_id
+				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+			WHERE organizations.id=$1
+			ORDER BY organizations.name`,
+			*ad.orgID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for vcls as normal user: %w", err)
+		}
+	} else {
+		return nil, errForbidden
+	}
+
+	selectedVcls, err := pgx.CollectRows(rows, pgx.RowToStructByName[selectVcl])
+	if err != nil {
+		return nil, fmt.Errorf("unable to get rows for vcls: %w", err)
+	}
+
+	var completeVcls []completeVcl
+	for _, sv := range selectedVcls {
+		vclContent, err := generateCompleteVcl(sv)
+		if err != nil {
+			return nil, fmt.Errorf("unable to generate complete vcl for selected vcl: %w", err)
+		}
+		completeVcls = append(completeVcls, completeVcl{
+			OrgID:     sv.OrgID,
+			ServiceID: sv.ServiceID,
+			Active:    sv.Active,
+			Version:   sv.Version,
+			Content:   vclContent,
+		})
+	}
+
+	return completeVcls, nil
+}
+
 func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
 	router := chi.NewMux()
 
@@ -1322,6 +1481,31 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 	)
 
+	huma.Get(api, "/api/v1/vcls", func(ctx context.Context, _ *struct{},
+	) (*completeVclsOutput, error) {
+		logger := zlog.Ctx(ctx)
+
+		ad, ok := ctx.Value(authDataKey{}).(authData)
+		if !ok {
+			logger.Error().Msg("unable to read auth data from vcls handler")
+			return nil, errors.New("unable to read auth data from vcls handler")
+		}
+
+		vcls, err := selectVcls(dbPool, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				return nil, huma.Error403Forbidden("not allowed to access resource")
+			}
+			logger.Err(err).Msg("unable to query vcls")
+			return nil, err
+		}
+
+		resp := &completeVclsOutput{
+			Body: vcls,
+		}
+		return resp, nil
+	})
+
 	return nil
 }
 
@@ -1385,6 +1569,28 @@ type origin struct {
 	Host string `json:"host"`
 	Port int    `json:"port" minimum:"1" maximum:"65535"`
 	TLS  bool   `json:"tls"`
+}
+
+type selectVcl struct {
+	OrgID          pgtype.UUID `json:"org_id" doc:"ID of organization"`
+	ServiceID      pgtype.UUID `json:"service_id" doc:"ID of service"`
+	Active         bool        `json:"active" example:"true" doc:"If the VCL is active"`
+	Version        int64       `json:"version" example:"1" doc:"Version of the service"`
+	Domains        []string    `json:"domains" doc:"The domains used by the VCL"`
+	Origins        []origin    `json:"origins" doc:"The origins used by the VCL"`
+	VclRecvContent string      `json:"vcl_recv_content" doc:"The vcl_recv content for the service"`
+}
+
+type completeVcl struct {
+	OrgID     pgtype.UUID `json:"org_id" doc:"ID of organization"`
+	ServiceID pgtype.UUID `json:"service_id" doc:"ID of service"`
+	Active    bool        `json:"active" example:"true" doc:"If the VCL is active"`
+	Version   int64       `json:"version" example:"1" doc:"Version of the service"`
+	Content   string      `json:"content" doc:"The complete VCL loaded by varnish"`
+}
+
+type completeVclsOutput struct {
+	Body []completeVcl
 }
 
 func Run(logger zerolog.Logger) {
