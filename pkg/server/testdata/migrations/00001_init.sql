@@ -2,13 +2,13 @@
 CREATE TABLE organizations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
     superuser boolean DEFAULT false NOT NULL
 );
 
@@ -17,7 +17,7 @@ CREATE TABLE users (
     ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid REFERENCES organizations(id),
     role_id uuid NOT NULL REFERENCES roles(id),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>0)
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
 CREATE TABLE user_argon2keys (
@@ -37,7 +37,7 @@ CREATE TABLE services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES organizations(id),
-    name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>0),
+    name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
     version_counter BIGINT DEFAULT 0 NOT NULL,
     UNIQUE(org_id, name)
 );
@@ -56,7 +56,7 @@ CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id),
-    domain text NOT NULL CONSTRAINT non_empty CHECK(length(domain)>0),
+    domain text NOT NULL CONSTRAINT non_empty CHECK(length(domain)>=1 AND length(domain)<=253),
     UNIQUE(service_version_id, domain)
 );
 
@@ -64,7 +64,7 @@ CREATE TABLE service_origins (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id),
-    host text NOT NULL CONSTRAINT non_empty CHECK(length(host)>0),
+    host text NOT NULL CONSTRAINT non_empty CHECK(length(host)>=1 AND length(host)<=253),
     port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
     UNIQUE(service_version_id, host, port)
