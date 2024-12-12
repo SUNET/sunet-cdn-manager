@@ -1452,7 +1452,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 			// instead and convert here.
 			//
 			// Might be possible to make this work with pgtype.UUID
-			// directly if it would implment
+			// directly if it would implement
 			// encoding.TextUnmarshaler as described here:
 			// https://github.com/danielgtaylor/huma/issues/654
 			var pgServiceID pgtype.UUID
