@@ -1434,7 +1434,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 			Body struct {
 				ServiceID    uuid.UUID `json:"service_id" doc:"Service ID"`
 				Organization *string   `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
-				Domains      []string  `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+				Domains      []string  `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10" minLength:"1" maxLength:"253"`
 				Origins      []origin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 				Active       *bool     `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 			}
@@ -1566,7 +1566,7 @@ type serviceVersionsOutput struct {
 }
 
 type origin struct {
-	Host string `json:"host"`
+	Host string `json:"host" minLength:"1" maxLength:"253"`
 	Port int    `json:"port" minimum:"1" maximum:"65535"`
 	TLS  bool   `json:"tls"`
 }
