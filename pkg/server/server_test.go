@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	_ "github.com/SUNET/sunet-cdn-manager/pkg/server/testdata/migrations" // needed to run .go migration files
@@ -313,6 +314,36 @@ func TestPostUsers(t *testing.T) {
 			orgIDorName:    "org1",
 		},
 		{
+			description:    "successful superuser request with name right at limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			addedUser:      strings.Repeat("a", 63),
+			addedPassword:  "admin-created-password-2",
+			roleIDorName:   "customer",
+			orgIDorName:    "org1",
+		},
+		{
+			description:    "failed superuser request with name above limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			addedUser:      strings.Repeat("a", 64),
+			addedPassword:  "admin-created-password-2",
+			roleIDorName:   "customer",
+			orgIDorName:    "org1",
+		},
+		{
+			description:    "failed superuser request with name below limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			addedUser:      "",
+			addedPassword:  "admin-created-password-2",
+			roleIDorName:   "customer",
+			orgIDorName:    "org1",
+		},
+		{
 			description:    "failed non-superuser request",
 			username:       "username1",
 			password:       "password1",
@@ -580,6 +611,27 @@ func TestPostOrganizations(t *testing.T) {
 			password:          "adminpass1",
 			expectedStatus:    http.StatusCreated,
 			addedOrganization: "adminorg",
+		},
+		{
+			description:       "successful superuser request with max length name",
+			username:          "admin",
+			password:          "adminpass1",
+			expectedStatus:    http.StatusCreated,
+			addedOrganization: strings.Repeat("a", 63),
+		},
+		{
+			description:       "failed superuser request with too short name",
+			username:          "admin",
+			password:          "adminpass1",
+			expectedStatus:    http.StatusUnprocessableEntity,
+			addedOrganization: "",
+		},
+		{
+			description:       "failed superuser request with too long name",
+			username:          "admin",
+			password:          "adminpass1",
+			expectedStatus:    http.StatusUnprocessableEntity,
+			addedOrganization: strings.Repeat("a", 64),
 		},
 		{
 			description:       "failed non-superuser request",
@@ -855,6 +907,30 @@ func TestPostServices(t *testing.T) {
 			organization:   "org1",
 		},
 		{
+			description:    "successful superuser request with name right at limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			newService:     strings.Repeat("a", 63),
+			organization:   "org1",
+		},
+		{
+			description:    "failed superuser request with name above limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newService:     strings.Repeat("a", 64),
+			organization:   "org1",
+		},
+		{
+			description:    "failed superuser request with name below limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newService:     "",
+			organization:   "org1",
+		},
+		{
 			description:    "failed superuser request without organization",
 			username:       "admin",
 			password:       "adminpass1",
@@ -1060,6 +1136,138 @@ func TestPostServiceVersion(t *testing.T) {
 				},
 			},
 			expectedStatus: http.StatusCreated,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request with too many domains",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000003-0000-0000-0000-000000000001",
+			organization: "org1",
+			domains:      []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request, too long Host in origin list",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000003-0000-0000-0000-000000000001",
+			organization: "org1",
+			domains:      []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: strings.Repeat("a", 254),
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request, too long domain in domains list",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000003-0000-0000-0000-000000000001",
+			organization: "org1",
+			domains:      []string{strings.Repeat("a", 254), "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request with invalid uuid (too long)",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000003-0000-0000-0000-0000000000001",
+			organization: "org1",
+			domains:      []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request with invalid uuid (too short)",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "00000003-0000-0000-0000-00000000001",
+			organization: "org1",
+			domains:      []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+		},
+		{
+			description:  "failed superuser request with invalid uuid (not a UUID)",
+			username:     "admin",
+			password:     "adminpass1",
+			serviceID:    "junk",
+			organization: "org1",
+			domains:      []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
 		},
 		{

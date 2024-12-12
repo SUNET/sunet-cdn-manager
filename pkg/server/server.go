@@ -752,7 +752,7 @@ type serviceVersionInsertResult struct {
 	deactivatedID pgtype.UUID
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID, domains []string, origins []origin, active *bool) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID, domains []domainString, origins []origin, active *bool) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersion pgtype.UUID
@@ -837,7 +837,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID,
 	return res, nil
 }
 
-func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOrID *string, domains []string, origins []origin, active *bool, ad authData) (serviceVersionInsertResult, error) {
+func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOrID *string, domains []domainString, origins []origin, active *bool, ad authData) (serviceVersionInsertResult, error) {
 	var serviceVersionResult serviceVersionInsertResult
 
 	var orgIdent identifier
@@ -1112,6 +1112,20 @@ func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
 	router.Get("/", rootHandler)
 
 	return router
+}
+
+func Ptr[T any](v T) *T {
+	return &v
+}
+
+type domainString string
+
+func (ds domainString) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type:      "string",
+		MinLength: Ptr(1),
+		MaxLength: Ptr(253),
+	}
 }
 
 func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
@@ -1432,11 +1446,11 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				ServiceID    uuid.UUID `json:"service_id" doc:"Service ID"`
-				Organization *string   `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
-				Domains      []string  `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10" minLength:"1" maxLength:"253"`
-				Origins      []origin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-				Active       *bool     `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+				ServiceID    uuid.UUID      `json:"service_id" doc:"Service ID"`
+				Organization *string        `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
+				Domains      []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+				Origins      []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+				Active       *bool          `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 			}
 		},
 		) (*serviceVersionOutput, error) {
