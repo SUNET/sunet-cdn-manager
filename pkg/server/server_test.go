@@ -318,6 +318,8 @@ func TestPostUsers(t *testing.T) {
 			password:       "password1",
 			addedUser:      "user-created-user-1",
 			addedPassword:  "user-created-password-1",
+			roleIDorName:   "customer",
+			orgIDorName:    "org1",
 			expectedStatus: http.StatusForbidden,
 		},
 	}
@@ -893,6 +895,7 @@ func TestPostServices(t *testing.T) {
 			description:    "failed organization request not assigned to organization",
 			username:       "username3-no-org",
 			password:       "password3",
+			newService:     "new-username3-service1",
 			expectedStatus: http.StatusForbidden,
 		},
 	}

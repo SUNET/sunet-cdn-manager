@@ -1143,7 +1143,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 	})
 
 	huma.Get(api, "/api/v1/users/{user}", func(ctx context.Context, input *struct {
-		User string `path:"user" example:"1" doc:"User ID or name"`
+		User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
 	},
 	) (*userOutput, error) {
 		logger := zlog.Ctx(ctx)
@@ -1182,10 +1182,10 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name         string `json:"name" example:"you@example.com" doc:"The username"`
-				Role         string `json:"role" example:"customer" doc:"Role ID or name"`
-				Organization string `json:"organization" example:"Some name" doc:"Organization ID or name"`
-				Password     string `json:"password" example:"verysecret" doc:"The user password"`
+				Name         string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
+				Role         string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+				Organization string `json:"organization" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+				Password     string `json:"password" example:"verysecretpassword" doc:"The user password" minLength:"15" maxLength:"64"`
 			}
 		},
 		) (*userOutput, error) {
@@ -1236,7 +1236,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 	})
 
 	huma.Get(api, "/api/v1/organizations/{organization}", func(ctx context.Context, input *struct {
-		Organization string `path:"organization" example:"1" doc:"Organization ID or name"`
+		Organization string `path:"organization" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 	},
 	) (*organizationOutput, error) {
 		logger := zlog.Ctx(ctx)
@@ -1275,7 +1275,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name string `json:"name" example:"Some name" doc:"Organization name"`
+				Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63"`
 			}
 		},
 		) (*organizationOutput, error) {
@@ -1326,7 +1326,7 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 	})
 
 	huma.Get(api, "/api/v1/services/{service}", func(ctx context.Context, input *struct {
-		Service string `path:"service" example:"1" doc:"Service ID or name"`
+		Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 	},
 	) (*serviceOutput, error) {
 		logger := zlog.Ctx(ctx)
@@ -1365,8 +1365,8 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		},
 		func(ctx context.Context, input *struct {
 			Body struct {
-				Name         string  `json:"name" example:"Some name" doc:"Service name"`
-				Organization *string `json:"organization,omitempty" example:"Name or ID of organization" doc:"org1"`
+				Name         string  `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
+				Organization *string `json:"organization,omitempty" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 			}
 		},
 		) (*organizationOutput, error) {
@@ -1433,9 +1433,9 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 		func(ctx context.Context, input *struct {
 			Body struct {
 				ServiceID    uuid.UUID `json:"service_id" doc:"Service ID"`
-				Organization *string   `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization"`
-				Domains      []string  `json:"domains" doc:"List of domains handled by the service"`
-				Origins      []origin  `json:"origins" doc:"List of origin hosts for this service"`
+				Organization *string   `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
+				Domains      []string  `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+				Origins      []origin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 				Active       *bool     `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 			}
 		},
