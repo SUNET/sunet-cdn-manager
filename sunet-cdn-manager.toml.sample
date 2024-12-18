@@ -1,0 +1,10 @@
+[server]
+addr = "127.0.0.1:8081"
+
+[db]
+dbname = "cdn"
+user = "cdn"
+password = "password"
+host = "127.0.0.1"
+port = 5432
+sslmode = "verify-full"
