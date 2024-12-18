@@ -37,8 +37,13 @@ var (
 	errAlreadyExists = errors.New("resource already exists")
 )
 
-type config struct {
-	DB dbSettings
+type Config struct {
+	Server serverSettings
+	DB     dbSettings
+}
+
+type serverSettings struct {
+	Addr string
 }
 
 type dbSettings struct {
@@ -1660,7 +1665,7 @@ func Run(logger zerolog.Logger) {
 	}
 
 	srv := &http.Server{
-		Addr:         "127.0.0.1:8080",
+		Addr:         conf.Server.Addr,
 		Handler:      router,
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
