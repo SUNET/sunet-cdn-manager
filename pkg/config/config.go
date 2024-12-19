@@ -3,9 +3,13 @@ package config
 import (
 	"fmt"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
 )
+
+// use a single instance of Validate, it caches struct info
+var validate *validator.Validate
 
 type Config struct {
 	Server serverSettings
@@ -17,12 +21,12 @@ type serverSettings struct {
 }
 
 type dbSettings struct {
-	User     string
-	Password string
-	DBName   string
-	Host     string
-	Port     int
-	SSLMode  string
+	User     string `validate:"required"`
+	Password string `validate:"required"`
+	DBName   string `validate:"required"`
+	Host     string `validate:"required"`
+	Port     int    `validate:"required"`
+	SSLMode  string `validate:"required"`
 }
 
 func GetConfig() (Config, error) {
@@ -30,6 +34,12 @@ func GetConfig() (Config, error) {
 	err := viper.Unmarshal(&conf)
 	if err != nil {
 		return Config{}, fmt.Errorf("viper unable to decode into struct: %w", err)
+	}
+
+	validate = validator.New(validator.WithRequiredStructEnabled())
+	err = validate.Struct(conf)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 
 	return conf, nil
