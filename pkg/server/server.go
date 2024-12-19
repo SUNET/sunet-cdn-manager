@@ -1744,6 +1744,16 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Err(err).Msg("unable to ping database connection")
 	}
 
+	// Verify that the database appears initialized by 'init' command
+	var rolesExists bool
+	err = dbPool.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to check for roles in the database, is it initialized? (see init command)")
+	}
+	if !rolesExists {
+		logger.Fatal().Msg("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
+	}
+
 	router := newChiRouter(logger, dbPool)
 
 	err = setupHumaAPI(router, dbPool)
