@@ -10,7 +10,7 @@ realm="sunet-cdn-manager"
 user="admin"
 
 # Make it so we can run the script from anywhere
-cd $(dirname $0)
+cd "$(dirname "$0")"
 
 # Get access token from username/password
 access_token=$(curl -s \
@@ -25,7 +25,7 @@ realm_response=$(curl -s -X GET \
   -H "Authorization: bearer $access_token" \
   "$base_url/admin/realms/$realm")
 
-if ! echo $realm_response | grep -q "Realm not found."; then
+if ! echo "$realm_response" | grep -q "Realm not found."; then
     echo "Realm '$realm' alredy exists, doing nothing"
     exit 1
 fi
