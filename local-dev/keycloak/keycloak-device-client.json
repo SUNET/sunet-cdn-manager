@@ -1,0 +1,10 @@
+{
+  "protocol":"openid-connect",
+  "clientId":"sunet-cdn-manager-devices",
+  "publicClient":true,
+  "standardFlowEnabled":false,
+  "directAccessGrantsEnabled":false,
+  "attributes":{
+    "oauth2.device.authorization.grant.enabled":true
+  }
+}

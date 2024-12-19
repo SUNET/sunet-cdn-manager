@@ -1,0 +1,26 @@
+services:
+  db:
+    image: "postgres:17.2-bookworm"
+    environment:
+      - POSTGRES_PASSWORD=dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+  keycloak:
+    image: "quay.io/keycloak/keycloak:26.0.7"
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://db:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    command: "start-dev"
+volumes:
+  postgres_data:

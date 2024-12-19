@@ -1,0 +1,16 @@
+{
+  "protocol":"openid-connect",
+  "clientId":"sunet-cdn-manager-server",
+  "publicClient":false,
+  "standardFlowEnabled":true,
+  "directAccessGrantsEnabled":false,
+  "attributes":{
+    "post.logout.redirect.uris":"http://localhost:8081/*"
+  },
+  "redirectUris":[
+    "http://localhost:8081/*"
+  ],
+  "webOrigins":[
+    "http://localhost:8081/*"
+  ]
+}

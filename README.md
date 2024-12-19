@@ -3,6 +3,7 @@ This is the SUNET CDN manager server which serves an API and UI for
 configuring the CDN service.
 
 ## Development
+### Running tests
 Running tests require a local PostgreSQL 15 or newer. The need for
 at least version 15 is because the database setup expects the "Constrain
 ordinary users to user-private schemas" schema usage pattern as described at
@@ -12,6 +13,32 @@ If running macOS the following can be done prior to running tests:
 ```
 brew install postgresql@17
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+```
+
+### Setting up a local dev enviroment
+Start database and keycloak:
+```
+docker compose -p sunet-cdn-manager -f local-dev/docker-compose.yml up
+```
+
+Initialize the sunet-cdn-manager realm in keycloak:
+```
+local-dev/keycloak/setup.sh
+```
+
+Create a config file for connecting insecurely to the local PostgreSQL database:
+```
+sed -e 's/"verify-full"/"disable"/' -e 's/"password"/"cdn"/' sunet-cdn-manager.toml.sample > sunet-cdn-manager-dev.toml
+```
+
+Initialize the sunet-cdn-manager database (this will print out a superuser username and password):
+```
+./sunet-cdn-manager --config sunet-cdn-manager-dev.toml init
+```
+
+Start the service:
+```
+./sunet-cdn-manager --config sunet-cdn-manager-dev.toml server
 ```
 
 ### Formatting and linting
