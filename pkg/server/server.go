@@ -165,6 +165,12 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 				&argon2TagSize,
 			)
 			if err != nil {
+				if err == pgx.ErrNoRows {
+					// The user does not exist etc, try again
+					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
 				logger.Err(err).Msg("failed looking up username for authentication")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
