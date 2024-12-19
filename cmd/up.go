@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/spf13/cobra"
 )
@@ -11,7 +12,17 @@ var upCmd = &cobra.Command{
 	Short: "Migrate to latest version",
 	Long:  `Migrate SQL DB to latest version`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		err := migrations.Up()
+		conf, err := config.GetConfig()
+		if err != nil {
+			return err
+		}
+
+		pgConfig, err := conf.PGConfig()
+		if err != nil {
+			return err
+		}
+
+		err = migrations.Up(cdnLogger, pgConfig)
 		if err != nil {
 			return err
 		}

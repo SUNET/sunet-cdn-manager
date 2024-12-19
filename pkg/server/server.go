@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/config"
+	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -26,7 +29,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	zlog "github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -36,24 +38,6 @@ var (
 	errUnprocessable = errors.New("resource not processable")
 	errAlreadyExists = errors.New("resource already exists")
 )
-
-type Config struct {
-	Server serverSettings
-	DB     dbSettings
-}
-
-type serverSettings struct {
-	Addr string
-}
-
-type dbSettings struct {
-	User     string
-	Password string
-	DBName   string
-	Host     string
-	Port     int
-	SSLMode  string
-}
 
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
@@ -316,7 +300,7 @@ func passwordToArgon2(password string) (argon2Data, error) {
 	}, nil
 }
 
-func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
+func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
 	var userID pgtype.UUID
 
 	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, orgID, roleID).Scan(&userID)
@@ -356,7 +340,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 	// If we already have all the IDs needed just insert them via VALUES
 	if orgIdent.isID() && roleIdent.isID() {
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			userID, err = insertUserWithArgon2Tx(tx, name, *orgIdent.id, *roleIdent.id, a2Data)
+			userID, err = insertUserWithArgon2Tx(tx, name, orgIdent.id, *roleIdent.id, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user with IDs: %w", err)
 			}
@@ -403,7 +387,7 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 				roleID = *roleIdent.id
 			}
 
-			userID, err = insertUserWithArgon2Tx(tx, name, orgID, roleID, a2Data)
+			userID, err = insertUserWithArgon2Tx(tx, name, &orgID, roleID, a2Data)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT user after looking up IDs: %w", err)
 			}
@@ -1612,33 +1596,118 @@ type completeVclsOutput struct {
 	Body []completeVcl
 }
 
-func GetConfig() (Config, error) {
-	var conf Config
-	err := viper.Unmarshal(&conf)
-	if err != nil {
-		return Config{}, fmt.Errorf("viper unable to decode into struct: %w", err)
+// Generate a random password containing A-Z, a-z and 0-9
+func generatePassword(length int) (string, error) {
+	minLength := 15
+
+	if length < minLength {
+		return "", fmt.Errorf("the password must be at least %d characters", minLength)
 	}
 
-	return conf, nil
+	var chars []rune
+	// 0-9
+	for c := '0'; c <= '9'; c++ {
+		chars = append(chars, c)
+	}
+
+	// A-Z
+	for c := 'A'; c <= 'Z'; c++ {
+		chars = append(chars, c)
+	}
+
+	// a-z
+	for c := 'a'; c <= 'z'; c++ {
+		chars = append(chars, c)
+	}
+
+	maxBigInt := big.NewInt(int64(len(chars)))
+
+	var b strings.Builder
+	for i := 0; i < length; i++ {
+		bigI, err := rand.Int(rand.Reader, maxBigInt)
+		if err != nil {
+			return "", fmt.Errorf("rand.Int failed: %w", err)
+		}
+
+		if !bigI.IsInt64() {
+			return "", errors.New("rand.Int can not be represented as int64")
+		}
+
+		b.WriteRune(chars[int(bigI.Int64())])
+	}
+	return b.String(), nil
 }
 
-func (conf Config) PGConfig() (*pgxpool.Config, error) {
-	pgConfigString := fmt.Sprintf(
-		"user=%s password=%s host=%s port=%d dbname=%s sslmode=%s",
-		conf.DB.User,
-		conf.DB.Password,
-		conf.DB.Host,
-		conf.DB.Port,
-		conf.DB.DBName,
-		conf.DB.SSLMode,
-	)
+type InitUser struct {
+	ID       pgtype.UUID
+	Name     string
+	Role     string
+	Password string
+}
 
-	pgConfig, err := pgxpool.ParseConfig(pgConfigString)
+func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
+	err := migrations.Up(logger, pgConfig)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse PostgreSQL config string: %w", err)
+		return InitUser{}, fmt.Errorf("unable to get run initial migration: %w", err)
 	}
 
-	return pgConfig, nil
+	dbPool, err := pgxpool.NewWithConfig(context.Background(), pgConfig)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("unable to create database pool: %w", err)
+	}
+	defer dbPool.Close()
+
+	password, err := generatePassword(30)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("unable to generate password: %w", err)
+	}
+
+	a2Data, err := passwordToArgon2(password)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
+	}
+
+	u := InitUser{
+		Name:     "admin",
+		Role:     "admin",
+		Password: password,
+	}
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		// Verify there are no roles present
+		var rolesExists bool
+		err := tx.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
+		if err != nil {
+			return fmt.Errorf("checking if there are any roles failed: %w", err)
+		}
+
+		if rolesExists {
+			return fmt.Errorf("we do not expect there to be any roles, is the database already initialized?")
+		}
+
+		// Because of the NOT NULL role_id required for users, if there are no
+		// roles there are no users either. So now we can create an initial
+		// admin role and user.
+		var roleID pgtype.UUID
+		err = tx.QueryRow(context.Background(), "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&roleID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+		}
+
+		userID, err := insertUserWithArgon2Tx(tx, u.Name, nil, roleID, a2Data)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial user: %w", err)
+		}
+
+		u.ID = userID
+
+		return nil
+	})
+	if err != nil {
+		return InitUser{}, fmt.Errorf("initial user transaction failed: %w", err)
+	}
+
+	return u, nil
 }
 
 func Run(logger zerolog.Logger) {
@@ -1654,7 +1723,7 @@ func Run(logger zerolog.Logger) {
 		cancel()
 	}(logger, cancel)
 
-	conf, err := GetConfig()
+	conf, err := config.GetConfig()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to get config")
 	}
