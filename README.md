@@ -36,7 +36,7 @@ Initialize the sunet-cdn-manager database (this will print out a superuser usern
 ./sunet-cdn-manager --config sunet-cdn-manager-dev.toml init
 ```
 
-Start the service:
+Start the server:
 ```
 ./sunet-cdn-manager --config sunet-cdn-manager-dev.toml server
 ```
