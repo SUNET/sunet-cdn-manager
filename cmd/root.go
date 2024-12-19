@@ -15,8 +15,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "sunet-cdn-manager",
-	Short: "Management system for SUNET CDN",
+	Use:          "sunet-cdn-manager",
+	SilenceUsage: true,
+	Short:        "Management system for SUNET CDN",
 	Long: `This is the management system where users of SUNET CDN manage
 their cache rules etc.`,
 	// Uncomment the following line if your bare application
