@@ -20,6 +20,12 @@ CREATE TABLE users (
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
+CREATE TABLE user_session_keys (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    key bytea UNIQUE NOT NULL CONSTRAINT secure_length CHECK(length(key)>=32 AND length(key)<=32)
+);
+
 CREATE TABLE user_argon2keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),

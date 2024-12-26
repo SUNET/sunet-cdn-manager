@@ -1654,7 +1654,7 @@ type InitUser struct {
 func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 	err := migrations.Up(logger, pgConfig)
 	if err != nil {
-		return InitUser{}, fmt.Errorf("unable to get run initial migration: %w", err)
+		return InitUser{}, fmt.Errorf("unable to run initial migration: %w", err)
 	}
 
 	dbPool, err := pgxpool.NewWithConfig(context.Background(), pgConfig)
@@ -1677,6 +1677,11 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 		Name:     "admin",
 		Role:     "admin",
 		Password: password,
+	}
+
+	userSessionKey, err := generateRandomKey(32)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("unable to create random user session key: %w", err)
 	}
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -1707,6 +1712,11 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 
 		u.ID = userID
 
+		_, err = insertUserSessionKey(tx, userSessionKey)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -1714,6 +1724,27 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 	}
 
 	return u, nil
+}
+
+func generateRandomKey(length int) ([]byte, error) {
+	b := make([]byte, length)
+
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read random bytes: %w", err)
+	}
+
+	return b, nil
+}
+
+func insertUserSessionKey(tx pgx.Tx, key []byte) (pgtype.UUID, error) {
+	var sessionKeyID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO user_session_keys (key) VALUES ($1) RETURNING id", key).Scan(&sessionKeyID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user session key: %w", err)
+	}
+
+	return sessionKeyID, nil
 }
 
 func Run(logger zerolog.Logger) {
