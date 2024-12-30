@@ -4,10 +4,8 @@ set -eu
 
 base_url="http://localhost:8080"
 
-# Keep in mind that these settings need to match the contents of the json
-# files.
-realm="sunet-cdn-manager"
-user="admin"
+realm=$(cat keycloak-realm.json | jq -r .realm)
+user=$(cat keycloak-user.json | jq -r .username)
 
 # Make it so we can run the script from anywhere
 cd "$(dirname "$0")"
