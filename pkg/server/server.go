@@ -115,12 +115,16 @@ type authData struct {
 	RoleName  string
 }
 
+func sendBasicAuth(w http.ResponseWriter) {
+	realm := "SUNET CDN Manager"
+	w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
 func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var ad authData
-
-			realm := "SUNET CDN Manager"
 
 			session, err := cookieStore.Get(r, "sunet-cdn-manager")
 			if err != nil {
@@ -138,8 +142,7 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *se
 			if _, ok := session.Values["ad"]; !ok {
 				username, password, ok := r.BasicAuth()
 				if !ok {
-					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
-					w.WriteHeader(http.StatusUnauthorized)
+					sendBasicAuth(w)
 					return
 				}
 
@@ -190,8 +193,7 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *se
 				if err != nil {
 					if err == pgx.ErrNoRows {
 						// The user does not exist etc, try again
-						w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
-						w.WriteHeader(http.StatusUnauthorized)
+						sendBasicAuth(w)
 						return
 					}
 					logger.Err(err).Msg("failed looking up username for authentication")
@@ -206,8 +208,7 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *se
 
 				if !passwordMatch {
 					// Bad password, try again
-					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
-					w.WriteHeader(http.StatusUnauthorized)
+					sendBasicAuth(w)
 					return
 				}
 
