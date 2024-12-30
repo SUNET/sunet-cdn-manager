@@ -2,13 +2,13 @@
 
 set -eu
 
+# Make it so we can run the script from anywhere
+cd "$(dirname "$0")"
+
 base_url="http://localhost:8080"
 
 realm=$(jq -r .realm keycloak-realm.json)
 user=$(jq -r .username keycloak-user.json)
-
-# Make it so we can run the script from anywhere
-cd "$(dirname "$0")"
 
 # Get access token from username/password
 access_token=$(curl -s \
