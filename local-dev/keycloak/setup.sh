@@ -4,8 +4,8 @@ set -eu
 
 base_url="http://localhost:8080"
 
-realm=$(cat keycloak-realm.json | jq -r .realm)
-user=$(cat keycloak-user.json | jq -r .username)
+realm=$(jq -r .realm keycloak-realm.json)
+user=$(jq -r .username keycloak-user.json)
 
 # Make it so we can run the script from anywhere
 cd "$(dirname "$0")"
@@ -62,7 +62,7 @@ oidc_server_client_secret=$(curl -s -X GET \
   -H "Authorization: bearer $access_token" \
   "$base_url/admin/realms/$realm/clients/$server_client_id/client-secret" | jq -r .value)
 
-oidc_server_client_id=$(cat keycloak-server-client.json | jq -r .clientId)
+oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)
 
 echo "Creating oauth2 public client for requesting device grants"
 curl -X POST \
