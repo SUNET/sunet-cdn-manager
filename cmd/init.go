@@ -14,7 +14,7 @@ var initCmd = &cobra.Command{
 	Short: "Initialize the database",
 	Long: `Initialize the database for use by the system, making sure the database structure
 is present as well as creating an initial admin user and role for managing the contents.`,
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		conf, err := config.GetConfig()
 		if err != nil {
 			return err
@@ -25,12 +25,17 @@ is present as well as creating an initial admin user and role for managing the c
 			return err
 		}
 
-		u, err := server.Init(cdnLogger, pgConfig)
+		encryptedSessionCookies, err := cmd.Flags().GetBool("encrypted-session-cookies")
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("database is initialized\nuser: %s\npassword: %s\n", u.Name, u.Password)
+		u, err := server.Init(cdnLogger, pgConfig, encryptedSessionCookies)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("database is initialized\nuser: %s\npassword: %s\nencrypted session cookies: %t\n", u.Name, u.Password, encryptedSessionCookies)
 
 		return nil
 	},
@@ -47,5 +52,5 @@ func init() {
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
-	// initCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	initCmd.Flags().BoolP("encrypted-session-cookies", "e", true, "if the initial session cookie key also includes encryption")
 }
