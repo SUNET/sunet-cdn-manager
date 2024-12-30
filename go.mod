@@ -7,6 +7,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.0
 	github.com/go-playground/validator/v10 v10.23.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/sessions v1.4.0
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/pressly/goose/v3 v3.24.0
 	github.com/rs/zerolog v1.33.0
@@ -21,6 +22,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

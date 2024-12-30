@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/gorilla/sessions"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -31,6 +33,10 @@ import (
 	zlog "github.com/rs/zerolog/log"
 	"golang.org/x/crypto/argon2"
 )
+
+func init() {
+	gob.Register(authData{})
+}
 
 var (
 	errForbidden     = errors.New("access to resource is not allowed")
@@ -100,38 +106,55 @@ func newArgon2DefaultSettings() argon2Settings {
 type authDataKey struct{}
 
 type authData struct {
-	username  string
-	userID    pgtype.UUID
-	orgID     *pgtype.UUID
-	orgName   *string
-	superuser bool
-	roleID    pgtype.UUID
-	roleName  string
+	Username  string
+	UserID    pgtype.UUID
+	OrgID     *pgtype.UUID
+	OrgName   *string
+	Superuser bool
+	RoleID    pgtype.UUID
+	RoleName  string
 }
 
-func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.Handler) http.Handler {
+func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var ad authData
+
 			realm := "SUNET CDN Manager"
-			username, password, ok := r.BasicAuth()
-			if !ok {
-				w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
-				w.WriteHeader(http.StatusUnauthorized)
-				return
+
+			session, err := cookieStore.Get(r, "sunet-cdn-manager")
+			if err != nil {
+				logger.Err(err).Msg("unable to decode existing session, using new one")
 			}
 
-			var userID, roleID pgtype.UUID
-			var orgID *pgtype.UUID // can be nil if not belonging to a organization
-			var orgName *string    // same as above
-			var argon2Key, argon2Salt []byte
-			var argon2Time, argon2Memory, argon2TagSize uint32
-			var argon2Threads uint8
-			var superuser bool
-			var roleName string
+			if session.IsNew {
+				session.Options = &sessions.Options{
+					Path:     "/",
+					Secure:   true,
+					HttpOnly: true,
+				}
+			}
 
-			err := dbPool.QueryRow(
-				context.Background(),
-				`SELECT
+			if _, ok := session.Values["ad"]; !ok {
+				username, password, ok := r.BasicAuth()
+				if !ok {
+					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+
+				var userID, roleID pgtype.UUID
+				var orgID *pgtype.UUID // can be nil if not belonging to a organization
+				var orgName *string    // same as above
+				var argon2Key, argon2Salt []byte
+				var argon2Time, argon2Memory, argon2TagSize uint32
+				var argon2Threads uint8
+				var superuser bool
+				var roleName string
+
+				err = dbPool.QueryRow(
+					context.Background(),
+					`SELECT
 				users.id,
 				users.org_id,
 				organizations.name,
@@ -149,51 +172,65 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 			JOIN roles ON users.role_id = roles.id
 			LEFT JOIN organizations ON users.org_id = organizations.id
 			WHERE users.name=$1`,
-				username,
-			).Scan(
-				&userID,
-				&orgID,
-				&orgName,
-				&roleID,
-				&roleName,
-				&superuser,
-				&argon2Key,
-				&argon2Salt,
-				&argon2Time,
-				&argon2Memory,
-				&argon2Threads,
-				&argon2TagSize,
-			)
-			if err != nil {
-				if err == pgx.ErrNoRows {
-					// The user does not exist etc, try again
+					username,
+				).Scan(
+					&userID,
+					&orgID,
+					&orgName,
+					&roleID,
+					&roleName,
+					&superuser,
+					&argon2Key,
+					&argon2Salt,
+					&argon2Time,
+					&argon2Memory,
+					&argon2Threads,
+					&argon2TagSize,
+				)
+				if err != nil {
+					if err == pgx.ErrNoRows {
+						// The user does not exist etc, try again
+						w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					logger.Err(err).Msg("failed looking up username for authentication")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+
+				loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
+				// Use subtle.ConstantTimeCompare() in an attempt to
+				// not leak password contents via timing attack
+				passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+
+				if !passwordMatch {
+					// Bad password, try again
 					w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
-				logger.Err(err).Msg("failed looking up username for authentication")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
 
-			loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
-			// Use subtle.ConstantTimeCompare() in an attempt to
-			// not leak password contents via timing attack
-			passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+				ad = authData{
+					Username:  username,
+					UserID:    userID,
+					OrgID:     orgID,
+					OrgName:   orgName,
+					RoleID:    roleID,
+					RoleName:  roleName,
+					Superuser: superuser,
+				}
 
-			if !passwordMatch {
-				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-				return
-			}
+				session.Values["ad"] = ad
 
-			ad := authData{
-				username:  username,
-				userID:    userID,
-				orgID:     orgID,
-				orgName:   orgName,
-				roleID:    roleID,
-				roleName:  roleName,
-				superuser: superuser,
+				err := session.Save(r, w)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				logger.Info().Msg("using authentication data from session")
+				ad = session.Values["ad"].(authData)
 			}
 
 			ctx := context.WithValue(r.Context(), authDataKey{}, ad)
@@ -212,14 +249,14 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger) func(next http.
 func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]user, error) {
 	var rows pgx.Rows
 	var err error
-	if ad.superuser {
+	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY users.ts")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
-	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.ts", ad.userID)
+	} else if ad.OrgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.ts", ad.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -246,7 +283,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 	var roleName string
 	var superuser bool
 	if userIdent.isID() {
-		if !ad.superuser && (ad.userID != *userIdent.id) {
+		if !ad.Superuser && (ad.UserID != *userIdent.id) {
 			return user{}, errNotFound
 		}
 
@@ -258,7 +295,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		u.ID = *userIdent.id
 		u.Name = userName
 	} else {
-		if !ad.superuser && (ad.username != inputID) {
+		if !ad.Superuser && (ad.Username != inputID) {
 			return user{}, errNotFound
 		}
 
@@ -323,7 +360,7 @@ func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID p
 }
 
 func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, organization string, ad authData) (pgtype.UUID, error) {
-	if !ad.superuser {
+	if !ad.Superuser {
 		return pgtype.UUID{}, errForbidden
 	}
 
@@ -411,13 +448,13 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, error) {
 	var rows pgx.Rows
 	var err error
-	if ad.superuser {
+	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY ts")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
-	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY ts", *ad.orgID)
+	} else if ad.OrgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY ts", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
@@ -440,7 +477,7 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 		return organization{}, fmt.Errorf("unable to parse name or id")
 	}
 	if orgIdent.isID() {
-		if !ad.superuser && (ad.orgID == nil || *ad.orgID != *orgIdent.id) {
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != *orgIdent.id) {
 			return organization{}, errNotFound
 		}
 
@@ -452,7 +489,7 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 		o.Name = name
 		o.ID = *orgIdent.id
 	} else {
-		if !ad.superuser && (ad.orgName == nil || *ad.orgName != inputID) {
+		if !ad.Superuser && (ad.OrgName == nil || *ad.OrgName != inputID) {
 			return organization{}, errNotFound
 		}
 		var id pgtype.UUID
@@ -469,7 +506,7 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 
 func insertOrganization(dbPool *pgxpool.Pool, name string, ad authData) (pgtype.UUID, error) {
 	var id pgtype.UUID
-	if !ad.superuser {
+	if !ad.Superuser {
 		return pgtype.UUID{}, errForbidden
 	}
 	err := dbPool.QueryRow(context.Background(), "INSERT INTO organizations (name) VALUES ($1) RETURNING id", name).Scan(&id)
@@ -483,13 +520,13 @@ func insertOrganization(dbPool *pgxpool.Pool, name string, ad authData) (pgtype.
 func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	var rows pgx.Rows
 	var err error
-	if ad.superuser {
+	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY ts")
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
-	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY ts", *ad.orgID)
+	} else if ad.OrgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY ts", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
@@ -527,15 +564,15 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 		return service{}, fmt.Errorf("unable to parse name or id")
 	}
 	if serviceIdent.isID() {
-		if ad.superuser {
+		if ad.Superuser {
 			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *serviceIdent.id).Scan(&serviceName)
 			if err != nil {
 				return service{}, fmt.Errorf("unable to SELECT service by id for superuser")
 			}
 			s.Name = serviceName
 			s.ID = *serviceIdent.id
-		} else if ad.orgID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.id=$1 AND organizations.id=$2", *serviceIdent.id, ad.orgID).Scan(&serviceName)
+		} else if ad.OrgID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.id=$1 AND organizations.id=$2", *serviceIdent.id, ad.OrgID).Scan(&serviceName)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return service{}, errNotFound
@@ -548,15 +585,15 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			return service{}, errNotFound
 		}
 	} else {
-		if ad.superuser {
+		if ad.Superuser {
 			err := dbPool.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1", inputID).Scan(&serviceID)
 			if err != nil {
 				return service{}, fmt.Errorf("unable to SELECT service by name for superuser")
 			}
 			s.Name = inputID
 			s.ID = serviceID
-		} else if ad.orgID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.name=$1 AND organizations.id=$2", inputID, ad.orgID).Scan(&serviceID)
+		} else if ad.OrgID != nil {
+			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN organizations ON services.org_id = organizations.id WHERE services.name=$1 AND organizations.id=$2", inputID, ad.OrgID).Scan(&serviceID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return service{}, errNotFound
@@ -639,7 +676,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		}
 	}
 
-	if ad.superuser {
+	if ad.Superuser {
 		if !orgIdent.isValid() {
 			return pgtype.UUID{}, errUnprocessable
 		}
@@ -655,7 +692,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 			}
 		}
 	} else {
-		if ad.orgID == nil {
+		if ad.OrgID == nil {
 			return pgtype.UUID{}, errForbidden
 		}
 
@@ -664,17 +701,17 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		// data.
 		if orgIdent.isValid() {
 			if orgIdent.isID() {
-				if *ad.orgID != *orgIdent.id {
+				if *ad.OrgID != *orgIdent.id {
 					return pgtype.UUID{}, errForbidden
 				}
 			} else {
-				if *ad.orgName != *orgIdent.name {
+				if *ad.OrgName != *orgIdent.name {
 					return pgtype.UUID{}, errForbidden
 				}
 			}
 		}
 
-		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.orgID).Scan(&serviceID)
+		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.OrgID).Scan(&serviceID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -694,13 +731,13 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion, error) {
 	var rows pgx.Rows
 	var err error
-	if ad.superuser {
+	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id ORDER BY service_versions.version")
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for service versions as superuser: %w", err)
 		}
-	} else if ad.orgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.orgID)
+	} else if ad.OrgID != nil {
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
@@ -852,7 +889,7 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 		}
 	}
 
-	if ad.superuser {
+	if ad.Superuser {
 		if !orgIdent.isValid() {
 			return serviceVersionInsertResult{}, errUnprocessable
 		}
@@ -888,7 +925,7 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 			}
 		}
 	} else {
-		if ad.orgID == nil {
+		if ad.OrgID == nil {
 			return serviceVersionInsertResult{}, errForbidden
 		}
 
@@ -897,18 +934,18 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 		// data.
 		if orgIdent.isValid() {
 			if orgIdent.isID() {
-				if *ad.orgID != *orgIdent.id {
+				if *ad.OrgID != *orgIdent.id {
 					return serviceVersionInsertResult{}, errForbidden
 				}
 			} else {
-				if *ad.orgName != *orgIdent.name {
+				if *ad.OrgName != *orgIdent.name {
 					return serviceVersionInsertResult{}, errForbidden
 				}
 			}
 		}
 
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, *ad.orgID, domains, origins, active)
+			serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, *ad.OrgID, domains, origins, active)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT service version with org ID for user: %w", err)
 			}
@@ -989,7 +1026,7 @@ func generateCompleteVcl(sv selectVcl) (string, error) {
 func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	var rows pgx.Rows
 	var err error
-	if ad.superuser {
+	if ad.Superuser {
 		// Usage of JOIN with subqueries based on
 		// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
 		// (including separate version when having WHERE statement based on org).
@@ -1023,7 +1060,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for vcls as superuser: %w", err)
 		}
-	} else if ad.orgID != nil {
+	} else if ad.OrgID != nil {
 		rows, err = dbPool.Query(
 			context.Background(),
 			`SELECT
@@ -1049,7 +1086,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
 			WHERE organizations.id=$1
 			ORDER BY organizations.name`,
-			*ad.orgID,
+			*ad.OrgID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for vcls as normal user: %w", err)
@@ -1081,7 +1118,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
-func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
+func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -1102,7 +1139,7 @@ func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool) *chi.Mux {
 	)
 
 	router.Use(hlogChain...)
-	router.Use(authMiddleware(dbPool, logger))
+	router.Use(authMiddleware(dbPool, logger, cookieStore))
 
 	router.Get("/", rootHandler)
 
@@ -1712,7 +1749,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 
 		u.ID = userID
 
-		_, err = insertUserSessionKey(tx, userSessionKey)
+		_, err = insertGorillaSessionKey(tx, userSessionKey, nil)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
 		}
@@ -1737,14 +1774,64 @@ func generateRandomKey(length int) ([]byte, error) {
 	return b, nil
 }
 
-func insertUserSessionKey(tx pgx.Tx, key []byte) (pgtype.UUID, error) {
+func insertGorillaSessionKey(tx pgx.Tx, authKey []byte, encKey []byte) (pgtype.UUID, error) {
 	var sessionKeyID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO user_session_keys (key) VALUES ($1) RETURNING id", key).Scan(&sessionKeyID)
+
+	// key_order is either the current max key_order value + 1 or 0 if no rows exist
+	err := tx.QueryRow(
+		context.Background(),
+		"INSERT INTO gorilla_session_keys (auth_key, enc_key, key_order) SELECT $1, $2, COALESCE(MAX(key_order)+1,0) FROM gorilla_session_keys RETURNING id",
+		authKey,
+		encKey,
+	).Scan(&sessionKeyID)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user session key: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to INSERT gorilla session key: %w", err)
 	}
 
 	return sessionKeyID, nil
+}
+
+type sessionKey struct {
+	TS      time.Time `db:"ts"`
+	AuthKey []byte    `db:"auth_key"`
+	EncKey  []byte    `db:"enc_key"`
+}
+
+func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
+	rows, err := dbPool.Query(context.Background(), "SELECT ts, auth_key, enc_key FROM gorilla_session_keys ORDER BY key_order DESC")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for session key: %w", err)
+	}
+
+	sessionKeys, err := pgx.CollectRows(rows, pgx.RowToStructByName[sessionKey])
+	if err != nil {
+		return nil, fmt.Errorf("unable to get rows for session secrets: %w", err)
+	}
+
+	if len(sessionKeys) == 0 {
+		return nil, errors.New("no session keys available")
+	}
+
+	return sessionKeys, nil
+}
+
+func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
+	sessionKeys, err := getSessionKeys(dbPool)
+	if err != nil {
+		return nil, fmt.Errorf("unable to find session keys in database, make the the database is initialized bia the 'init' command: %w", err)
+	}
+
+	if sessionKeys[0].EncKey == nil {
+		logger.Info().Msg("gorilla session encryption key is nil, using unencrypted cookies")
+	}
+
+	sessionKeyPairs := [][]byte{}
+	for _, sk := range sessionKeys {
+		sessionKeyPairs = append(sessionKeyPairs, sk.AuthKey)
+		sessionKeyPairs = append(sessionKeyPairs, sk.EncKey)
+	}
+
+	return sessions.NewCookieStore(sessionKeyPairs...), nil
 }
 
 func Run(logger zerolog.Logger) {
@@ -1791,7 +1878,12 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Msg("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	router := newChiRouter(logger, dbPool)
+	cookieStore, err := getSessionStore(logger, dbPool)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("getSessionStore failed")
+	}
+
+	router := newChiRouter(logger, dbPool, cookieStore)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {

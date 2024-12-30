@@ -20,10 +20,13 @@ CREATE TABLE users (
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
-CREATE TABLE user_session_keys (
+CREATE TABLE gorilla_session_keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
-    key bytea UNIQUE NOT NULL CONSTRAINT secure_length CHECK(length(key)>=32 AND length(key)<=32)
+    key_order bigint UNIQUE NOT NULL,
+    auth_key bytea NOT NULL CONSTRAINT auth_length CHECK(length(auth_key)=32 OR length(auth_key)=64),
+    enc_key bytea CONSTRAINT enc_length CHECK(length(enc_key)=16 OR length(enc_key)=24 OR length(enc_key)=32),
+    UNIQUE(auth_key, enc_key)
 );
 
 CREATE TABLE user_argon2keys (

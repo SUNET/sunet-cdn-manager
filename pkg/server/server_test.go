@@ -228,6 +228,16 @@ func populateTestData(dbPool *pgxpool.Pool) error {
 			}
 		}
 
+		gorillaAuthKey, err := generateRandomKey(32)
+		if err != nil {
+			return fmt.Errorf("unable to create random user session key: %w", err)
+		}
+
+		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, nil)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT user session key: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -267,7 +277,12 @@ func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
 		return nil, nil, err
 	}
 
-	router := newChiRouter(logger, dbPool)
+	cookieStore, err := getSessionStore(logger, dbPool)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	router := newChiRouter(logger, dbPool, cookieStore)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {
