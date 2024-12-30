@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-func populateTestData(dbPool *pgxpool.Pool) error {
+func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	// use static UUIDs to get known contents for testing
 	testData := []string{
 		// Organizations
@@ -231,10 +231,19 @@ func populateTestData(dbPool *pgxpool.Pool) error {
 
 		gorillaAuthKey, err := generateRandomKey(32)
 		if err != nil {
-			return fmt.Errorf("unable to create random user session key: %w", err)
+			return fmt.Errorf("unable to create random gorilla session auth key: %w", err)
 		}
 
-		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, nil)
+		var gorillaEncKey []byte
+
+		if encryptedSessionKey {
+			gorillaEncKey, err = generateRandomKey(32)
+			if err != nil {
+				return fmt.Errorf("unable to create random gorilla session encryption key: %w", err)
+			}
+		}
+
+		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT user session key: %w", err)
 		}
@@ -248,7 +257,7 @@ func populateTestData(dbPool *pgxpool.Pool) error {
 	return nil
 }
 
-func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
+func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -273,7 +282,7 @@ func prepareServer() (*httptest.Server, *pgxpool.Pool, error) {
 		return nil, nil, err
 	}
 
-	err = populateTestData(dbPool)
+	err = populateTestData(dbPool, encryptedSessionKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -308,7 +317,7 @@ func TestServerInit(t *testing.T) {
 
 	fmt.Println(pgConfig.ConnString())
 
-	u, err := Init(logger, pgConfig)
+	u, err := Init(logger, pgConfig, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +335,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -391,7 +400,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(true)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -461,7 +470,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -534,7 +543,7 @@ func TestGetUsers(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -642,7 +651,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestPostUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -776,7 +785,7 @@ func TestPostUsers(t *testing.T) {
 }
 
 func TestGetOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -849,7 +858,7 @@ func TestGetOrganizations(t *testing.T) {
 }
 
 func TestGetOrganization(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -957,7 +966,7 @@ func TestGetOrganization(t *testing.T) {
 }
 
 func TestPostOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1057,7 +1066,7 @@ func TestPostOrganizations(t *testing.T) {
 }
 
 func TestGetServices(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1130,7 +1139,7 @@ func TestGetServices(t *testing.T) {
 }
 
 func TestGetService(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1249,7 +1258,7 @@ func TestGetService(t *testing.T) {
 }
 
 func TestPostServices(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1394,7 +1403,7 @@ func TestPostServices(t *testing.T) {
 }
 
 func TestGetServiceVersions(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1463,7 +1472,7 @@ func TestGetServiceVersions(t *testing.T) {
 }
 
 func TestPostServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1735,7 +1744,7 @@ func TestPostServiceVersion(t *testing.T) {
 }
 
 func TestGetVcls(t *testing.T) {
-	ts, dbPool, err := prepareServer()
+	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}

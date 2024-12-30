@@ -1688,7 +1688,7 @@ type InitUser struct {
 	Password string
 }
 
-func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
+func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey bool) (InitUser, error) {
 	err := migrations.Up(logger, pgConfig)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to run initial migration: %w", err)
@@ -1716,9 +1716,18 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 		Password: password,
 	}
 
-	userSessionKey, err := generateRandomKey(32)
+	var gorillaSessionEncKey []byte
+
+	gorillaSessionAuthKey, err := generateRandomKey(32)
 	if err != nil {
-		return InitUser{}, fmt.Errorf("unable to create random user session key: %w", err)
+		return InitUser{}, fmt.Errorf("unable to create random gorilla session auth key: %w", err)
+	}
+
+	if encryptedSessionKey {
+		gorillaSessionEncKey, err = generateRandomKey(32)
+		if err != nil {
+			return InitUser{}, fmt.Errorf("unable to create random gorilla session encryption key: %w", err)
+		}
 	}
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -1749,7 +1758,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config) (InitUser, error) {
 
 		u.ID = userID
 
-		_, err = insertGorillaSessionKey(tx, userSessionKey, nil)
+		_, err = insertGorillaSessionKey(tx, gorillaSessionAuthKey, gorillaSessionEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
 		}
