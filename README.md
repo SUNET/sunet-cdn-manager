@@ -33,12 +33,12 @@ sed -e 's/"verify-full"/"disable"/' -e 's/"password"/"cdn"/' sunet-cdn-manager.t
 
 Initialize the sunet-cdn-manager database (this will print out a superuser username and password):
 ```
-./sunet-cdn-manager --config sunet-cdn-manager-dev.toml init
+go run . --config sunet-cdn-manager-dev.toml init
 ```
 
 Start the server:
 ```
-./sunet-cdn-manager --config sunet-cdn-manager-dev.toml server
+go run . --config sunet-cdn-manager-dev.toml server
 ```
 
 ### Formatting and linting
