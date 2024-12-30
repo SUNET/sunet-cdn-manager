@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/jackc/pgx/v5"
@@ -321,6 +322,141 @@ func TestServerInit(t *testing.T) {
 
 	if len(u.Password) != expectedPasswordLength {
 		t.Fatalf("expected initial user password length %d, got: %d", expectedPasswordLength, len(u.Password))
+	}
+}
+
+func TestSessionKeyHandlingNoEnc(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Try inserting additional session keys with nil encryptionKey
+	numAdded := 2
+	for i := 0; i < numAdded; i++ {
+		gorillaAuthKey, err := generateRandomKey(32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			_, err = insertGorillaSessionKey(tx, gorillaAuthKey, nil)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	rows, err := dbPool.Query(context.Background(), "SELECT id, ts, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyOrderMax int64
+
+	var id pgtype.UUID
+	var timestamp time.Time
+	var keyOrder int64
+	var authKey, encKey []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &timestamp, &keyOrder, &authKey, &encKey}, func() error {
+		fmt.Printf("id: %s, ts: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timestamp, keyOrder, len(authKey), len(encKey))
+
+		if authKey == nil {
+			t.Fatal("authKey is nil")
+		}
+
+		if encKey != nil {
+			t.Fatal("encKey is not nil")
+		}
+
+		if keyOrder > keyOrderMax {
+			keyOrderMax = keyOrder
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The initial key starts at 0 so we expect the highest key_order counter to be the same as the number of addtional keys added here
+	if keyOrderMax != int64(numAdded) {
+		t.Fatalf("unexpected key_order max, have: %d, want: %d", keyOrderMax, numAdded)
+	}
+}
+
+func TestSessionKeyHandlingWithEnc(t *testing.T) {
+	ts, dbPool, err := prepareServer()
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Try inserting additional session keys with nil encryptionKey
+	numAdded := 2
+	for i := 0; i < numAdded; i++ {
+		gorillaAuthKey, err := generateRandomKey(32)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		gorillaEncKey, err := generateRandomKey(32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	rows, err := dbPool.Query(context.Background(), "SELECT id, ts, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyOrderMax int64
+
+	var id pgtype.UUID
+	var timestamp time.Time
+	var keyOrder int64
+	var authKey, encKey []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &timestamp, &keyOrder, &authKey, &encKey}, func() error {
+		fmt.Printf("id: %s, ts: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timestamp, keyOrder, len(authKey), len(encKey))
+
+		if authKey == nil {
+			t.Fatal("authKey is nil")
+		}
+
+		if encKey == nil {
+			t.Fatal("encKey is nil")
+		}
+
+		if keyOrder > keyOrderMax {
+			keyOrderMax = keyOrder
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The initial key starts at 0 so we expect the highest key_order counter to be the same as the number of addtional keys added here
+	if keyOrderMax != int64(numAdded) {
+		t.Fatalf("unexpected key_order max, have: %d, want: %d", keyOrderMax, numAdded)
 	}
 }
 
