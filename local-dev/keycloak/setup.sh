@@ -52,11 +52,17 @@ curl -X PUT \
   "$base_url/admin/realms/$realm/users/$user_id/reset-password"
 
 echo "Creating oauth2 confidential client for sunet-cdn-manager server"
-curl -X POST \
+server_client_id=$(curl -si -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
   -d @keycloak-server-client.json \
-  "$base_url/admin/realms/$realm/clients"
+  "$base_url/admin/realms/$realm/clients" | awk -F/ '/^Location:/{print $NF}' | sed 's/\r$//')
+
+oidc_server_client_secret=$(curl -s -X GET \
+  -H "Authorization: bearer $access_token" \
+  "$base_url/admin/realms/$realm/clients/$server_client_id/client-secret" | jq -r .value)
+
+oidc_server_client_id=$(cat keycloak-server-client.json | jq -r .clientId)
 
 echo "Creating oauth2 public client for requesting device grants"
 curl -X POST \
@@ -64,3 +70,7 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d @keycloak-device-client.json \
   "$base_url/admin/realms/$realm/clients"
+
+echo
+echo "server OIDC client_id: $oidc_server_client_id"
+echo "server OIDC client_secret: $oidc_server_client_secret"
