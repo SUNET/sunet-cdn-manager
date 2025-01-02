@@ -243,9 +243,19 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 		}
 
+		gorillaCSRFKey, err := generateRandomKey(32)
+		if err != nil {
+			return fmt.Errorf("unable to create random gorilla CSRF key: %w", err)
+		}
+
 		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT user session key: %w", err)
+		}
+
+		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFKey, true)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT CSRF key: %w", err)
 		}
 
 		return nil
@@ -292,7 +302,12 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		return nil, nil, err
 	}
 
-	router := newChiRouter(logger, dbPool, cookieStore)
+	csrfMiddleware, err := getCSRFMiddleware(dbPool, false)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
+	}
+
+	router := newChiRouter(true, logger, dbPool, cookieStore, csrfMiddleware)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {

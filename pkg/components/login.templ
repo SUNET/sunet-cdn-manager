@@ -1,0 +1,27 @@
+package components
+
+templ LoginPage(returnTo string, loginFailed bool) {
+	<h1>Login</h1>
+	<form method="post" action="/login">
+		@CSRF()
+		if returnTo != "" {
+			<input type="hidden" name="return_to" value={ returnTo }/>
+		}
+		<label for="username">Username:</label>
+		<br/>
+		<input type="text" id="username" name="username"/>
+		<br/>
+		<label for="password">Password:</label>
+		<br/>
+		<input type="password" id="password" name="password"/>
+		<input type="submit" value="Login"/>
+	</form>
+	if loginFailed {
+		<div>Login failed!</div>
+	}
+}
+
+// https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf
+templ CSRF() {
+	<input type="hidden" name="gorilla.csrf.Token" value={ ctx.Value("gorilla.csrf.Token").(string) }/>
+}

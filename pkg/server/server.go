@@ -11,18 +11,23 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/gorilla/csrf"
+	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -36,6 +41,9 @@ import (
 
 func init() {
 	gob.Register(authData{})
+
+	// Withouth this the decoder will fail on "error":"schema: invalid path \"gorilla.csrf.Token\""" when using gorilla/csrf
+	schemaDecoder.IgnoreUnknownKeys(true)
 }
 
 var (
@@ -43,6 +51,16 @@ var (
 	errNotFound      = errors.New("resource not found")
 	errUnprocessable = errors.New("resource not processable")
 	errAlreadyExists = errors.New("resource already exists")
+	errBadPassword   = errors.New("bad password")
+
+	// Set a Decoder instance as a package global, because it caches
+	// meta-data about structs, and an instance can be shared safely.
+	schemaDecoder = schema.NewDecoder()
+
+	// use a single instance of Validate, it caches struct info
+	validate = validator.New(validator.WithRequiredStructEnabled())
+
+	returnToKey = "return_to"
 )
 
 // Small struct that implements io.Writer so we can pass it to net/http server
@@ -56,8 +74,207 @@ func (zew *zerologErrorWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func rootHandler(w http.ResponseWriter, _ *http.Request) {
-	fmt.Fprintf(w, "Welcome to SUNET CDN Manager\n")
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	// http.Redirect(w, r, "/console", http.StatusFound)
+	validatedRedirect("/console", w, r)
+}
+
+func consoleHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		session, err := cookieStore.Get(r, cookieName)
+		if err != nil {
+			logger.Err(err).Msg("console: bad session cookie")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Err(err).Msg("console: session missing authData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(authData)
+
+		err = renderConsolePage(w, r, ad)
+		if err != nil {
+			logger.Err(err).Msg("unable to render console page")
+			return
+		}
+	}
+}
+
+// Login page/form for browser based (not API) requests
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData) error {
+	component := components.ConsolePage(ad.Username)
+	err := component.Render(r.Context(), w)
+	return err
+}
+
+// Return user to content of return_to query parameter but only if it points to a place we control
+// https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
+func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request) {
+	logger := hlog.FromRequest(r)
+	returnToURL, err := url.Parse(returnTo)
+	if err != nil {
+		logger.Err(err).Msg("unable to parse return_to content as URL")
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	// Make sure the URL does not point to anything outside this server
+	if r.URL.Host != returnToURL.Host {
+		logger.Err(err).Msg("return_to does not point to this service, not redirecting")
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	logger.Info().Str("return_to", returnToURL.String()).Msg("redirecting user")
+	http.Redirect(w, r, returnToURL.String(), http.StatusFound)
+}
+
+type loginForm struct {
+	// Username length validation needs to be kept in sync with the CHECK
+	// constraints in the user table, see the migrations module.
+	Username string `schema:"username" validate:"min=1,max=63"`
+	// Password length validation needs to be kept in sync with the
+	// /api/v1/users POST endpoint for user creation
+	Password string `schema:"password" validate:"min=15,max=64"`
+	ReturnTo string `schema:"return_to"`
+}
+
+// Endpoint used for console login
+func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMode bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		switch r.Method {
+		case "GET":
+			q := r.URL.Query()
+			returnTo := q.Get(returnToKey)
+			_, ok := ctx.Value(authDataKey{}).(authData)
+			if ok {
+				switch returnTo {
+				case "":
+					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
+					// http.Redirect(w, r, "/console", http.StatusFound)
+					validatedRedirect("/console", w, r)
+					return
+				default:
+					logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
+					validatedRedirect(returnTo, w, r)
+					return
+				}
+			}
+
+			// No existing login session, show login form
+			err := renderLoginPage(w, r, returnTo, false)
+			if err != nil {
+				logger.Err(err).Msg("unable to render login page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		case "POST":
+			err := r.ParseForm()
+			if err != nil {
+				logger.Err(err).Msg("unable to parse login POST form")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := loginForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST login form data, treating as failed login")
+				err := renderLoginPage(w, r, formData.ReturnTo, true)
+				if err != nil {
+					logger.Err(err).Msg("unable to render login page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			ad, err := dbUserLogin(dbPool, formData.Username, formData.Password)
+			if err != nil {
+				switch err {
+				case pgx.ErrNoRows:
+					// The user does not exist etc, try again
+					err := renderLoginPage(w, r, formData.ReturnTo, true)
+					if err != nil {
+						logger.Err(err).Msg("unable to render bad password page for non-existant user")
+					}
+					return
+				case errBadPassword:
+					// Bad password, try again
+					err := renderLoginPage(w, r, formData.ReturnTo, true)
+					if err != nil {
+						logger.Err(err).Msg("unable to render bad password page for bad password")
+					}
+					return
+				}
+
+				logger.Err(err).Msg("db request to handle POST login request failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			session, err := cookieStore.Get(r, cookieName)
+			if err != nil {
+				logger.Err(err).Msg("login: unable to decode existing session, using new one for session saving")
+			}
+
+			if session.IsNew {
+				session.Options = &sessions.Options{
+					Path:     "/",
+					Secure:   true,
+					HttpOnly: true,
+				}
+				if devMode {
+					session.Options.Secure = false
+				}
+			}
+
+			logger.Info().Msg("saving login session")
+			session.Values["ad"] = ad
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Login is successful at this point, send the now authenticated user to their original location (or /console if no such hint is available)
+			if formData.ReturnTo != "" {
+				u, err := url.Parse(formData.ReturnTo)
+				if err != nil {
+					logger.Err(err).Msg("unable to parse form return_to as URL")
+					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+					return
+				}
+
+				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form")
+				validatedRedirect(u.String(), w, r)
+				return
+			} else {
+				logger.Info().Msg("no return_to in POST data, redirecting logged in user to /console")
+				validatedRedirect("/console", w, r)
+				return
+			}
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for login handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
 }
 
 type argon2Settings struct {
@@ -121,43 +338,48 @@ func sendBasicAuth(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var ad authData
+// Login page/form for browser based (not API) requests
+func renderLoginPage(w http.ResponseWriter, r *http.Request, returnTo string, loginFailed bool) error {
+	component := components.LoginPage(returnTo, loginFailed)
+	err := component.Render(r.Context(), w)
+	return err
+}
 
-			session, err := cookieStore.Get(r, "sunet-cdn-manager")
-			if err != nil {
-				logger.Err(err).Msg("unable to decode existing session, using new one")
-			}
+func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
+	redirectURL, err := url.ParseRequestURI(r.RequestURI)
+	if err != nil {
+		return fmt.Errorf("unable to parse RequestURI: %w", err)
+	}
 
-			if session.IsNew {
-				session.Options = &sessions.Options{
-					Path:     "/",
-					Secure:   true,
-					HttpOnly: true,
-				}
-			}
+	// Remember where we wanted to go, but only overwrite it if it is not already set
+	q := r.URL.Query()
+	if !q.Has(returnToKey) {
+		q.Set(returnToKey, r.URL.String())
+		redirectURL.RawQuery = q.Encode()
+	}
 
-			if _, ok := session.Values["ad"]; !ok {
-				username, password, ok := r.BasicAuth()
-				if !ok {
-					sendBasicAuth(w)
-					return
-				}
+	// Redirect to the login handler
+	redirectURL.Path = "/login"
 
-				var userID, roleID pgtype.UUID
-				var orgID *pgtype.UUID // can be nil if not belonging to a organization
-				var orgName *string    // same as above
-				var argon2Key, argon2Salt []byte
-				var argon2Time, argon2Memory, argon2TagSize uint32
-				var argon2Threads uint8
-				var superuser bool
-				var roleName string
+	// http.Redirect(w, r, redirectURL.String(), http.StatusFound)
+	validatedRedirect(redirectURL.String(), w, r)
 
-				err = dbPool.QueryRow(
-					context.Background(),
-					`SELECT
+	return nil
+}
+
+func dbUserLogin(dbPool *pgxpool.Pool, username string, password string) (authData, error) {
+	var userID, roleID pgtype.UUID
+	var orgID *pgtype.UUID // can be nil if not belonging to a organization
+	var orgName *string    // same as above
+	var argon2Key, argon2Salt []byte
+	var argon2Time, argon2Memory, argon2TagSize uint32
+	var argon2Threads uint8
+	var superuser bool
+	var roleName string
+
+	err := dbPool.QueryRow(
+		context.Background(),
+		`SELECT
 				users.id,
 				users.org_id,
 				organizations.name,
@@ -175,73 +397,135 @@ func authMiddleware(dbPool *pgxpool.Pool, logger zerolog.Logger, cookieStore *se
 			JOIN roles ON users.role_id = roles.id
 			LEFT JOIN organizations ON users.org_id = organizations.id
 			WHERE users.name=$1`,
-					username,
-				).Scan(
-					&userID,
-					&orgID,
-					&orgName,
-					&roleID,
-					&roleName,
-					&superuser,
-					&argon2Key,
-					&argon2Salt,
-					&argon2Time,
-					&argon2Memory,
-					&argon2Threads,
-					&argon2TagSize,
-				)
-				if err != nil {
-					if err == pgx.ErrNoRows {
-						// The user does not exist etc, try again
-						sendBasicAuth(w)
-						return
-					}
-					logger.Err(err).Msg("failed looking up username for authentication")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
+		username,
+	).Scan(
+		&userID,
+		&orgID,
+		&orgName,
+		&roleID,
+		&roleName,
+		&superuser,
+		&argon2Key,
+		&argon2Salt,
+		&argon2Time,
+		&argon2Memory,
+		&argon2Threads,
+		&argon2TagSize,
+	)
+	if err != nil {
+		return authData{}, err
+	}
 
-				loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
-				// Use subtle.ConstantTimeCompare() in an attempt to
-				// not leak password contents via timing attack
-				passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+	loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
+	// Use subtle.ConstantTimeCompare() in an attempt to
+	// not leak password contents via timing attack
+	passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
 
-				if !passwordMatch {
-					// Bad password, try again
-					sendBasicAuth(w)
-					return
-				}
+	if !passwordMatch {
+		return authData{}, errBadPassword
+	}
 
-				ad = authData{
-					Username:  username,
-					UserID:    userID,
-					OrgID:     orgID,
-					OrgName:   orgName,
-					RoleID:    roleID,
-					RoleName:  roleName,
-					Superuser: superuser,
-				}
+	return authData{
+		Username:  username,
+		UserID:    userID,
+		OrgID:     orgID,
+		OrgName:   orgName,
+		RoleID:    roleID,
+		RoleName:  roleName,
+		Superuser: superuser,
+	}, nil
+}
 
-				session.Values["ad"] = ad
+// This handler writes any data to the client as well as logging errors etc. If everything went well *authData is not nil.
+func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request) *authData {
+	logger := hlog.FromRequest(r)
+	username, password, ok := r.BasicAuth()
+	if !ok {
+		sendBasicAuth(w)
+		return nil
+	}
 
-				err := session.Save(r, w)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-			} else {
-				logger.Info().Msg("using authentication data from session")
-				ad = session.Values["ad"].(authData)
+	ad, err := dbUserLogin(dbPool, username, password)
+	if err != nil {
+		switch err {
+		case pgx.ErrNoRows:
+			// The user does not exist etc, try again
+			sendBasicAuth(w)
+			return nil
+		case errBadPassword:
+			// Bad password, try again
+			sendBasicAuth(w)
+			return nil
+		}
+
+		logger.Err(err).Msg("failed looking up username for authentication")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil
+	}
+
+	return &ad
+}
+
+func apiAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request) *authData {
+	return handleBasicAuth(dbPool, w, r)
+}
+
+const cookieName = "sunet-cdn-manager"
+
+func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, w http.ResponseWriter, r *http.Request) *authData {
+	if r.Method != "GET" {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return nil
+	}
+
+	session, err := cookieStore.Get(r, cookieName)
+	if err != nil {
+		logger.Err(err).Msg("unable to decode existing session, using new one")
+	}
+
+	adInt, ok := session.Values["ad"]
+	if !ok {
+		return nil
+	}
+
+	logger.Info().Msg("using authentication data from session")
+	ad := adInt.(authData)
+	return &ad
+}
+
+func apiAuthMiddleware(dbPool *pgxpool.Pool) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			adRef := apiAuth(dbPool, w, r)
+			if adRef == nil {
+				return
 			}
 
-			ctx := context.WithValue(r.Context(), authDataKey{}, ad)
+			ctx := context.WithValue(r.Context(), authDataKey{}, *adRef)
 
-			// call the next handler in the chain, passing the response writer and
-			// the updated request object with the new context value.
-			//
-			// note: context.Context values are nested, so any previously set
-			// values will be accessible as well, and the new `"user"` key
-			// will be accessible from this point forward.
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			logger := hlog.FromRequest(r)
+
+			adRef := authFromSession(logger, cookieStore, w, r)
+			if adRef == nil {
+				logger.Info().Msg("consoleAuthMiddleware: redirecting to login page")
+				err := redirectToLoginPage(w, r)
+				if err != nil {
+					logger.Err(err).Msg("unable to redirect to login page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), authDataKey{}, *adRef)
+
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -1119,7 +1403,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
-func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) *chi.Mux {
+func newChiRouter(devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -1138,11 +1422,23 @@ func newChiRouter(logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sess
 		hlog.RefererHandler("referer"),
 		hlog.RequestIDHandler("req_id", "Request-Id"),
 	)
-
 	router.Use(hlogChain...)
-	router.Use(authMiddleware(dbPool, logger, cookieStore))
 
 	router.Get("/", rootHandler)
+
+	// Authenticated console releated routes
+	router.Group(func(r chi.Router) {
+		r.Use(csrfMiddleware)
+		r.Use(consoleAuthMiddleware(cookieStore))
+		r.Get("/console", consoleHandler(cookieStore))
+	})
+
+	// Console login related routes
+	router.Group(func(r chi.Router) {
+		r.Use(csrfMiddleware)
+		r.Get("/login", loginHandler(dbPool, cookieStore, devMode))
+		r.Post("/login", loginHandler(dbPool, cookieStore, devMode))
+	})
 
 	return router
 }
@@ -1161,332 +1457,229 @@ func (ds domainString) Schema(_ huma.Registry) *huma.Schema {
 	}
 }
 
-func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
-	api := humachi.New(router, huma.DefaultConfig("SUNET CDN API", "0.0.1"))
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
+	router.Route("/api", func(r chi.Router) {
+		r.Use(apiAuthMiddleware(dbPool))
 
-	huma.Get(api, "/api/v1/users", func(ctx context.Context, _ *struct{},
-	) (*usersOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			logger.Error().Msg("unable to read auth data from users handler")
-			return nil, errors.New("unable to read auth data from users handler")
+		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
+		config.Servers = []*huma.Server{
+			{URL: "https://manager.cdn.example.se/api"},
 		}
 
-		users, err := selectUsers(dbPool, logger, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
+		api := humachi.New(r, config)
+
+		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
+		) (*usersOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				logger.Error().Msg("unable to read auth data from users handler")
+				return nil, errors.New("unable to read auth data from users handler")
 			}
-			logger.Err(err).Msg("unable to query users")
-			return nil, err
-		}
 
-		resp := &usersOutput{
-			Body: users,
-		}
-		return resp, nil
-	})
-
-	huma.Get(api, "/api/v1/users/{user}", func(ctx context.Context, input *struct {
-		User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
-	},
-	) (*userOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from user GET handler")
-		}
-
-		org, err := selectUserByID(dbPool, logger, input.User, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
-			} else if errors.Is(err, errNotFound) {
-				return nil, huma.Error404NotFound("user not found")
+			users, err := selectUsers(dbPool, logger, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				}
+				logger.Err(err).Msg("unable to query users")
+				return nil, err
 			}
-			logger.Err(err).Msg("unable to query users")
-			return nil, err
-		}
-		resp := &userOutput{}
-		resp.Body.ID = org.ID
-		resp.Body.Name = org.Name
-		return resp, nil
-	})
 
-	// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
-	postUsersPath := "/api/v1/users"
-	huma.Register(
-		api,
-		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postUsersPath, &userOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postUsersPath, &userOutput{}),
-			Method:        http.MethodPost,
-			Path:          postUsersPath,
-			DefaultStatus: http.StatusCreated,
-		},
-		func(ctx context.Context, input *struct {
-			Body struct {
-				Name         string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
-				Role         string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-				Organization string `json:"organization" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-				Password     string `json:"password" example:"verysecretpassword" doc:"The user password" minLength:"15" maxLength:"64"`
+			resp := &usersOutput{
+				Body: users,
 			}
+			return resp, nil
+		})
+
+		huma.Get(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
+			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from users POST handler")
+				return nil, errors.New("unable to read auth data from user GET handler")
 			}
 
-			id, err := insertUser(dbPool, input.Body.Name, input.Body.Password, input.Body.Role, input.Body.Organization, ad)
+			org, err := selectUserByID(dbPool, logger, input.User, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to add resource")
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				} else if errors.Is(err, errNotFound) {
+					return nil, huma.Error404NotFound("user not found")
 				}
-				logger.Err(err).Msg("unable to add user")
+				logger.Err(err).Msg("unable to query users")
 				return nil, err
 			}
 			resp := &userOutput{}
-			resp.Body.ID = id
-			resp.Body.Name = input.Body.Name
+			resp.Body.ID = org.ID
+			resp.Body.Name = org.Name
 			return resp, nil
-		},
-	)
+		})
 
-	huma.Get(api, "/api/v1/organizations", func(ctx context.Context, _ *struct{},
-	) (*organizationsOutput, error) {
-		logger := zlog.Ctx(ctx)
+		// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
+		postUsersPath := "/v1/users"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postUsersPath, &userOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postUsersPath, &userOutput{}),
+				Method:        http.MethodPost,
+				Path:          postUsersPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Name         string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
+					Role         string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+					Organization string `json:"organization" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+					Password     string `json:"password" example:"verysecretpassword" doc:"The user password" minLength:"15" maxLength:"64"`
+				}
+			},
+			) (*userOutput, error) {
+				logger := zlog.Ctx(ctx)
 
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from organizations GET handler")
-		}
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from users POST handler")
+				}
 
-		orgs, err := selectOrganizations(dbPool, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
-			}
-			logger.Err(err).Msg("unable to query organizations")
-			return nil, err
-		}
+				id, err := insertUser(dbPool, input.Body.Name, input.Body.Password, input.Body.Role, input.Body.Organization, ad)
+				if err != nil {
+					if errors.Is(err, errForbidden) {
+						return nil, huma.Error403Forbidden("not allowed to add resource")
+					}
+					logger.Err(err).Msg("unable to add user")
+					return nil, err
+				}
+				resp := &userOutput{}
+				resp.Body.ID = id
+				resp.Body.Name = input.Body.Name
+				return resp, nil
+			},
+		)
 
-		resp := &organizationsOutput{
-			Body: orgs,
-		}
-		return resp, nil
-	})
-
-	huma.Get(api, "/api/v1/organizations/{organization}", func(ctx context.Context, input *struct {
-		Organization string `path:"organization" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-	},
-	) (*organizationOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from organization GET handler")
-		}
-
-		org, err := selectOrganizationByID(dbPool, input.Organization, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
-			} else if errors.Is(err, errNotFound) {
-				return nil, huma.Error404NotFound("organization not found")
-			}
-			logger.Err(err).Msg("unable to query organization")
-			return nil, err
-		}
-		resp := &organizationOutput{}
-		resp.Body.ID = org.ID
-		resp.Body.Name = org.Name
-		return resp, nil
-	})
-
-	// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
-	postOrganizationsPath := "/api/v1/organizations"
-	huma.Register(
-		api,
-		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
-			Method:        http.MethodPost,
-			Path:          postOrganizationsPath,
-			DefaultStatus: http.StatusCreated,
-		},
-		func(ctx context.Context, input *struct {
-			Body struct {
-				Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63"`
-			}
-		},
-		) (*organizationOutput, error) {
+		huma.Get(api, "/v1/organizations", func(ctx context.Context, _ *struct{},
+		) (*organizationsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from organization POST handler: %w")
+				return nil, errors.New("unable to read auth data from organizations GET handler")
 			}
 
-			id, err := insertOrganization(dbPool, input.Body.Name, ad)
+			orgs, err := selectOrganizations(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to add resource")
+					return nil, huma.Error403Forbidden("not allowed to access resource")
 				}
-				logger.Err(err).Msg("unable to add organization")
+				logger.Err(err).Msg("unable to query organizations")
 				return nil, err
 			}
-			resp := &organizationOutput{}
-			resp.Body.ID = id
-			resp.Body.Name = input.Body.Name
+
+			resp := &organizationsOutput{
+				Body: orgs,
+			}
 			return resp, nil
-		},
-	)
+		})
 
-	huma.Get(api, "/api/v1/services", func(ctx context.Context, _ *struct{},
-	) (*servicesOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from services GET handler")
-		}
-
-		services, err := selectServices(dbPool, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to query for services")
-			}
-			logger.Err(err).Msg("unable to query services")
-			return nil, err
-		}
-
-		resp := &servicesOutput{
-			Body: services,
-		}
-		return resp, nil
-	})
-
-	huma.Get(api, "/api/v1/services/{service}", func(ctx context.Context, input *struct {
-		Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
-	},
-	) (*serviceOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from service GET handler")
-		}
-
-		services, err := selectServiceByID(dbPool, input.Service, ad)
-		if err != nil {
-			if errors.Is(err, errNotFound) {
-				return nil, huma.Error404NotFound("service not found")
-			} else if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("access to this service is not allowed")
-			}
-			logger.Err(err).Msg("unable to query service by ID")
-			return nil, err
-		}
-
-		resp := &serviceOutput{
-			Body: services,
-		}
-		return resp, nil
-	})
-
-	postServicesPath := "/api/v1/services"
-	huma.Register(
-		api,
-		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postServicesPath, &serviceOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postServicesPath, &serviceOutput{}),
-			Method:        http.MethodPost,
-			Path:          postServicesPath,
-			DefaultStatus: http.StatusCreated,
-		},
-		func(ctx context.Context, input *struct {
-			Body struct {
-				Name         string  `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
-				Organization *string `json:"organization,omitempty" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-			}
+		huma.Get(api, "/v1/organizations/{organization}", func(ctx context.Context, input *struct {
+			Organization string `path:"organization" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*organizationOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from service GET handler")
+				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
 
-			id, err := insertService(dbPool, input.Body.Name, input.Body.Organization, ad)
+			org, err := selectOrganizationByID(dbPool, input.Organization, ad)
 			if err != nil {
-				if errors.Is(err, errUnprocessable) {
-					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
-				} else if errors.Is(err, errAlreadyExists) {
-					return nil, huma.Error400BadRequest("service already exists")
-				} else if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to create this service")
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				} else if errors.Is(err, errNotFound) {
+					return nil, huma.Error404NotFound("organization not found")
 				}
-				logger.Err(err).Msg("unable to add service")
+				logger.Err(err).Msg("unable to query organization")
 				return nil, err
 			}
 			resp := &organizationOutput{}
-			resp.Body.ID = id
-			resp.Body.Name = input.Body.Name
+			resp.Body.ID = org.ID
+			resp.Body.Name = org.Name
 			return resp, nil
-		},
-	)
+		})
 
-	huma.Get(api, "/api/v1/service-versions", func(ctx context.Context, _ *struct{},
-	) (*serviceVersionsOutput, error) {
-		logger := zlog.Ctx(ctx)
+		// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
+		postOrganizationsPath := "/v1/organizations"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postOrganizationsPath, &organizationOutput{}),
+				Method:        http.MethodPost,
+				Path:          postOrganizationsPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63"`
+				}
+			},
+			) (*organizationOutput, error) {
+				logger := zlog.Ctx(ctx)
 
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			return nil, errors.New("unable to read auth data from service-versions GET handler")
-		}
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+				}
 
-		serviceVersions, err := selectServiceVersions(dbPool, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
+				id, err := insertOrganization(dbPool, input.Body.Name, ad)
+				if err != nil {
+					if errors.Is(err, errForbidden) {
+						return nil, huma.Error403Forbidden("not allowed to add resource")
+					}
+					logger.Err(err).Msg("unable to add organization")
+					return nil, err
+				}
+				resp := &organizationOutput{}
+				resp.Body.ID = id
+				resp.Body.Name = input.Body.Name
+				return resp, nil
+			},
+		)
+
+		huma.Get(api, "/v1/services", func(ctx context.Context, _ *struct{},
+		) (*servicesOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from services GET handler")
 			}
-			logger.Err(err).Msg("unable to query service-versions")
-			return nil, err
-		}
 
-		resp := &serviceVersionsOutput{
-			Body: serviceVersions,
-		}
-		return resp, nil
-	})
-
-	postServiceVersionsPath := "/api/v1/service-versions"
-	huma.Register(
-		api,
-		huma.Operation{
-			OperationID:   huma.GenerateOperationID(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
-			Summary:       huma.GenerateSummary(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
-			Method:        http.MethodPost,
-			Path:          postServiceVersionsPath,
-			DefaultStatus: http.StatusCreated,
-		},
-		func(ctx context.Context, input *struct {
-			Body struct {
-				ServiceID    uuid.UUID      `json:"service_id" doc:"Service ID"`
-				Organization *string        `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
-				Domains      []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-				Origins      []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-				Active       *bool          `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+			services, err := selectServices(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to query for services")
+				}
+				logger.Err(err).Msg("unable to query services")
+				return nil, err
 			}
+
+			resp := &servicesOutput{
+				Body: services,
+			}
+			return resp, nil
+		})
+
+		huma.Get(api, "/v1/services/{service}", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 		},
-		) (*serviceVersionOutput, error) {
+		) (*serviceOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
@@ -1494,63 +1687,175 @@ func setupHumaAPI(router *chi.Mux, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from service GET handler")
 			}
 
-			// Seems we can not use pgtype.UUID as the type in the
-			// input body directly, so go via google/uuid module
-			// instead and convert here.
-			//
-			// Might be possible to make this work with pgtype.UUID
-			// directly if it would implement
-			// encoding.TextUnmarshaler as described here:
-			// https://github.com/danielgtaylor/huma/issues/654
-			var pgServiceID pgtype.UUID
-			err := pgServiceID.Scan(input.Body.ServiceID.String())
+			services, err := selectServiceByID(dbPool, input.Service, ad)
 			if err != nil {
-				return nil, errors.New("unable to convert uuid to pgtype")
-			}
-
-			serviceVersionInsertRes, err := insertServiceVersion(dbPool, pgServiceID, input.Body.Organization, input.Body.Domains, input.Body.Origins, input.Body.Active, ad)
-			if err != nil {
-				if errors.Is(err, errUnprocessable) {
-					return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
-				} else if errors.Is(err, errAlreadyExists) {
-					return nil, huma.Error400BadRequest("service version already exists")
+				if errors.Is(err, errNotFound) {
+					return nil, huma.Error404NotFound("service not found")
 				} else if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to create this service version")
+					return nil, huma.Error403Forbidden("access to this service is not allowed")
 				}
-				logger.Err(err).Msg("unable to add service")
+				logger.Err(err).Msg("unable to query service by ID")
 				return nil, err
 			}
-			resp := &serviceVersionOutput{}
-			resp.Body.ID = serviceVersionInsertRes.versionID
-			resp.Body.Version = serviceVersionInsertRes.version
-			resp.Body.Active = serviceVersionInsertRes.active
-			return resp, nil
-		},
-	)
 
-	huma.Get(api, "/api/v1/vcls", func(ctx context.Context, _ *struct{},
-	) (*completeVclsOutput, error) {
-		logger := zlog.Ctx(ctx)
-
-		ad, ok := ctx.Value(authDataKey{}).(authData)
-		if !ok {
-			logger.Error().Msg("unable to read auth data from vcls handler")
-			return nil, errors.New("unable to read auth data from vcls handler")
-		}
-
-		vcls, err := selectVcls(dbPool, ad)
-		if err != nil {
-			if errors.Is(err, errForbidden) {
-				return nil, huma.Error403Forbidden("not allowed to access resource")
+			resp := &serviceOutput{
+				Body: services,
 			}
-			logger.Err(err).Msg("unable to query vcls")
-			return nil, err
-		}
+			return resp, nil
+		})
 
-		resp := &completeVclsOutput{
-			Body: vcls,
-		}
-		return resp, nil
+		postServicesPath := "/v1/services"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postServicesPath, &serviceOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postServicesPath, &serviceOutput{}),
+				Method:        http.MethodPost,
+				Path:          postServicesPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Name         string  `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
+					Organization *string `json:"organization,omitempty" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+				}
+			},
+			) (*organizationOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from service GET handler")
+				}
+
+				id, err := insertService(dbPool, input.Body.Name, input.Body.Organization, ad)
+				if err != nil {
+					if errors.Is(err, errUnprocessable) {
+						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
+					} else if errors.Is(err, errAlreadyExists) {
+						return nil, huma.Error400BadRequest("service already exists")
+					} else if errors.Is(err, errForbidden) {
+						return nil, huma.Error403Forbidden("not allowed to create this service")
+					}
+					logger.Err(err).Msg("unable to add service")
+					return nil, err
+				}
+				resp := &organizationOutput{}
+				resp.Body.ID = id
+				resp.Body.Name = input.Body.Name
+				return resp, nil
+			},
+		)
+
+		huma.Get(api, "/v1/service-versions", func(ctx context.Context, _ *struct{},
+		) (*serviceVersionsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service-versions GET handler")
+			}
+
+			serviceVersions, err := selectServiceVersions(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				}
+				logger.Err(err).Msg("unable to query service-versions")
+				return nil, err
+			}
+
+			resp := &serviceVersionsOutput{
+				Body: serviceVersions,
+			}
+			return resp, nil
+		})
+
+		postServiceVersionsPath := "/v1/service-versions"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
+				Method:        http.MethodPost,
+				Path:          postServiceVersionsPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					ServiceID    uuid.UUID      `json:"service_id" doc:"Service ID"`
+					Organization *string        `json:"organization,omitempty" example:"Name or ID of organization" doc:"Name or ID of the organization" minLength:"1" maxLength:"63"`
+					Domains      []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins      []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active       *bool          `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+				}
+			},
+			) (*serviceVersionOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from service GET handler")
+				}
+
+				// Seems we can not use pgtype.UUID as the type in the
+				// input body directly, so go via google/uuid module
+				// instead and convert here.
+				//
+				// Might be possible to make this work with pgtype.UUID
+				// directly if it would implement
+				// encoding.TextUnmarshaler as described here:
+				// https://github.com/danielgtaylor/huma/issues/654
+				var pgServiceID pgtype.UUID
+				err := pgServiceID.Scan(input.Body.ServiceID.String())
+				if err != nil {
+					return nil, errors.New("unable to convert uuid to pgtype")
+				}
+
+				serviceVersionInsertRes, err := insertServiceVersion(dbPool, pgServiceID, input.Body.Organization, input.Body.Domains, input.Body.Origins, input.Body.Active, ad)
+				if err != nil {
+					if errors.Is(err, errUnprocessable) {
+						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
+					} else if errors.Is(err, errAlreadyExists) {
+						return nil, huma.Error400BadRequest("service version already exists")
+					} else if errors.Is(err, errForbidden) {
+						return nil, huma.Error403Forbidden("not allowed to create this service version")
+					}
+					logger.Err(err).Msg("unable to add service")
+					return nil, err
+				}
+				resp := &serviceVersionOutput{}
+				resp.Body.ID = serviceVersionInsertRes.versionID
+				resp.Body.Version = serviceVersionInsertRes.version
+				resp.Body.Active = serviceVersionInsertRes.active
+				return resp, nil
+			},
+		)
+
+		huma.Get(api, "/v1/vcls", func(ctx context.Context, _ *struct{},
+		) (*completeVclsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				logger.Error().Msg("unable to read auth data from vcls handler")
+				return nil, errors.New("unable to read auth data from vcls handler")
+			}
+
+			vcls, err := selectVcls(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				}
+				logger.Err(err).Msg("unable to query vcls")
+				return nil, err
+			}
+
+			resp := &completeVclsOutput{
+				Body: vcls,
+			}
+			return resp, nil
+		})
 	})
 
 	return nil
@@ -1731,6 +2036,11 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		}
 	}
 
+	gorillaCSRFAuthKey, err := generateRandomKey(32)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("unable to create random gorilla CSRF key: %w", err)
+	}
+
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		// Verify there are no roles present
 		var rolesExists bool
@@ -1762,6 +2072,11 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		_, err = insertGorillaSessionKey(tx, gorillaSessionAuthKey, gorillaSessionEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
+		}
+
+		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, true)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial CSRF key: %w", err)
 		}
 
 		return nil
@@ -1801,6 +2116,40 @@ func insertGorillaSessionKey(tx pgx.Tx, authKey []byte, encKey []byte) (pgtype.U
 	return sessionKeyID, nil
 }
 
+func insertGorillaCSRFKey(tx pgx.Tx, authKey []byte, active bool) (pgtype.UUID, pgtype.UUID, error) {
+	var prevCSRFKeyID, csrfKeyID pgtype.UUID
+
+	if active {
+		err := tx.QueryRow(context.Background(), "UPDATE gorilla_csrf_keys SET active = NULL WHERE active = TRUE RETURNING id").Scan(&prevCSRFKeyID)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("unable to deactivate previous gorilla CSRF key: %w", err)
+			}
+		}
+	}
+
+	// If active is false we actually want to insert NULL in the database
+	// since the UNIQUE constraint will error out if we try to store
+	// multiple FALSE entries at the same time. So only actually set the
+	// pointer to a bool value if true.
+	var activePtr *bool
+	if active {
+		activePtr = &active
+	}
+
+	err := tx.QueryRow(
+		context.Background(),
+		"INSERT INTO gorilla_csrf_keys (active, auth_key) VALUES ($1, $2) RETURNING id",
+		activePtr,
+		authKey,
+	).Scan(&csrfKeyID)
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("unable to INSERT gorilla csrf key: %w", err)
+	}
+
+	return csrfKeyID, prevCSRFKeyID, nil
+}
+
 type sessionKey struct {
 	TS      time.Time `db:"ts"`
 	AuthKey []byte    `db:"auth_key"`
@@ -1825,10 +2174,20 @@ func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
 	return sessionKeys, nil
 }
 
+func getCSRFKey(dbPool *pgxpool.Pool) ([]byte, error) {
+	var csrfKey []byte
+	err := dbPool.QueryRow(context.Background(), "SELECT auth_key FROM gorilla_csrf_keys WHERE active = TRUE").Scan(&csrfKey)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for CSRF key: %w", err)
+	}
+
+	return csrfKey, nil
+}
+
 func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
 	sessionKeys, err := getSessionKeys(dbPool)
 	if err != nil {
-		return nil, fmt.Errorf("unable to find session keys in database, make the the database is initialized bia the 'init' command: %w", err)
+		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
 	}
 
 	if sessionKeys[0].EncKey == nil {
@@ -1844,7 +2203,18 @@ func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.Coo
 	return sessions.NewCookieStore(sessionKeyPairs...), nil
 }
 
-func Run(logger zerolog.Logger) {
+func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) http.Handler, error) {
+	csrfKey, err := getCSRFKey(dbPool)
+	if err != nil {
+		return nil, fmt.Errorf("unable to find CSRF key in database, make sure the database is initialized via the 'init' command: %w", err)
+	}
+
+	csrfMiddleware := csrf.Protect(csrfKey, csrf.Secure(secure))
+
+	return csrfMiddleware, nil
+}
+
+func Run(logger zerolog.Logger, devMode bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1893,7 +2263,17 @@ func Run(logger zerolog.Logger) {
 		logger.Fatal().Err(err).Msg("getSessionStore failed")
 	}
 
-	router := newChiRouter(logger, dbPool, cookieStore)
+	secureCSRF := true
+	if devMode {
+		secureCSRF = false
+	}
+
+	csrfMiddleware, err := getCSRFMiddleware(dbPool, secureCSRF)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
+	}
+
+	router := newChiRouter(devMode, logger, dbPool, cookieStore, csrfMiddleware)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {
@@ -1929,4 +2309,6 @@ func Run(logger zerolog.Logger) {
 	}
 
 	<-idleConnsClosed
+
+	return nil
 }

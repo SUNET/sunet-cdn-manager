@@ -9,11 +9,12 @@ import (
 )
 
 // use a single instance of Validate, it caches struct info
-var validate *validator.Validate
+var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
 	Server serverSettings
 	DB     dbSettings
+	OIDC   oidcSettings
 }
 
 type serverSettings struct {
@@ -29,6 +30,13 @@ type dbSettings struct {
 	SSLMode  string `validate:"required"`
 }
 
+type oidcSettings struct {
+	Issuer       string `validate:"required"`
+	ClientID     string `mapstructure:"client_id" validate:"required"`
+	ClientSecret string `mapstructure:"client_secret" validate:"required"`
+	RedirectURL  string `mapstructure:"redirect_url" validate:"required"`
+}
+
 func GetConfig() (Config, error) {
 	var conf Config
 	err := viper.Unmarshal(&conf)
@@ -36,7 +44,6 @@ func GetConfig() (Config, error) {
 		return Config{}, fmt.Errorf("viper unable to decode into struct: %w", err)
 	}
 
-	validate = validator.New(validator.WithRequiredStructEnabled())
 	err = validate.Struct(conf)
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)

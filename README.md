@@ -36,9 +36,9 @@ Initialize the sunet-cdn-manager database (this will print out a superuser usern
 go run . --config sunet-cdn-manager-dev.toml init
 ```
 
-Start the server:
+Start the server in development mode (disables cookie requirements for HTTPS):
 ```
-go run . --config sunet-cdn-manager-dev.toml server
+go run . --config sunet-cdn-manager-dev.toml server --dev
 ```
 
 ### Formatting and linting

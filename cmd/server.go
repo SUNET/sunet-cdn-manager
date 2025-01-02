@@ -11,8 +11,14 @@ var serverCmd = &cobra.Command{
 	Short: "Run the manager server",
 	Long: `This runs the manager server which exposes
 API endpoints and user interface for managing the SUNET CDN service.`,
-	Run: func(_ *cobra.Command, _ []string) {
-		server.Run(cdnLogger)
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		devMode, err := cmd.Flags().GetBool("dev")
+		if err != nil {
+			return err
+		}
+
+		err = server.Run(cdnLogger, devMode)
+		return err
 	},
 }
 
@@ -28,4 +34,5 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// serverCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	serverCmd.Flags().BoolP("dev", "", false, "run server in development mode")
 }
