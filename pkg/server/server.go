@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -21,6 +23,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -37,10 +40,12 @@ import (
 	"github.com/rs/zerolog/hlog"
 	zlog "github.com/rs/zerolog/log"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/oauth2"
 )
 
 func init() {
 	gob.Register(authData{})
+	gob.Register(oidcCallbackData{})
 
 	// Withouth this the decoder will fail on "error":"schema: invalid path \"gorilla.csrf.Token\""" when using gorilla/csrf
 	schemaDecoder.IgnoreUnknownKeys(true)
@@ -83,23 +88,18 @@ func consoleHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
-		session, err := cookieStore.Get(r, cookieName)
-		if err != nil {
-			logger.Err(err).Msg("console: bad session cookie")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
+		session := getSession(r, cookieStore)
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Err(err).Msg("console: session missing authData")
+			logger.Error().Msg("console: session missing authData")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		ad := adRef.(authData)
 
-		err = renderConsolePage(w, r, ad)
+		err := renderConsolePage(w, r, ad)
 		if err != nil {
 			logger.Err(err).Msg("unable to render console page")
 			return
@@ -228,24 +228,10 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMo
 				return
 			}
 
-			session, err := cookieStore.Get(r, cookieName)
-			if err != nil {
-				logger.Err(err).Msg("login: unable to decode existing session, using new one for session saving")
-			}
-
-			if session.IsNew {
-				session.Options = &sessions.Options{
-					Path:     "/",
-					Secure:   true,
-					HttpOnly: true,
-				}
-				if devMode {
-					session.Options.Secure = false
-				}
-			}
+			session := getAndSetSession(r, cookieStore, false, devMode)
+			session.Values["ad"] = ad
 
 			logger.Info().Msg("saving login session")
-			session.Values["ad"] = ad
 			err = session.Save(r, w)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -301,30 +287,16 @@ func logoutHandler(cookieStore *sessions.CookieStore, devMode bool) http.Handler
 			}
 		}
 
-		session, err := cookieStore.Get(r, cookieName)
-		if err != nil {
-			logger.Err(err).Msg("logout: unable to decode existing session, overriding with logout session anyway")
-		}
-
-		// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
-		session.Options = &sessions.Options{
-			Path:     "/",
-			Secure:   true,
-			HttpOnly: true,
-			MaxAge:   -1,
-		}
-		if devMode {
-			session.Options.Secure = false
-		}
+		session := getAndSetSession(r, cookieStore, true, devMode)
 
 		logger.Info().Msg("logout: saving expired login session")
-		err = session.Save(r, w)
+		err := session.Save(r, w)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// User should be logged out at this point, send them to where they were originally headed (which will in turn probably redirect them to /login).
+		// User should be logged out at this point, send them to where they were originally headed (which will in turn probably redirect them to /auth/login).
 		if returnTo != "" {
 			u, err := url.Parse(returnTo)
 			if err != nil {
@@ -337,6 +309,196 @@ func logoutHandler(cookieStore *sessions.CookieStore, devMode bool) http.Handler
 
 		// No return_to hint, just send them to the console
 		validatedRedirect("/console", w, r)
+	}
+}
+
+type oidcCallbackData struct {
+	State        string `validate:"required"`
+	Nonce        string `validate:"required"`
+	PKCEVerifier string `validate:"required"`
+}
+
+// Based on example code at https://github.com/coreos/go-oidc/blob/v3/example/idtoken/app.go
+func oidcRandString() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func getAndSetSession(r *http.Request, cookieStore *sessions.CookieStore, logout bool, devMode bool) *sessions.Session {
+	logger := hlog.FromRequest(r)
+	session, err := cookieStore.Get(r, cookieName)
+	if err != nil {
+		logger.Err(err).Msg("getAndSetSession: unable to decode existing cookie, using new one")
+	}
+
+	session.Options = &sessions.Options{
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+	}
+
+	// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
+	if logout {
+		session.Options.MaxAge = -1
+	}
+
+	// Allow development without HTTPS
+	if devMode {
+		session.Options.Secure = false
+	}
+
+	return session
+}
+
+func getSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Session {
+	logger := hlog.FromRequest(r)
+	session, err := cookieStore.Get(r, cookieName)
+	if err != nil {
+		logger.Err(err).Msg("getSession: unable to decode existing cookie, using new one")
+	}
+
+	return session
+}
+
+// Endpoint used for initiating OIDC auth against keycloak
+func keycloakOIDCHandler(cookieStore *sessions.CookieStore, devMode bool, oauth2Config oauth2.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		var err error
+
+		// q := r.URL.Query()
+		// returnTo := q.Get(returnToKey)
+
+		ocd := oidcCallbackData{}
+
+		ocd.State, err = oidcRandString()
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ocd.Nonce, err = oidcRandString()
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ocd.PKCEVerifier = oauth2.GenerateVerifier()
+
+		// Add items to session that we access to check in the callback handler
+		session := getAndSetSession(r, cookieStore, false, devMode)
+		session.Values["ocd"] = ocd
+		err = session.Save(r, w)
+		if err != nil {
+			logger.Err(err).Msg("unable to save keycloak OIDC session")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, oauth2Config.AuthCodeURL(ocd.State, oidc.Nonce(ocd.Nonce), oauth2.S256ChallengeOption(ocd.PKCEVerifier)), http.StatusFound)
+	}
+}
+
+// Endpoint used for receiving callback from keycloak server
+func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		//state, err := r.Cookie("state")
+		//if err != nil {
+		//	http.Error(w, "state not found", http.StatusBadRequest)
+		//	return
+		//}
+		session := getSession(r, cookieStore)
+		if session.IsNew {
+			http.Error(w, "session data not available", http.StatusBadRequest)
+			return
+		}
+
+		ocdInt, ok := session.Values["ocd"]
+		if !ok {
+			http.Error(w, "OIDC callback data not present in session", http.StatusInternalServerError)
+			return
+		}
+
+		ocd := ocdInt.(oidcCallbackData)
+
+		err := validate.Struct(ocd)
+		if err != nil {
+			logger.Err(err).Msg("OIDC callback struct did not validate")
+		}
+
+		if r.URL.Query().Get("state") != ocd.State {
+			logger.Error().Msg("state did not match")
+			http.Error(w, "state did not match", http.StatusBadRequest)
+			return
+		}
+
+		oauth2Token, err := oauth2Config.Exchange(context.Background(), r.URL.Query().Get("code"), oauth2.VerifierOption(ocd.PKCEVerifier))
+		if err != nil {
+			logger.Err(err).Msg("unable to exchange code for token")
+			http.Error(w, "bad oauth2 exchange", http.StatusInternalServerError)
+			return
+		}
+
+		// Extract the ID Token from OAuth2 token.
+		rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+		if !ok {
+			logger.Error().Msg("unable to extact id_token")
+			http.Error(w, "unable to extract id_token", http.StatusInternalServerError)
+			return
+		}
+
+		// Parse and verify ID Token payload.
+		idToken, err := idTokenVerifier.Verify(context.Background(), rawIDToken)
+		if err != nil {
+			logger.Err(err).Msg("unable to verify id_token")
+			http.Error(w, "unable to extract id_token", http.StatusInternalServerError)
+			return
+		}
+
+		if idToken.Nonce != ocd.Nonce {
+			logger.Error().Msg("nonce did not match")
+			http.Error(w, "nonce did not match", http.StatusBadRequest)
+			return
+		}
+
+		oauth2Token.AccessToken = "*REDACTED*"
+		oauth2Token.RefreshToken = "*REDACTED*"
+
+		// Extract custom claims
+		//var claims struct {
+		//	Email    string `json:"email"`
+		//	Verified bool   `json:"email_verified"`
+		//}
+		//if err := idToken.Claims(&claims); err != nil {
+		//	logger.Err(err).Msg("unable to parse claims")
+		//	http.Error(w, "unable to parse claims", http.StatusInternalServerError)
+		//}
+
+		resp := struct {
+			OAuth2Token   *oauth2.Token
+			IDTokenClaims *json.RawMessage // ID Token payload is just JSON.
+		}{oauth2Token, new(json.RawMessage)}
+
+		if err := idToken.Claims(&resp.IDTokenClaims); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data, err := json.MarshalIndent(resp, "", "    ")
+		if err != nil {
+			logger.Err(err).Msg("json marshal failed")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, err = w.Write(data)
+		if err != nil {
+			logger.Err(err).Msg("write failed")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -422,7 +584,7 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// Redirect to the login handler
-	redirectURL.Path = "/login"
+	redirectURL.Path = "/auth/login"
 
 	// http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 	validatedRedirect(redirectURL.String(), w, r)
@@ -533,7 +695,9 @@ func apiAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request) *auth
 	return handleBasicAuth(dbPool, w, r)
 }
 
-const cookieName = "sunet-cdn-manager"
+const (
+	cookieName = "sunet-cdn-manager"
+)
 
 func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, w http.ResponseWriter, r *http.Request) *authData {
 	if r.Method != "GET" {
@@ -541,10 +705,7 @@ func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, 
 		return nil
 	}
 
-	session, err := cookieStore.Get(r, cookieName)
-	if err != nil {
-		logger.Err(err).Msg("unable to decode existing session, using new one")
-	}
+	session := getSession(r, cookieStore)
 
 	adInt, ok := session.Values["ad"]
 	if !ok {
@@ -1466,7 +1627,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
-func newChiRouter(devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler) *chi.Mux {
+func newChiRouter(conf config.Config, devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -1497,11 +1658,30 @@ func newChiRouter(devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, coo
 	})
 
 	// Console login related routes
-	router.Group(func(r chi.Router) {
+	router.Route("/auth", func(r chi.Router) {
 		r.Use(csrfMiddleware)
 		r.Get("/login", loginHandler(dbPool, cookieStore, devMode))
 		r.Post("/login", loginHandler(dbPool, cookieStore, devMode))
 		r.Get("/logout", logoutHandler(cookieStore, devMode))
+		if provider != nil {
+			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
+
+			// Configure an OpenID Connect aware OAuth2 client.
+			oauth2Config := oauth2.Config{
+				ClientID:     conf.OIDC.ClientID,
+				ClientSecret: conf.OIDC.ClientSecret,
+				RedirectURL:  conf.OIDC.RedirectURL,
+
+				// Discovery returns the OAuth2 endpoints.
+				Endpoint: provider.Endpoint(),
+
+				// "openid" is a required scope for OpenID Connect flows.
+				Scopes: []string{oidc.ScopeOpenID},
+			}
+
+			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, devMode, oauth2Config))
+			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(cookieStore, oauth2Config, idTokenVerifier))
+		}
 	})
 
 	return router
@@ -2337,7 +2517,12 @@ func Run(logger zerolog.Logger, devMode bool) error {
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(devMode, logger, dbPool, cookieStore, csrfMiddleware)
+	provider, err := oidc.NewProvider(context.Background(), conf.OIDC.Issuer)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("setting up OIDC provider failed")
+	}
+
+	router := newChiRouter(conf, devMode, logger, dbPool, cookieStore, csrfMiddleware, provider)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {

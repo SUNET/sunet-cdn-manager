@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -307,7 +308,7 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(true, logger, dbPool, cookieStore, csrfMiddleware)
+	router := newChiRouter(config.Config{}, true, logger, dbPool, cookieStore, csrfMiddleware, nil)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {

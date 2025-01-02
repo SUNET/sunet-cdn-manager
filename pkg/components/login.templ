@@ -2,7 +2,8 @@ package components
 
 templ LoginPage(returnTo string, loginFailed bool) {
 	<h1>Login</h1>
-	<form method="post" action="/login">
+	<h2>Local</h2>
+	<form method="post" action="/auth/login">
 		@CSRF()
 		if returnTo != "" {
 			<input type="hidden" name="return_to" value={ returnTo }/>
@@ -19,6 +20,8 @@ templ LoginPage(returnTo string, loginFailed bool) {
 	if loginFailed {
 		<div>Login failed!</div>
 	}
+	<h2>OpenID Connect</h2>
+	<div><a href="/auth/oidc/keycloak">Login with Keycloak</a></div>
 }
 
 // https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf
