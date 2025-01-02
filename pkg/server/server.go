@@ -277,6 +277,69 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMo
 	}
 }
 
+// Endpoint used for console logout
+func logoutHandler(cookieStore *sessions.CookieStore, devMode bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		q := r.URL.Query()
+		returnTo := q.Get(returnToKey)
+
+		_, ok := ctx.Value(authDataKey{}).(authData)
+		if ok {
+			switch returnTo {
+			case "":
+				logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
+				// http.Redirect(w, r, "/console", http.StatusFound)
+				validatedRedirect("/console", w, r)
+				return
+			default:
+				logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
+				validatedRedirect(returnTo, w, r)
+				return
+			}
+		}
+
+		session, err := cookieStore.Get(r, cookieName)
+		if err != nil {
+			logger.Err(err).Msg("logout: unable to decode existing session, overriding with logout session anyway")
+		}
+
+		// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
+		session.Options = &sessions.Options{
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: true,
+			MaxAge:   -1,
+		}
+		if devMode {
+			session.Options.Secure = false
+		}
+
+		logger.Info().Msg("logout: saving expired login session")
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// User should be logged out at this point, send them to where they were originally headed (which will in turn probably redirect them to /login).
+		if returnTo != "" {
+			u, err := url.Parse(returnTo)
+			if err != nil {
+				logger.Err(err).Msg("unable to parse returnTo in logout handler")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			validatedRedirect(u.String(), w, r)
+			return
+		}
+
+		// No return_to hint, just send them to the console
+		validatedRedirect("/console", w, r)
+	}
+}
+
 type argon2Settings struct {
 	argonTime    uint32
 	argonMemory  uint32
@@ -1438,6 +1501,7 @@ func newChiRouter(devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, coo
 		r.Use(csrfMiddleware)
 		r.Get("/login", loginHandler(dbPool, cookieStore, devMode))
 		r.Post("/login", loginHandler(dbPool, cookieStore, devMode))
+		r.Get("/logout", logoutHandler(cookieStore, devMode))
 	})
 
 	return router
