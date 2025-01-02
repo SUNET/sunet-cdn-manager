@@ -1,3 +1,4 @@
 {
-  "realm": "sunet-cdn-manager"
+  "realm": "sunet-cdn-manager",
+  "enabled": true
 }
