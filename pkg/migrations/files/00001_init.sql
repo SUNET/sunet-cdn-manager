@@ -12,12 +12,19 @@ CREATE TABLE roles (
     superuser boolean DEFAULT false NOT NULL
 );
 
+CREATE TABLE auth_providers (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    name text UNIQUE NOT NULL
+);
+
 CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid REFERENCES organizations(id),
     role_id uuid NOT NULL REFERENCES roles(id),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    auth_provider_id uuid NOT NULL references auth_providers(id)
 );
 
 CREATE TABLE gorilla_session_keys (

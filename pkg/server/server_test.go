@@ -109,6 +109,10 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Origins
 		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', 'srv2.example.com', 80, false)",
 		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', 'srv1.example.se', 443, true)",
+
+		// Auth providers
+		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
+		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000002', 'keycloak')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -119,38 +123,43 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 		}
 		localUsers := []struct {
-			name      string
-			password  string
-			orgName   string
-			role      string
-			superuser bool
-			id        string
+			name         string
+			password     string
+			orgName      string
+			role         string
+			superuser    bool
+			id           string
+			authProvider string
 		}{
 			{
-				name:     "admin",
-				password: "adminpass1",
-				role:     "admin",
-				id:       "00000006-0000-0000-0000-000000000001",
+				name:         "admin",
+				password:     "adminpass1",
+				role:         "admin",
+				id:           "00000006-0000-0000-0000-000000000001",
+				authProvider: "local",
 			},
 			{
-				name:     "username1",
-				password: "password1",
-				role:     "customer",
-				orgName:  "org1",
-				id:       "00000006-0000-0000-0000-000000000002",
+				name:         "username1",
+				password:     "password1",
+				role:         "customer",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000002",
+				authProvider: "local",
 			},
 			{
-				name:     "username2",
-				password: "password2",
-				role:     "customer",
-				orgName:  "org2",
-				id:       "00000006-0000-0000-0000-000000000003",
+				name:         "username2",
+				password:     "password2",
+				role:         "customer",
+				orgName:      "org2",
+				id:           "00000006-0000-0000-0000-000000000003",
+				authProvider: "local",
 			},
 			{
-				name:     "username3-no-org",
-				password: "password3",
-				role:     "customer",
-				id:       "00000006-0000-0000-0000-000000000004",
+				name:         "username3-no-org",
+				password:     "password3",
+				role:         "customer",
+				id:           "00000006-0000-0000-0000-000000000004",
+				authProvider: "local",
 			},
 		}
 
@@ -162,6 +171,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 
 			var orgID *pgtype.UUID // may be nil
+			var authProviderID pgtype.UUID
 
 			if localUser.orgName != "" {
 				err := tx.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", localUser.orgName).Scan(&orgID)
@@ -170,7 +180,12 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				}
 			}
 
-			_, err = tx.Exec(context.Background(), "INSERT INTO users (id, org_id, name, role_id) SELECT $1, $2, $3, id FROM roles WHERE name=$4", userID, orgID, localUser.name, localUser.role)
+			err = tx.QueryRow(context.Background(), "SELECT id FROM auth_providers WHERE name=$1", localUser.authProvider).Scan(&authProviderID)
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.Exec(context.Background(), "INSERT INTO users (id, org_id, name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
 			if err != nil {
 				return err
 			}

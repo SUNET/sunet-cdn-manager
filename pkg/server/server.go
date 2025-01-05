@@ -499,6 +499,8 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Look up if we know about this user otherwise create it
 	}
 }
 
@@ -855,7 +857,7 @@ func passwordToArgon2(password string) (argon2Data, error) {
 func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
 	var userID pgtype.UUID
 
-	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id) VALUES ($1, $2, $3) RETURNING id", name, orgID, roleID).Scan(&userID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM auth_providers WHERE name='local')) RETURNING id", name, orgID, roleID).Scan(&userID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user with IDs: %w", err)
 	}
@@ -2232,10 +2234,11 @@ func generatePassword(length int) (string, error) {
 }
 
 type InitUser struct {
-	ID       pgtype.UUID
-	Name     string
-	Role     string
-	Password string
+	ID           pgtype.UUID
+	Name         string
+	Role         string
+	Password     string
+	AuthProvider string
 }
 
 func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey bool) (InitUser, error) {
@@ -2260,10 +2263,13 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
 
+	authProviderNames := []string{"local", "keycloak"}
+
 	u := InitUser{
-		Name:     "admin",
-		Role:     "admin",
-		Password: password,
+		Name:         "admin",
+		Role:         "admin",
+		Password:     password,
+		AuthProvider: authProviderNames[0],
 	}
 
 	var gorillaSessionEncKey []byte
@@ -2304,6 +2310,13 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		err = tx.QueryRow(context.Background(), "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&roleID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+		}
+
+		for _, authProviderName := range authProviderNames {
+			_, err = tx.Exec(context.Background(), "INSERT INTO auth_providers (name) VALUES ($1)", authProviderName)
+			if err != nil {
+				return fmt.Errorf("unable to INSERT auth provider '%s': %w", authProviderName, err)
+			}
 		}
 
 		userID, err := insertUserWithArgon2Tx(tx, u.Name, nil, roleID, a2Data)
