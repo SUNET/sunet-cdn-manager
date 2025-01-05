@@ -23,8 +23,8 @@ CREATE TABLE users (
     ts timestamptz NOT NULL DEFAULT now(),
     org_id uuid REFERENCES organizations(id),
     role_id uuid NOT NULL REFERENCES roles(id),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
-    auth_provider_id uuid NOT NULL references auth_providers(id)
+    auth_provider_id uuid NOT NULL references auth_providers(id),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
 CREATE TABLE gorilla_session_keys (
