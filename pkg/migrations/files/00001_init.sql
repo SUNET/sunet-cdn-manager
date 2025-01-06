@@ -100,12 +100,3 @@ CREATE TABLE service_vcl_recv (
     content text NOT NULL CONSTRAINT non_empty CHECK(length(content)>0),
     UNIQUE(service_version_id, content)
 );
--- +goose down
-DROP TABLE service_domains;
-DROP TABLE service_origins;
-DROP TABLE service_versions;
-DROP TABLE services;
-DROP TABLE user_argon2keys;
-DROP TABLE users;
-DROP TABLE roles;
-DROP TABLE organizations;
