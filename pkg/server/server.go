@@ -472,6 +472,7 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 		//if err := idToken.Claims(&claims); err != nil {
 		//	logger.Err(err).Msg("unable to parse claims")
 		//	http.Error(w, "unable to parse claims", http.StatusInternalServerError)
+		//	return
 		//}
 
 		resp := struct {
