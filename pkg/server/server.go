@@ -406,11 +406,7 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, devMode bool, oauth2
 func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
-		//state, err := r.Cookie("state")
-		//if err != nil {
-		//	http.Error(w, "state not found", http.StatusBadRequest)
-		//	return
-		//}
+
 		session := getSession(r, cookieStore)
 		if session.IsNew {
 			http.Error(w, "session data not available", http.StatusBadRequest)
