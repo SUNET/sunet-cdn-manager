@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/gob"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -52,11 +51,12 @@ func init() {
 }
 
 var (
-	errForbidden     = errors.New("access to resource is not allowed")
-	errNotFound      = errors.New("resource not found")
-	errUnprocessable = errors.New("resource not processable")
-	errAlreadyExists = errors.New("resource already exists")
-	errBadPassword   = errors.New("bad password")
+	errForbidden               = errors.New("access to resource is not allowed")
+	errNotFound                = errors.New("resource not found")
+	errUnprocessable           = errors.New("resource not processable")
+	errAlreadyExists           = errors.New("resource already exists")
+	errBadPassword             = errors.New("bad password")
+	errKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
 
 	// Set a Decoder instance as a package global, because it caches
 	// meta-data about structs, and an instance can be shared safely.
@@ -80,7 +80,6 @@ func (zew *zerologErrorWriter) Write(p []byte) (n int, err error) {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
-	// http.Redirect(w, r, "/console", http.StatusFound)
 	validatedRedirect("/console", w, r)
 }
 
@@ -147,7 +146,7 @@ type loginForm struct {
 }
 
 // Endpoint used for console login
-func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMode bool) http.HandlerFunc {
+func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -228,7 +227,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMo
 				return
 			}
 
-			session := getAndSetSession(r, cookieStore, false, devMode)
+			session := getSession(r, cookieStore)
 			session.Values["ad"] = ad
 
 			logger.Info().Msg("saving login session")
@@ -264,7 +263,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, devMo
 }
 
 // Endpoint used for console logout
-func logoutHandler(cookieStore *sessions.CookieStore, devMode bool) http.HandlerFunc {
+func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -287,7 +286,7 @@ func logoutHandler(cookieStore *sessions.CookieStore, devMode bool) http.Handler
 			}
 		}
 
-		session := getAndSetSession(r, cookieStore, true, devMode)
+		session := logoutSession(r, cookieStore)
 
 		logger.Info().Msg("logout: saving expired login session")
 		err := session.Save(r, w)
@@ -316,6 +315,7 @@ type oidcCallbackData struct {
 	State        string `validate:"required"`
 	Nonce        string `validate:"required"`
 	PKCEVerifier string `validate:"required"`
+	ReturnTo     string
 }
 
 // Based on example code at https://github.com/coreos/go-oidc/blob/v3/example/idtoken/app.go
@@ -327,28 +327,15 @@ func oidcRandString() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func getAndSetSession(r *http.Request, cookieStore *sessions.CookieStore, logout bool, devMode bool) *sessions.Session {
+func logoutSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Session {
 	logger := hlog.FromRequest(r)
 	session, err := cookieStore.Get(r, cookieName)
 	if err != nil {
-		logger.Err(err).Msg("getAndSetSession: unable to decode existing cookie, using new one")
-	}
-
-	session.Options = &sessions.Options{
-		Path:     "/",
-		Secure:   true,
-		HttpOnly: true,
+		logger.Err(err).Msg("logoutSession: unable to decode existing cookie, using new one")
 	}
 
 	// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
-	if logout {
-		session.Options.MaxAge = -1
-	}
-
-	// Allow development without HTTPS
-	if devMode {
-		session.Options.Secure = false
-	}
+	session.Options.MaxAge = -1
 
 	return session
 }
@@ -364,15 +351,17 @@ func getSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Se
 }
 
 // Endpoint used for initiating OIDC auth against keycloak
-func keycloakOIDCHandler(cookieStore *sessions.CookieStore, devMode bool, oauth2Config oauth2.Config) http.HandlerFunc {
+func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		var err error
 
-		// q := r.URL.Query()
-		// returnTo := q.Get(returnToKey)
+		q := r.URL.Query()
+		returnTo := q.Get(returnToKey)
 
-		ocd := oidcCallbackData{}
+		ocd := oidcCallbackData{
+			ReturnTo: returnTo,
+		}
 
 		ocd.State, err = oidcRandString()
 		if err != nil {
@@ -389,7 +378,7 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, devMode bool, oauth2
 		ocd.PKCEVerifier = oauth2.GenerateVerifier()
 
 		// Add items to session that we access to check in the callback handler
-		session := getAndSetSession(r, cookieStore, false, devMode)
+		session := getSession(r, cookieStore)
 		session.Values["ocd"] = ocd
 		err = session.Save(r, w)
 		if err != nil {
@@ -403,7 +392,7 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, devMode bool, oauth2
 }
 
 // Endpoint used for receiving callback from keycloak server
-func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier) http.HandlerFunc {
+func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -461,44 +450,192 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 			return
 		}
 
-		oauth2Token.AccessToken = "*REDACTED*"
-		oauth2Token.RefreshToken = "*REDACTED*"
+		// Example token content:
+		//
+		// "OAuth2Token": {
+		//     "access_token": "*REDACTED*",
+		//     "token_type": "Bearer",
+		//     "refresh_token": "*REDACTED*",
+		//     "expiry": "2025-01-06T08:27:36.664975+01:00"
+		// },
+		// "IDTokenClaims": {
+		//     "exp": 1736148456,
+		//     "iat": 1736148156,
+		//     "auth_time": 1736148156,
+		//     "jti": "c379d3fc-2fe0-4037-b861-30a701ba0064",
+		//     "iss": "http://localhost:8080/realms/sunet-cdn-manager",
+		//     "aud": "sunet-cdn-manager-server",
+		//     "sub": "ab809abb-5bac-4db1-8088-3d340ea23de8",
+		//     "typ": "ID",
+		//     "azp": "sunet-cdn-manager-server",
+		//     "nonce": "wgxCiPN-j2d5m10dI195aA",
+		//     "sid": "568d1ff7-d26e-4707-ba22-9645340eb97a",
+		//     "at_hash": "yFCg6LpJlK4qRZT49h6FcQ",
+		//     "acr": "1",
+		//     "email_verified": false,
+		//     "name": "Test User",
+		//     "preferred_username": "testuser",
+		//     "given_name": "Test",
+		//     "family_name": "User",
+		//     "email": "testuser@example.com"
+		// }
 
 		// Extract custom claims
-		//var claims struct {
-		//	Email    string `json:"email"`
-		//	Verified bool   `json:"email_verified"`
-		//}
-		//if err := idToken.Claims(&claims); err != nil {
-		//	logger.Err(err).Msg("unable to parse claims")
-		//	http.Error(w, "unable to parse claims", http.StatusInternalServerError)
-		//	return
-		//}
-
-		resp := struct {
-			OAuth2Token   *oauth2.Token
-			IDTokenClaims *json.RawMessage // ID Token payload is just JSON.
-		}{oauth2Token, new(json.RawMessage)}
-
-		if err := idToken.Claims(&resp.IDTokenClaims); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		kcc := keycloakClaims{}
+		if err := idToken.Claims(&kcc); err != nil {
+			logger.Err(err).Msg("unable to parse claims")
+			http.Error(w, "unable to parse claims", http.StatusInternalServerError)
 			return
 		}
-		data, err := json.MarshalIndent(resp, "", "    ")
+
+		err = validate.Struct(kcc)
 		if err != nil {
-			logger.Err(err).Msg("json marshal failed")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, err = w.Write(data)
-		if err != nil {
-			logger.Err(err).Msg("write failed")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logger.Err(err).Msg("keycloak preferred_username failed validation")
+			http.Error(w, "keycloak preferred_username failed validation", http.StatusBadRequest)
 			return
 		}
 
-		// Look up if we know about this user otherwise create it
+		// Get authData for keycloak user
+		ad, err := keycloakUser(dbPool, logger, idToken.Subject, kcc)
+		if err != nil {
+			logger.Err(err).Msg("unable to get keycloak user")
+			if errors.Is(err, errKeyCloakEmailUnverified) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.Values["ad"] = ad
+
+		err = session.Save(r, w)
+		if err != nil {
+			logger.Err(err).Msg("unable to save session")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		if ocd.ReturnTo != "" {
+			validatedRedirect(ocd.ReturnTo, w, r)
+			return
+		}
+
+		validatedRedirect("/console", w, r)
 	}
+}
+
+type keycloakClaims struct {
+	// The length checks needs to be kept in sync with the CHECK constraint
+	// for the users.name column in the database.
+	PreferredUsername string `json:"preferred_username" validate:"min=1,max=63"`
+}
+
+func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, pgtype.UUID, error) {
+	var userID, keycloakProviderID pgtype.UUID
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		err := tx.QueryRow(context.Background(), "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT user from keyclaok data: %w", err)
+		}
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO auth_provider_keycloak (user_id, subject) VALUES ($1, $2) RETURNING id", userID, subject).Scan(&keycloakProviderID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT auth_provider_keycloak dataf for new user: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("transaction failed: %w", err)
+	}
+
+	return userID, keycloakProviderID, nil
+}
+
+func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, kcc keycloakClaims) (authData, error) {
+	// We keep track of keycloak users via the sub value returned in the ID
+	// token. For keycloak this is a UUID, e.g.
+	// "ab809abb-5bac-4db1-8088-3d340ea23de8" which is the actual user ID in keycloak which
+	// should remain the same even if the username or email is changed at a
+	// later time.
+	//
+	// This means we need to backup the keycloak database since
+	// if the database is lost users are recreated with another UUID and
+	// treated as a new user by us.
+
+	var username string
+	var userID, keycloakProviderID pgtype.UUID
+	err := dbPool.QueryRow(
+		context.Background(),
+		"SELECT users.id, users.name FROM users JOIN auth_provider_keycloak ON users.id = auth_provider_keycloak.user_id WHERE auth_provider_keycloak.subject = $1",
+		subject,
+	).Scan(&userID, &username)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// User does not exist, add to database
+			userID, keycloakProviderID, err = addKeycloakUser(dbPool, subject, kcc.PreferredUsername)
+			if err != nil {
+				return authData{}, fmt.Errorf("unable to add keycloak user to database: %w", err)
+			}
+			username = kcc.PreferredUsername
+			logger.Info().Str("user_id", userID.String()).Str("keycloak_provider_id", keycloakProviderID.String()).Msg("created user based on keycloak credentials")
+		} else {
+			return authData{}, fmt.Errorf("keycloak user lookup failed: %w", err)
+		}
+	}
+
+	if username != kcc.PreferredUsername {
+		logger.Info().Str("from", username).Str("to", kcc.PreferredUsername).Msg("keycloak username out of sync, updating local username")
+		_, err := dbPool.Exec(context.Background(), "UPDATE users SET name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
+		if err != nil {
+			return authData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
+		}
+
+		username = kcc.PreferredUsername
+	}
+
+	var roleID pgtype.UUID
+	var orgID *pgtype.UUID // can be nil if not belonging to a organization
+	var orgName *string    // same as above
+	var superuser bool
+	var roleName string
+	err = dbPool.QueryRow(
+		context.Background(),
+		`SELECT
+				users.id,
+				users.org_id,
+				organizations.name,
+				users.role_id,
+				roles.name,
+				roles.superuser
+			FROM users
+			JOIN roles ON users.role_id = roles.id
+			LEFT JOIN organizations ON users.org_id = organizations.id
+			WHERE users.name=$1`,
+		username,
+	).Scan(
+		&userID,
+		&orgID,
+		&orgName,
+		&roleID,
+		&roleName,
+		&superuser,
+	)
+	if err != nil {
+		return authData{}, err
+	}
+
+	return authData{
+		Username:  username,
+		UserID:    userID,
+		OrgID:     orgID,
+		OrgName:   orgName,
+		RoleID:    roleID,
+		RoleName:  roleName,
+		Superuser: superuser,
+	}, nil
 }
 
 type argon2Settings struct {
@@ -698,12 +835,7 @@ const (
 	cookieName = "sunet-cdn-manager"
 )
 
-func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, w http.ResponseWriter, r *http.Request) *authData {
-	if r.Method != "GET" {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return nil
-	}
-
+func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, r *http.Request) *authData {
 	session := getSession(r, cookieStore)
 
 	adInt, ok := session.Values["ad"]
@@ -736,7 +868,12 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Han
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			logger := hlog.FromRequest(r)
 
-			adRef := authFromSession(logger, cookieStore, w, r)
+			if r.Method != "GET" {
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
+
+			adRef := authFromSession(logger, cookieStore, r)
 			if adRef == nil {
 				logger.Info().Msg("consoleAuthMiddleware: redirecting to login page")
 				err := redirectToLoginPage(w, r)
@@ -852,14 +989,14 @@ func passwordToArgon2(password string) (argon2Data, error) {
 }
 
 func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
-	var userID pgtype.UUID
+	var userID, keyID pgtype.UUID
 
-	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM auth_providers WHERE name='local')) RETURNING id", name, orgID, roleID).Scan(&userID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM auth_providers WHERE name=$4)) RETURNING id", name, orgID, roleID, "local").Scan(&userID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user with IDs: %w", err)
 	}
 
-	err = tx.QueryRow(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", userID, a2Data.key, a2Data.salt, a2Data.argonTime, a2Data.argonMemory, a2Data.argonThreads, a2Data.argonTagSize).Scan(&userID)
+	err = tx.QueryRow(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", userID, a2Data.key, a2Data.salt, a2Data.argonTime, a2Data.argonMemory, a2Data.argonThreads, a2Data.argonTagSize).Scan(&keyID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user argon2 data with IDs: %w", err)
 	}
@@ -1626,7 +1763,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
-func newChiRouter(conf config.Config, devMode bool, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -1659,9 +1796,9 @@ func newChiRouter(conf config.Config, devMode bool, logger zerolog.Logger, dbPoo
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
 		r.Use(csrfMiddleware)
-		r.Get("/login", loginHandler(dbPool, cookieStore, devMode))
-		r.Post("/login", loginHandler(dbPool, cookieStore, devMode))
-		r.Get("/logout", logoutHandler(cookieStore, devMode))
+		r.Get("/login", loginHandler(dbPool, cookieStore))
+		r.Post("/login", loginHandler(dbPool, cookieStore))
+		r.Get("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
 
@@ -1678,8 +1815,8 @@ func newChiRouter(conf config.Config, devMode bool, logger zerolog.Logger, dbPoo
 				Scopes: []string{oidc.ScopeOpenID},
 			}
 
-			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, devMode, oauth2Config))
-			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(cookieStore, oauth2Config, idTokenVerifier))
+			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, oauth2Config))
+			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(cookieStore, oauth2Config, idTokenVerifier, dbPool))
 		}
 	})
 
@@ -2303,8 +2440,14 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		// Because of the NOT NULL role_id required for users, if there are no
 		// roles there are no users either. So now we can create an initial
 		// admin role and user.
-		var roleID pgtype.UUID
-		err = tx.QueryRow(context.Background(), "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&roleID)
+		var adminRoleID pgtype.UUID
+		err = tx.QueryRow(context.Background(), "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&adminRoleID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+		}
+
+		// Also add role used by ordinary users
+		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "user")
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
 		}
@@ -2316,7 +2459,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			}
 		}
 
-		userID, err := insertUserWithArgon2Tx(tx, u.Name, nil, roleID, a2Data)
+		userID, err := insertUserWithArgon2Tx(tx, u.Name, nil, adminRoleID, a2Data)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user: %w", err)
 		}
@@ -2438,7 +2581,7 @@ func getCSRFKey(dbPool *pgxpool.Pool) ([]byte, error) {
 	return csrfKey, nil
 }
 
-func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
+func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool, devMode bool) (*sessions.CookieStore, error) {
 	sessionKeys, err := getSessionKeys(dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
@@ -2454,7 +2597,20 @@ func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.Coo
 		sessionKeyPairs = append(sessionKeyPairs, sk.EncKey)
 	}
 
-	return sessions.NewCookieStore(sessionKeyPairs...), nil
+	sessionStore := sessions.NewCookieStore(sessionKeyPairs...)
+
+	sessionStore.Options = &sessions.Options{
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+	}
+
+	// Allow development without HTTPS
+	if devMode {
+		sessionStore.Options.Secure = false
+	}
+
+	return sessionStore, nil
 }
 
 func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) http.Handler, error) {
@@ -2512,7 +2668,7 @@ func Run(logger zerolog.Logger, devMode bool) error {
 		logger.Fatal().Msg("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool)
+	cookieStore, err := getSessionStore(logger, dbPool, devMode)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("getSessionStore failed")
 	}
@@ -2532,7 +2688,7 @@ func Run(logger zerolog.Logger, devMode bool) error {
 		logger.Fatal().Err(err).Msg("setting up OIDC provider failed")
 	}
 
-	router := newChiRouter(conf, devMode, logger, dbPool, cookieStore, csrfMiddleware, provider)
+	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {

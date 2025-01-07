@@ -100,7 +100,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 
 		// Roles
 		"INSERT INTO roles (id, name, superuser) VALUES ('00000005-0000-0000-0000-000000000001', 'admin', TRUE)",
-		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000002', 'customer')",
+		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000002', 'user')",
 
 		// Domains
 		"INSERT INTO service_domains (id, service_version_id, domain) VALUES ('00000008-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', 'www.example.se')",
@@ -141,7 +141,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			{
 				name:         "username1",
 				password:     "password1",
-				role:         "customer",
+				role:         "user",
 				orgName:      "org1",
 				id:           "00000006-0000-0000-0000-000000000002",
 				authProvider: "local",
@@ -149,7 +149,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			{
 				name:         "username2",
 				password:     "password2",
-				role:         "customer",
+				role:         "user",
 				orgName:      "org2",
 				id:           "00000006-0000-0000-0000-000000000003",
 				authProvider: "local",
@@ -157,7 +157,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			{
 				name:         "username3-no-org",
 				password:     "password3",
-				role:         "customer",
+				role:         "user",
 				id:           "00000006-0000-0000-0000-000000000004",
 				authProvider: "local",
 			},
@@ -313,7 +313,7 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		return nil, nil, err
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool)
+	cookieStore, err := getSessionStore(logger, dbPool, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -323,7 +323,7 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(config.Config{}, true, logger, dbPool, cookieStore, csrfMiddleware, nil)
+	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil)
 
 	err = setupHumaAPI(router, dbPool)
 	if err != nil {
@@ -718,7 +718,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-2",
 			addedPassword:  "admin-created-password-2",
-			roleIDorName:   "customer",
+			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
 		{
@@ -728,7 +728,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      strings.Repeat("a", 63),
 			addedPassword:  "admin-created-password-2",
-			roleIDorName:   "customer",
+			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
 		{
@@ -738,7 +738,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      strings.Repeat("a", 64),
 			addedPassword:  "admin-created-password-2",
-			roleIDorName:   "customer",
+			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
 		{
@@ -748,7 +748,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      "",
 			addedPassword:  "admin-created-password-2",
-			roleIDorName:   "customer",
+			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
 		{
@@ -757,7 +757,7 @@ func TestPostUsers(t *testing.T) {
 			password:       "password1",
 			addedUser:      "user-created-user-1",
 			addedPassword:  "user-created-password-1",
-			roleIDorName:   "customer",
+			roleIDorName:   "user",
 			orgIDorName:    "org1",
 			expectedStatus: http.StatusForbidden,
 		},

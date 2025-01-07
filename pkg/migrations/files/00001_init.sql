@@ -36,6 +36,13 @@ CREATE TABLE gorilla_session_keys (
     UNIQUE(auth_key, enc_key)
 );
 
+CREATE TABLE auth_provider_keycloak (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    user_id uuid UNIQUE NOT NULL REFERENCES users(id),
+    subject uuid UNIQUE NOT NULL
+);
+
 CREATE TABLE gorilla_csrf_keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
