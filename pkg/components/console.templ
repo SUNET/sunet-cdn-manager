@@ -1,7 +1,89 @@
 package components
 
-templ ConsolePage(username string) {
-	<h1>SUNET CDN Manager Console</h1>
-	<div>Hello { username }!</div>
-	<div><a href="/auth/logout">Logout</a></div>
+templ ConsolePage(pageType string, heading string, username string, organizations []string, isSuperuser bool, services Services) {
+	@Logout()
+	@OrganizationSelector(organizations)
+	@NavBar()
+	<h1>{ heading }</h1>
+	switch pageType {
+		case "home":
+			<div>Hello { username }!</div>
+		case "services":
+			@ServicesContent(services)
+		default:
+			<div>{ "Unsupported page type" }</div>
+	}
+}
+
+templ Logout() {
+	<div class="logout">
+		<div><a href="/auth/logout">Logout</a></div>
+	</div>
+}
+
+templ OrganizationSelector(organizations []string) {
+	<form action="/console">
+		@CSRF()
+		<label for="organizations">Organization:</label>
+		<select name="organizations" id="organizations" disabled?={ len(organizations) < 2 }>
+			if len(organizations) == 0 {
+				<option value="undefined">undefined</option>
+			} else {
+				for _, org := range organizations {
+					<option value={ org }>{ org }</option>
+				}
+			}
+		</select>
+		<input type="submit"/>
+	</form>
+}
+
+templ NavBar() {
+	<div>
+		<nav>
+			<ul>
+				<li><a href="/console">Home</a></li>
+				<li><a href="/console/services">Services</a></li>
+			</ul>
+		</nav>
+	</div>
+}
+
+templ ServicesContent(cr Services) {
+	<form method="post" action="/console/services">
+		@CSRF()
+		<label for="name">Service name:</label>
+		<input type="text" id="name" name="na,e"/>
+		<label for="services">Service:</label>
+		<input type="submit"/>
+	</form>
+}
+
+templ LoginPage(returnTo string, loginFailed bool) {
+	<h1>Login</h1>
+	<h2>Local</h2>
+	<form method="post" action="/auth/login">
+		@CSRF()
+		if returnTo != "" {
+			<input type="hidden" name="return_to" value={ returnTo }/>
+		}
+		<label for="username">Username:</label>
+		<br/>
+		<input type="text" id="username" name="username"/>
+		<br/>
+		<label for="password">Password:</label>
+		<br/>
+		<input type="password" id="password" name="password"/>
+		<input type="submit" value="Login"/>
+	</form>
+	if loginFailed {
+		<div>Login failed!</div>
+	}
+	<h2>OpenID Connect</h2>
+	<div><a href="/auth/oidc/keycloak">Login with Keycloak</a></div>
+}
+
+// https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf
+templ CSRF() {
+	<input type="hidden" name="gorilla.csrf.Token" value={ ctx.Value("gorilla.csrf.Token").(string) }/>
 }

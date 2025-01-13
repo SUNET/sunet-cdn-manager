@@ -83,7 +83,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	validatedRedirect("/console", w, r)
 }
 
-func consoleHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -98,7 +98,30 @@ func consoleHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 
 		ad := adRef.(authData)
 
-		err := renderConsolePage(w, r, ad)
+		err := renderConsolePage(w, r, ad, "home", "SUNET CDN manager", components.Services{})
+		if err != nil {
+			logger.Err(err).Msg("unable to render console page")
+			return
+		}
+	}
+}
+
+func consoleServicesHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing authData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(authData)
+
+		err := renderConsolePage(w, r, ad, "services", "SUNET CDN manager: Services", components.Services{})
 		if err != nil {
 			logger.Err(err).Msg("unable to render console page")
 			return
@@ -107,8 +130,12 @@ func consoleHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 }
 
 // Login page/form for browser based (not API) requests
-func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData) error {
-	component := components.ConsolePage(ad.Username)
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, pageType string, heading string, services components.Services) error {
+	organizations := []string{}
+	if ad.OrgName != nil {
+		organizations = append(organizations, *ad.OrgName)
+	}
+	component := components.ConsolePage(pageType, heading, ad.Username, organizations, ad.Superuser, services)
 	err := component.Render(r.Context(), w)
 	return err
 }
@@ -1790,7 +1817,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Group(func(r chi.Router) {
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get("/console", consoleHandler(cookieStore))
+		r.Get("/console", consoleHomeHandler(cookieStore))
+		r.Get("/console/services", consoleServicesHandler(cookieStore))
 	})
 
 	// Console login related routes
