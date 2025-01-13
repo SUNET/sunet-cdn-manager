@@ -113,6 +113,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000002', 'keycloak')",
+
+		// IPv4 networks
+		"INSERT INTO ipv4_networks (id, network) VALUES ('00000011-0000-0000-0000-000000000001', '192.0.2.0/24')",
+		"INSERT INTO ipv4_networks (id, network) VALUES ('00000011-0000-0000-0000-000000000002', '198.51.100.0/24')",
+
+		// IPv6 networks
+		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000001', '2001:db8::/32')",
+		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000002', '3fff::/20')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -1836,6 +1844,182 @@ func TestGetVcls(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Fatalf("%s: GET vcls unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+
+		if resp.StatusCode == http.StatusOK {
+			s := []struct {
+				Content string
+			}{}
+
+			err = json.Unmarshal(jsonData, &s)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, content := range s {
+				fmt.Println(content.Content)
+			}
+		}
+	}
+}
+
+func TestGetIPv4Networks(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed non-superuser request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/ipv4_networks", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET ipv4 networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+
+		if resp.StatusCode == http.StatusOK {
+			s := []struct {
+				Content string
+			}{}
+
+			err = json.Unmarshal(jsonData, &s)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, content := range s {
+				fmt.Println(content.Content)
+			}
+		}
+	}
+}
+
+func TestGetIPv6Networks(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed non-superuser request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/ipv6_networks", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET ipv6 networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)

@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -1790,6 +1791,46 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
+func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.Superuser {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv4_networks ORDER BY ts")
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for ipv4_networks: %w", err)
+		}
+	} else {
+		return nil, errForbidden
+	}
+
+	ipv4Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv4Network])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for ipv4 networks: %w", err)
+	}
+
+	return ipv4Networks, nil
+}
+
+func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error) {
+	var rows pgx.Rows
+	var err error
+	if ad.Superuser {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv6_networks ORDER BY ts")
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for ipv6_networks: %w", err)
+		}
+	} else {
+		return nil, errForbidden
+	}
+
+	ipv6Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv6Network])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for ipv6 networks: %w", err)
+	}
+
+	return ipv6Networks, nil
+}
+
 func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
 	router := chi.NewMux()
 
@@ -2264,6 +2305,54 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			}
 			return resp, nil
 		})
+
+		huma.Get(api, "/v1/ipv4_networks", func(ctx context.Context, _ *struct{},
+		) (*ipv4NetworksOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from ipv4 networks GET handler")
+			}
+
+			networks, err := selectIPv4Networks(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				}
+				logger.Err(err).Msg("unable to query ipv4 networks")
+				return nil, err
+			}
+
+			resp := &ipv4NetworksOutput{
+				Body: networks,
+			}
+			return resp, nil
+		})
+
+		huma.Get(api, "/v1/ipv6_networks", func(ctx context.Context, _ *struct{},
+		) (*ipv6NetworksOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from ipv6 networks GET handler")
+			}
+
+			networks, err := selectIPv6Networks(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				}
+				logger.Err(err).Msg("unable to query ipv6 networks")
+				return nil, err
+			}
+
+			resp := &ipv6NetworksOutput{
+				Body: networks,
+			}
+			return resp, nil
+		})
 	})
 
 	return nil
@@ -2339,6 +2428,24 @@ type selectVcl struct {
 	Domains        []string    `json:"domains" doc:"The domains used by the VCL"`
 	Origins        []origin    `json:"origins" doc:"The origins used by the VCL"`
 	VclRecvContent string      `json:"vcl_recv_content" doc:"The vcl_recv content for the service"`
+}
+
+type ipv4Network struct {
+	ID      pgtype.UUID  `json:"id" doc:"ID of IPv4 network, UUIDv4"`
+	Network netip.Prefix `json:"network" example:"198.51.100.0/24" doc:"a IPv4 network"`
+}
+
+type ipv4NetworksOutput struct {
+	Body []ipv4Network
+}
+
+type ipv6Network struct {
+	ID      pgtype.UUID  `json:"id" doc:"ID of IPv6 network, UUIDv4"`
+	Network netip.Prefix `json:"network" example:"2001:db8::/32" doc:"a IPv6 network"`
+}
+
+type ipv6NetworksOutput struct {
+	Body []ipv6Network
 }
 
 type completeVcl struct {

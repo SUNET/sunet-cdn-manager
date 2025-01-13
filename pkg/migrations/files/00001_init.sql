@@ -5,6 +5,34 @@ CREATE TABLE organizations (
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
+CREATE TABLE ipv4_networks (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    network cidr UNIQUE NOT NULL CONSTRAINT v4 CHECK(family(network) = 4)
+);
+
+CREATE TABLE ipv6_networks (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    network cidr UNIQUE NOT NULL CONSTRAINT v6 CHECK(family(network) = 6)
+);
+
+CREATE TABLE org_ipv4_addresses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    network_id uuid NOT NULL REFERENCES ipv4_networks(id),
+    org_id uuid REFERENCES organizations(id),
+    address inet UNIQUE NOT NULL CONSTRAINT valid_v4 CHECK(family(address) = 4 AND address != network(address) AND address != broadcast(address))
+);
+
+CREATE TABLE org_ipv6_addresses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ts timestamptz NOT NULL DEFAULT now(),
+    network_id uuid NOT NULL REFERENCES ipv6_networks(id),
+    org_id uuid REFERENCES organizations(id),
+    address inet UNIQUE NOT NULL CONSTRAINT valid_v6 CHECK(family(address) = 6 AND address != network(address) AND address != broadcast(address))
+);
+
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
