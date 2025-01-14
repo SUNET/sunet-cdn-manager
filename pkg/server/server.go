@@ -51,11 +51,23 @@ func init() {
 	schemaDecoder.IgnoreUnknownKeys(true)
 }
 
+const (
+	// https://www.postgresql.org/docs/current/errcodes-appendix.html
+	// unique_violation: 23505
+	pgUniqueViolation = "23505"
+	// check_violation: 23514
+	pgCheckViolation = "23514"
+	// exclusion_violation: 23P01
+	pgExclusionViolation = "23P01"
+)
+
 var (
 	errForbidden               = errors.New("access to resource is not allowed")
 	errNotFound                = errors.New("resource not found")
 	errUnprocessable           = errors.New("resource not processable")
 	errAlreadyExists           = errors.New("resource already exists")
+	errCheckViolation          = errors.New("invalid input data")
+	errExclutionViolation      = errors.New("conflicting data in database")
 	errBadPassword             = errors.New("bad password")
 	errKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
 
@@ -1388,9 +1400,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
-				// https://www.postgresql.org/docs/current/errcodes-appendix.html
-				// unique_violation: 23505
-				if pgErr.Code == "23505" {
+				if pgErr.Code == pgUniqueViolation {
 					return pgtype.UUID{}, errAlreadyExists
 				}
 			}
@@ -1811,6 +1821,33 @@ func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error
 	return ipv4Networks, nil
 }
 
+func insertIPv4Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv4Network, error) {
+	var id pgtype.UUID
+	if !ad.Superuser {
+		return ipv4Network{}, errForbidden
+	}
+	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv4_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return ipv4Network{}, errAlreadyExists
+			case pgCheckViolation:
+				return ipv4Network{}, errCheckViolation
+			case pgExclusionViolation:
+				return ipv4Network{}, errExclutionViolation
+			}
+		}
+		return ipv4Network{}, fmt.Errorf("unable to INSERT ipv4 network '%s': %w", network, err)
+	}
+
+	return ipv4Network{
+		ID:      id,
+		Network: network,
+	}, nil
+}
+
 func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error) {
 	var rows pgx.Rows
 	var err error
@@ -1829,6 +1866,33 @@ func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error
 	}
 
 	return ipv6Networks, nil
+}
+
+func insertIPv6Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv6Network, error) {
+	var id pgtype.UUID
+	if !ad.Superuser {
+		return ipv6Network{}, errForbidden
+	}
+	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv6_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return ipv6Network{}, errAlreadyExists
+			case pgCheckViolation:
+				return ipv6Network{}, errCheckViolation
+			case pgExclusionViolation:
+				return ipv6Network{}, errExclutionViolation
+			}
+		}
+		return ipv6Network{}, fmt.Errorf("unable to INSERT ipv6 network '%s': %w", network, err)
+	}
+
+	return ipv6Network{
+		ID:      id,
+		Network: network,
+	}, nil
 }
 
 func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
@@ -2182,7 +2246,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					if errors.Is(err, errUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
 					} else if errors.Is(err, errAlreadyExists) {
-						return nil, huma.Error400BadRequest("service already exists")
+						return nil, huma.Error409Conflict("service already exists")
 					} else if errors.Is(err, errForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to create this service")
 					}
@@ -2266,7 +2330,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					if errors.Is(err, errUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
 					} else if errors.Is(err, errAlreadyExists) {
-						return nil, huma.Error400BadRequest("service version already exists")
+						return nil, huma.Error409Conflict("service version already exists")
 					} else if errors.Is(err, errForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to create this service version")
 					}
@@ -2330,6 +2394,49 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
+		postIPv4NetworksPath := "/v1/ipv4_networks"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postIPv4NetworksPath, &ipv4NetworkOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postIPv4NetworksPath, &ipv4NetworkOutput{}),
+				Method:        http.MethodPost,
+				Path:          postIPv4NetworksPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Network netip.Prefix `json:"network" doc:"A IPv4 network prefix"`
+				}
+			},
+			) (*ipv4NetworkOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from IPv4 POST handler")
+				}
+
+				ipv4Net, err := insertIPv4Network(dbPool, input.Body.Network, ad)
+				if err != nil {
+					switch {
+					case errors.Is(err, errAlreadyExists):
+						return nil, huma.Error409Conflict("IPv4 network already exists")
+					case errors.Is(err, errForbidden):
+						return nil, huma.Error403Forbidden("not allowed to create this IPv4 network")
+					case errors.Is(err, errCheckViolation):
+						return nil, huma.Error400BadRequest("content of request is not valid for IPv4 network")
+					case errors.Is(err, errExclutionViolation):
+						return nil, huma.Error409Conflict("IPv4 network is already covered by existing networks")
+					}
+					logger.Err(err).Msg("unable to add IPv4 network")
+					return nil, err
+				}
+				resp := &ipv4NetworkOutput{Body: ipv4Net}
+				return resp, nil
+			},
+		)
+
 		huma.Get(api, "/v1/ipv6_networks", func(ctx context.Context, _ *struct{},
 		) (*ipv6NetworksOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -2353,6 +2460,49 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			}
 			return resp, nil
 		})
+
+		postIPv6NetworksPath := "/v1/ipv6_networks"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postIPv6NetworksPath, &ipv6NetworkOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postIPv6NetworksPath, &ipv6NetworkOutput{}),
+				Method:        http.MethodPost,
+				Path:          postIPv6NetworksPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Network netip.Prefix `json:"network" doc:"A IPv6 network prefix"`
+				}
+			},
+			) (*ipv6NetworkOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from IPv6 POST handler")
+				}
+
+				ipv6Net, err := insertIPv6Network(dbPool, input.Body.Network, ad)
+				if err != nil {
+					switch {
+					case errors.Is(err, errAlreadyExists):
+						return nil, huma.Error409Conflict("IPv6 network already exists")
+					case errors.Is(err, errForbidden):
+						return nil, huma.Error403Forbidden("not allowed to create this IPv6 network")
+					case errors.Is(err, errCheckViolation):
+						return nil, huma.Error400BadRequest("invalid data for IPv6 network")
+					case errors.Is(err, errExclutionViolation):
+						return nil, huma.Error409Conflict("IPv6 network is already covered by existing networks")
+					}
+					logger.Err(err).Str("network", input.Body.Network.String()).Msg("unable to add IPv6 network")
+					return nil, err
+				}
+				resp := &ipv6NetworkOutput{Body: ipv6Net}
+				return resp, nil
+			},
+		)
 	})
 
 	return nil
@@ -2439,6 +2589,10 @@ type ipv4NetworksOutput struct {
 	Body []ipv4Network
 }
 
+type ipv4NetworkOutput struct {
+	Body ipv4Network
+}
+
 type ipv6Network struct {
 	ID      pgtype.UUID  `json:"id" doc:"ID of IPv6 network, UUIDv4"`
 	Network netip.Prefix `json:"network" example:"2001:db8::/32" doc:"a IPv6 network"`
@@ -2446,6 +2600,10 @@ type ipv6Network struct {
 
 type ipv6NetworksOutput struct {
 	Body []ipv6Network
+}
+
+type ipv6NetworkOutput struct {
+	Body ipv6Network
 }
 
 type completeVcl struct {
@@ -2808,10 +2966,7 @@ func Run(logger zerolog.Logger, devMode bool) error {
 		logger.Fatal().Err(err).Msg("getSessionStore failed")
 	}
 
-	secureCSRF := true
-	if devMode {
-		secureCSRF = false
-	}
+	secureCSRF := !devMode
 
 	csrfMiddleware, err := getCSRFMiddleware(dbPool, secureCSRF)
 	if err != nil {

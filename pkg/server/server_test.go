@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -119,7 +120,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO ipv4_networks (id, network) VALUES ('00000011-0000-0000-0000-000000000002', '198.51.100.0/24')",
 
 		// IPv6 networks
-		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000001', '2001:db8::/32')",
+		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000001', '2001:db8:0::/48')",
 		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000002', '3fff::/20')",
 	}
 
@@ -1361,10 +1362,10 @@ func TestPostServices(t *testing.T) {
 			newService:     "new-username1-service1",
 		},
 		{
-			description:    "failed organization request with duplciate service name",
+			description:    "failed organization request with duplicate service name",
 			username:       "username1",
 			password:       "password1",
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: http.StatusConflict,
 			newService:     "new-username1-service1",
 		},
 		{
@@ -1931,7 +1932,7 @@ func TestGetIPv4Networks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET ipv4 networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			t.Fatalf("%s: GET ipv4_networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1955,6 +1956,106 @@ func TestGetIPv4Networks(t *testing.T) {
 				fmt.Println(content.Content)
 			}
 		}
+	}
+}
+
+func TestPostIPv4Networks(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		addedIPv4Network netip.Prefix
+	}{
+		{
+			description:      "successful superuser request",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusCreated,
+			addedIPv4Network: netip.MustParsePrefix("10.0.0.0/24"),
+		},
+		{
+			description:      "failed superuser request (network overlaps the one inserted above)",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusConflict,
+			addedIPv4Network: netip.MustParsePrefix("10.0.0.0/25"),
+		},
+		{
+			description:      "failed (duplicate) superuser request",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusConflict,
+			addedIPv4Network: netip.MustParsePrefix("10.0.0.0/24"),
+		},
+		{
+			description:      "failed IPv6 superuser request",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusBadRequest,
+			addedIPv4Network: netip.MustParsePrefix("2001:db8:0::/32"),
+		},
+		{
+			description:      "failed non-superuser request",
+			username:         "username1",
+			password:         "password1",
+			addedIPv4Network: netip.MustParsePrefix("10.0.0.0/24"),
+			expectedStatus:   http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		newIPv4Network := struct {
+			Network netip.Prefix `json:"network"`
+		}{
+			Network: test.addedIPv4Network,
+		}
+
+		b, err := json.Marshal(newIPv4Network)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/ipv4_networks", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("POST ipv4_networks unexpected status code: %d (%s)", resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
 	}
 }
 
@@ -2043,5 +2144,98 @@ func TestGetIPv6Networks(t *testing.T) {
 				fmt.Println(content.Content)
 			}
 		}
+	}
+}
+
+func TestPostIPv6Networks(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		addedIPv6Network netip.Prefix
+	}{
+		{
+			description:      "successful superuser request",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusCreated,
+			addedIPv6Network: netip.MustParsePrefix("2001:db8:1::/48"),
+		},
+		{
+			description:      "failed superuser request (network overlaps the one inserted above)",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusConflict,
+			addedIPv6Network: netip.MustParsePrefix("2001:db8:1::/64"),
+		},
+		{
+			description:      "failed (duplicate) superuser request",
+			username:         "admin",
+			password:         "adminpass1",
+			expectedStatus:   http.StatusConflict,
+			addedIPv6Network: netip.MustParsePrefix("2001:db8:1::/48"),
+		},
+		{
+			description:      "failed non-superuser request",
+			username:         "username1",
+			password:         "password1",
+			addedIPv6Network: netip.MustParsePrefix("2001:db8:3::/64"),
+			expectedStatus:   http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		newIPv4Network := struct {
+			Network netip.Prefix `json:"network"`
+		}{
+			Network: test.addedIPv6Network,
+		}
+
+		b, err := json.Marshal(newIPv4Network)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/ipv6_networks", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("POST ipv6_networks unexpected status code: %d (%s)", resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
 	}
 }

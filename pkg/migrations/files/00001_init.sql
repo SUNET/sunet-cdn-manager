@@ -5,16 +5,20 @@ CREATE TABLE organizations (
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
 );
 
+-- https://stackoverflow.com/questions/55283779/prevent-overlapping-values-on-cidr-column-in-postgresql
+-- https://dba.stackexchange.com/questions/205773/how-to-find-out-what-operator-class-and-access-method-should-be-used-for-an-excl
 CREATE TABLE ipv4_networks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
-    network cidr UNIQUE NOT NULL CONSTRAINT v4 CHECK(family(network) = 4)
+    network cidr UNIQUE NOT NULL CONSTRAINT v4 CHECK(family(network) = 4),
+    EXCLUDE USING gist (network inet_ops with &&)
 );
 
 CREATE TABLE ipv6_networks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ts timestamptz NOT NULL DEFAULT now(),
-    network cidr UNIQUE NOT NULL CONSTRAINT v6 CHECK(family(network) = 6)
+    network cidr UNIQUE NOT NULL CONSTRAINT v6 CHECK(family(network) = 6),
+    EXCLUDE USING gist (network inet_ops with &&)
 );
 
 CREATE TABLE org_ipv4_addresses (
