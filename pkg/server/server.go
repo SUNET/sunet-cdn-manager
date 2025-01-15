@@ -935,13 +935,13 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY users.ts")
+		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY users.created_at")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.ts", ad.UserID)
+		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.created_at", ad.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -1134,12 +1134,12 @@ func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, err
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY ts")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations ORDER BY created_at")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY ts", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM organizations WHERE id=$1 ORDER BY created_at", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for organizations: %w", err)
 		}
@@ -1206,12 +1206,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY ts")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY created_at")
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY ts", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY created_at", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
 		}
@@ -1805,7 +1805,7 @@ func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv4_networks ORDER BY ts")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv4_networks ORDER BY created_at")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for ipv4_networks: %w", err)
 		}
@@ -1852,7 +1852,7 @@ func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv6_networks ORDER BY ts")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv6_networks ORDER BY created_at")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for ipv6_networks: %w", err)
 		}
@@ -2841,13 +2841,13 @@ func insertGorillaCSRFKey(tx pgx.Tx, authKey []byte, active bool) (pgtype.UUID, 
 }
 
 type sessionKey struct {
-	TS      time.Time `db:"ts"`
-	AuthKey []byte    `db:"auth_key"`
-	EncKey  []byte    `db:"enc_key"`
+	CreatedAt time.Time `db:"created_at"`
+	AuthKey   []byte    `db:"auth_key"`
+	EncKey    []byte    `db:"enc_key"`
 }
 
 func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
-	rows, err := dbPool.Query(context.Background(), "SELECT ts, auth_key, enc_key FROM gorilla_session_keys ORDER BY key_order DESC")
+	rows, err := dbPool.Query(context.Background(), "SELECT created_at, auth_key, enc_key FROM gorilla_session_keys ORDER BY key_order DESC")
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for session key: %w", err)
 	}
