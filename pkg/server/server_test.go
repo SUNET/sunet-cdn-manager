@@ -401,7 +401,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 		})
 	}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT id, created_at, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	rows, err := dbPool.Query(context.Background(), "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,11 +409,11 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 	var keyOrderMax int64
 
 	var id pgtype.UUID
-	var createdAt time.Time
+	var timeCreated time.Time
 	var keyOrder int64
 	var authKey, encKey []byte
-	_, err = pgx.ForEachRow(rows, []any{&id, &createdAt, &keyOrder, &authKey, &encKey}, func() error {
-		fmt.Printf("id: %s, created_at: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, createdAt, keyOrder, len(authKey), len(encKey))
+	_, err = pgx.ForEachRow(rows, []any{&id, &timeCreated, &keyOrder, &authKey, &encKey}, func() error {
+		fmt.Printf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
 
 		if authKey == nil {
 			t.Fatal("authKey is nil")
@@ -471,7 +471,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 		})
 	}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT id, created_at, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	rows, err := dbPool.Query(context.Background(), "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,11 +479,11 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 	var keyOrderMax int64
 
 	var id pgtype.UUID
-	var createdAt time.Time
+	var timeCreated time.Time
 	var keyOrder int64
 	var authKey, encKey []byte
-	_, err = pgx.ForEachRow(rows, []any{&id, &createdAt, &keyOrder, &authKey, &encKey}, func() error {
-		fmt.Printf("id: %s, created_at: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, createdAt, keyOrder, len(authKey), len(encKey))
+	_, err = pgx.ForEachRow(rows, []any{&id, &timeCreated, &keyOrder, &authKey, &encKey}, func() error {
+		fmt.Printf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
 
 		if authKey == nil {
 			t.Fatal("authKey is nil")
