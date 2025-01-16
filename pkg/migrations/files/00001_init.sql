@@ -26,7 +26,7 @@ CREATE TABLE org_ipv4_addresses (
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ipv4_networks(id),
     org_id uuid REFERENCES organizations(id),
-    address inet UNIQUE NOT NULL CONSTRAINT valid_v4 CHECK(family(address) = 4 AND address != network(address) AND address != broadcast(address))
+    address inet UNIQUE NOT NULL CONSTRAINT valid_v4 CHECK(family(address) = 4 AND masklen(address) = 32)
 );
 
 CREATE TABLE org_ipv6_addresses (
@@ -34,7 +34,7 @@ CREATE TABLE org_ipv6_addresses (
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ipv6_networks(id),
     org_id uuid REFERENCES organizations(id),
-    address inet UNIQUE NOT NULL CONSTRAINT valid_v6 CHECK(family(address) = 6 AND address != network(address) AND address != broadcast(address))
+    address inet UNIQUE NOT NULL CONSTRAINT valid_v6 CHECK(family(address) = 6 AND masklen(address) = 128)
 );
 
 CREATE TABLE roles (

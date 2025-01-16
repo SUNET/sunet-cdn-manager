@@ -122,6 +122,11 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// IPv6 networks
 		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000001', '2001:db8:0::/48')",
 		"INSERT INTO ipv6_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000002', '3fff::/20')",
+
+		// Allocate addresses from networks to orgs
+		// org1
+		"INSERT INTO org_ipv4_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000001', '00000011-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '192.0.2.1')",
+		"INSERT INTO org_ipv6_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000002', '00000012-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '2001:db8:0::1')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -885,7 +890,7 @@ func TestGetOrganizations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET organizations unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("%s: GET organizations unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -993,7 +998,115 @@ func TestGetOrganization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET organizations/%s unexpected status code: %d (%s)", ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET organizations/%s unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetOrganizationIPs(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		nameOrID       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser org IPs request with ID",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser org IPs request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org IPs request with ID",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org IPs request with name",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed org IPs request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed lookup of org IPs for org you do not belong to with ID",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed lookup of org IPs for org you do not belong to with name",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		ident, err := parseNameOrID(test.nameOrID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !ident.isValid() {
+			t.Fatal("service ID or name is not valid")
+		}
+
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations/"+ident.String()+"/ips", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET organizations/%s/ips unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)

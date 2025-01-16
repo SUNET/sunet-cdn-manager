@@ -1155,17 +1155,88 @@ func selectOrganizations(dbPool *pgxpool.Pool, ad authData) ([]organization, err
 	return organizations, nil
 }
 
+func isSuperuserOrOrgMember(ad authData, orgIdent identifier) bool {
+	if ad.Superuser {
+		return true
+	}
+
+	if orgIdent.isID() {
+		if ad.OrgID != nil && *ad.OrgID == *orgIdent.id {
+			return true
+		}
+	} else {
+		if ad.OrgName != nil && *ad.OrgName == *orgIdent.name {
+			return true
+		}
+	}
+
+	return false
+}
+
+func selectOrganizationIPs(dbPool *pgxpool.Pool, inputID string, ad authData) (orgAddresses, error) {
+	orgIdent, err := parseNameOrID(inputID)
+	if err != nil {
+		return orgAddresses{}, fmt.Errorf("unable to parse org name or id")
+	}
+
+	if !isSuperuserOrOrgMember(ad, orgIdent) {
+		return orgAddresses{}, errNotFound
+	}
+
+	var orgID pgtype.UUID
+	if !orgIdent.isID() {
+		err := dbPool.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", inputID).Scan(&orgID)
+		if err != nil {
+			return orgAddresses{}, fmt.Errorf("unable to SELECT organization by name: %w", err)
+		}
+	} else {
+		orgID = *orgIdent.id
+	}
+
+	oAddrs := orgAddresses{
+		OrgID:              orgID,
+		AllocatedAddresses: []orgAddress{},
+	}
+
+	rows, err := dbPool.Query(context.Background(), "SELECT address FROM org_ipv4_addresses WHERE org_id=$1", orgID)
+	if err != nil {
+		return orgAddresses{}, fmt.Errorf("unable to SELECT IPv4 addresses for organization by id: %w", err)
+	}
+
+	ipv4Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+	if err != nil {
+		return orgAddresses{}, fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
+	}
+
+	oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv4Addrs...)
+
+	rows, err = dbPool.Query(context.Background(), "SELECT address FROM org_ipv6_addresses WHERE org_id=$1", orgID)
+	if err != nil {
+		return orgAddresses{}, fmt.Errorf("unable to SELECT IPv6 addresses for organization by id: %w", err)
+	}
+
+	ipv6Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+	if err != nil {
+		return orgAddresses{}, fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
+	}
+
+	oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv6Addrs...)
+
+	return oAddrs, nil
+}
+
 func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (organization, error) {
 	o := organization{}
 	orgIdent, err := parseNameOrID(inputID)
 	if err != nil {
 		return organization{}, fmt.Errorf("unable to parse name or id")
 	}
-	if orgIdent.isID() {
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != *orgIdent.id) {
-			return organization{}, errNotFound
-		}
 
+	if !isSuperuserOrOrgMember(ad, orgIdent) {
+		return organization{}, errNotFound
+	}
+
+	if orgIdent.isID() {
 		var name string
 		err := dbPool.QueryRow(context.Background(), "SELECT name FROM organizations WHERE id=$1", *orgIdent.id).Scan(&name)
 		if err != nil {
@@ -1174,9 +1245,6 @@ func selectOrganizationByID(dbPool *pgxpool.Pool, inputID string, ad authData) (
 		o.Name = name
 		o.ID = *orgIdent.id
 	} else {
-		if !ad.Superuser && (ad.OrgName == nil || *ad.OrgName != inputID) {
-			return organization{}, errNotFound
-		}
 		var id pgtype.UUID
 		err := dbPool.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", inputID).Scan(&id)
 		if err != nil {
@@ -2126,6 +2194,32 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
+		huma.Get(api, "/v1/organizations/{organization}/ips", func(ctx context.Context, input *struct {
+			Organization string `path:"organization" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*organizationIPsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from organization GET handler")
+			}
+
+			oAddrs, err := selectOrganizationIPs(dbPool, input.Organization, ad)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				} else if errors.Is(err, errNotFound) {
+					return nil, huma.Error404NotFound("organization not found")
+				}
+				logger.Err(err).Msg("unable to query organization ips")
+				return nil, err
+			}
+			resp := &organizationIPsOutput{}
+			resp.Body = oAddrs
+			return resp, nil
+		})
+
 		// We want to set a custom DefaultStatus, that is why we are not just using huma.Post().
 		postOrganizationsPath := "/v1/organizations"
 		huma.Register(
@@ -2528,12 +2622,25 @@ type organization struct {
 	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
 }
 
+type orgAddresses struct {
+	OrgID              pgtype.UUID  `json:"org_id" doc:"ID of organization, UUIDv4"`
+	AllocatedAddresses []orgAddress `json:"allocated_addresses" doc:"list of addresses allocated to the org"`
+}
+
+type orgAddress struct {
+	Address netip.Addr `json:"address" doc:"IP address (IPv4 or IPv6)"`
+}
+
 type organizationOutput struct {
 	Body organization
 }
 
 type organizationsOutput struct {
 	Body []organization
+}
+
+type organizationIPsOutput struct {
+	Body orgAddresses
 }
 
 type service struct {
