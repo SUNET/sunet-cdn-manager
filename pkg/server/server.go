@@ -111,7 +111,7 @@ func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 
 		ad := adRef.(authData)
 
-		err := renderConsolePage(w, r, ad, "home", "SUNET CDN manager", components.Services{})
+		err := renderConsolePage(w, r, ad, "home", "SUNET CDN manager", []components.Service{})
 		if err != nil {
 			logger.Err(err).Msg("unable to render console page")
 			return
@@ -119,7 +119,7 @@ func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	}
 }
 
-func consoleServicesHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -134,7 +134,24 @@ func consoleServicesHandler(cookieStore *sessions.CookieStore) http.HandlerFunc 
 
 		ad := adRef.(authData)
 
-		err := renderConsolePage(w, r, ad, "services", "SUNET CDN manager: Services", components.Services{})
+		services, err := selectServices(dbPool, ad)
+		if err != nil {
+			if errors.Is(err, errForbidden) {
+				logger.Err(err).Msg("services console: not authorized to view page")
+				http.Error(w, "not allowed to view this page, you need to be a member of an organization", http.StatusForbidden)
+				return
+			}
+			logger.Err(err).Msg("services console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		cServices := []components.Service{}
+		for _, service := range services {
+			cServices = append(cServices, components.Service{Name: service.Name})
+		}
+
+		err = renderConsolePage(w, r, ad, "services", "SUNET CDN manager: Services", cServices)
 		if err != nil {
 			logger.Err(err).Msg("unable to render console page")
 			return
@@ -143,7 +160,7 @@ func consoleServicesHandler(cookieStore *sessions.CookieStore) http.HandlerFunc 
 }
 
 // Login page/form for browser based (not API) requests
-func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, pageType string, heading string, services components.Services) error {
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, pageType string, heading string, services []components.Service) error {
 	orgs := []string{}
 	if ad.OrgName != nil {
 		orgs = append(orgs, *ad.OrgName)
@@ -1130,6 +1147,86 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 	return userID, nil
 }
 
+func orgNameToIDTx(tx pgx.Tx, name string) (*pgtype.UUID, error) {
+	var orgID *pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id from orgs WHERE name=$1 FOR SHARE", name).Scan(&orgID)
+	if err != nil {
+		return nil, err
+	}
+	return orgID, nil
+}
+
+func userNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+	var orgID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id from users WHERE name=$1 FOR SHARE", name).Scan(&orgID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return orgID, nil
+}
+
+func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) error {
+	if !ad.Superuser {
+		return errForbidden
+	}
+
+	userIdent, err := parseNameOrID(nameOrID)
+	if err != nil {
+		return fmt.Errorf("unable to parse user name or ID for PATCH: %w", err)
+	}
+
+	var orgIdent identifier
+	// org can be nil when the user should have its org value unset
+	if org != nil {
+		orgIdent, err = parseNameOrID(*org)
+		if err != nil {
+			return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
+		}
+	}
+
+	var userID pgtype.UUID
+	var orgID *pgtype.UUID
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if org != nil {
+			if orgIdent.isID() {
+				orgID = orgIdent.id
+			} else {
+				orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+				if err != nil {
+					return fmt.Errorf("unable to resolve org name to id: %w", err)
+				}
+			}
+		}
+
+		if userIdent.isID() {
+			userID = *userIdent.id
+		} else {
+			userID, err = userNameToIDTx(tx, *userIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to resolve user name to id: %w", err)
+			}
+		}
+
+		if orgID == nil {
+			fmt.Printf("orgID IS NIL\n")
+		} else {
+			fmt.Printf("orgID IS NOT NIL\n")
+		}
+
+		_, err := tx.Exec(context.Background(), "UPDATE users SET org_id = $1 WHERE id = $2", orgID, userID)
+		if err != nil {
+			return fmt.Errorf("unable to update org for user id '%s' %w", userID, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("user PATCH transaction failed: %w", err)
+	}
+
+	return nil
+}
+
 func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
 	var rows pgx.Rows
 	var err error
@@ -1991,7 +2088,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/console", consoleHomeHandler(cookieStore))
-		r.Get("/console/services", consoleServicesHandler(cookieStore))
+		r.Get("/console/services", consoleServicesHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes
@@ -2085,7 +2182,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from user GET handler")
 			}
 
-			org, err := selectUserByID(dbPool, logger, input.User, ad)
+			user, err := selectUserByID(dbPool, logger, input.User, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to access resource")
@@ -2096,8 +2193,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, err
 			}
 			resp := &userOutput{}
-			resp.Body.ID = org.ID
-			resp.Body.Name = org.Name
+			resp.Body.ID = user.ID
+			resp.Body.Name = user.Name
 			return resp, nil
 		})
 
@@ -2142,6 +2239,33 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return resp, nil
 			},
 		)
+
+		huma.Patch(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
+			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
+			Body struct {
+				Org *string `json:"org" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+			}
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from user PATCH handler")
+			}
+
+			err := patchUser(dbPool, ad, input.User, input.Body.Org)
+			if err != nil {
+				if errors.Is(err, errForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to access resource")
+				} else if errors.Is(err, errNotFound) {
+					return nil, huma.Error404NotFound("user not found")
+				}
+				logger.Err(err).Msg("unable to patch user")
+				return nil, err
+			}
+			return nil, nil
+		})
 
 		huma.Get(api, "/v1/orgs", func(ctx context.Context, _ *struct{},
 		) (*orgsOutput, error) {

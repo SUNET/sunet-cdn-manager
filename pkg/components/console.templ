@@ -1,6 +1,6 @@
 package components
 
-templ ConsolePage(pageType string, heading string, username string, orgs []string, isSuperuser bool, services Services) {
+templ ConsolePage(pageType string, heading string, username string, orgs []string, isSuperuser bool, services []Service) {
 	@Logout()
 	@OrganizationSelector(orgs)
 	@NavBar()
@@ -49,7 +49,17 @@ templ NavBar() {
 	</div>
 }
 
-templ ServicesContent(cr Services) {
+templ ServicesContent(services []Service) {
+	if len(services) == 0 {
+		<div>No services created</div>
+	} else {
+		<div>Services:</div>
+		<ul>
+			for _, service := range services {
+				<li>{ service.Name }</li>
+			}
+		</ul>
+	}
 	<form method="post" action="/console/services">
 		@CSRF()
 		<label for="name">Service name:</label>

@@ -127,6 +127,10 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// org1
 		"INSERT INTO org_ipv4_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000001', '00000011-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '192.0.2.1')",
 		"INSERT INTO org_ipv6_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000002', '00000012-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '2001:db8:0::1')",
+
+		// Users
+		// No org, local user
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'patch-user-1')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -818,6 +822,110 @@ func TestPostUsers(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Fatalf("POST users unexpected status code: %d (%s)", resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestPatchUser(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description        string
+		username           string
+		password           string
+		expectedStatus     int
+		addedUser          string
+		addedPassword      string
+		userIDorName       string
+		roleIDorName       string
+		patchedOrgIDorName *string
+	}{
+		{
+			description:        "successful superuser request with IDs",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			addedUser:          "admin-created-patch-user-1",
+			addedPassword:      "admin-created-password-1",
+			roleIDorName:       "00000005-0000-0000-0000-000000000002",
+			userIDorName:       "00000014-0000-0000-0000-000000000001",
+			patchedOrgIDorName: Ptr("00000002-0000-0000-0000-000000000001"),
+		},
+		{
+			description:        "successful superuser request with names",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			addedUser:          "admin-created-patch-user-2",
+			addedPassword:      "admin-created-password-2",
+			roleIDorName:       "user",
+			userIDorName:       "patch-user-1",
+			patchedOrgIDorName: Ptr("org2"),
+		},
+		{
+			description:        "successful superuser request with names, null org",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			addedUser:          "admin-created-patch-user-2",
+			addedPassword:      "admin-created-password-2",
+			roleIDorName:       "user",
+			userIDorName:       "patch-user-1",
+			patchedOrgIDorName: nil,
+		},
+	}
+
+	for _, test := range tests {
+		patchUser := struct {
+			Org *string `json:"org"`
+		}{
+			Org: test.patchedOrgIDorName,
+		}
+
+		b, err := json.Marshal(patchUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		fmt.Println(string(b))
+
+		req, err := http.NewRequest("PATCH", ts.URL+"/api/v1/users/"+test.userIDorName, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("PATCH users unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
