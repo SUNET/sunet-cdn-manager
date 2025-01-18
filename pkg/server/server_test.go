@@ -53,20 +53,20 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	// use static UUIDs to get known contents for testing
 	testData := []string{
 		// Organizations
-		"INSERT INTO organizations (id, name) VALUES ('00000002-0000-0000-0000-000000000001', 'org1')",
-		"INSERT INTO organizations (id, name) VALUES ('00000002-0000-0000-0000-000000000002', 'org2')",
-		"INSERT INTO organizations (id, name) VALUES ('00000002-0000-0000-0000-000000000003', 'org3')",
+		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000001', 'org1')",
+		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000002', 'org2')",
+		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000003', 'org3')",
 
 		// Services
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1' FROM organizations WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2' FROM organizations WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3' FROM organizations WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1' FROM organizations WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2' FROM organizations WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3' FROM organizations WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1' FROM organizations WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2' FROM organizations WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3' FROM organizations WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3' FROM orgs WHERE name='org3'",
 
 		// Service versions
 		// org1, last version is active
@@ -188,7 +188,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			var authProviderID pgtype.UUID
 
 			if localUser.orgName != "" {
-				err := tx.QueryRow(context.Background(), "SELECT id FROM organizations WHERE name=$1", localUser.orgName).Scan(&orgID)
+				err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1", localUser.orgName).Scan(&orgID)
 				if err != nil {
 					return err
 				}
@@ -543,13 +543,13 @@ func TestGetUsers(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "successful organization request",
+			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request, bad password",
+			description:    "failed org request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
@@ -779,15 +779,15 @@ func TestPostUsers(t *testing.T) {
 
 	for _, test := range tests {
 		newUser := struct {
-			Name         string `json:"name"`
-			Password     string `json:"password"`
-			Role         string `json:"role"`
-			Organization string `json:"organization"`
+			Name     string `json:"name"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+			Org      string `json:"org"`
 		}{
-			Name:         test.addedUser,
-			Password:     test.addedPassword,
-			Organization: test.orgIDorName,
-			Role:         test.roleIDorName,
+			Name:     test.addedUser,
+			Password: test.addedPassword,
+			Org:      test.orgIDorName,
+			Role:     test.roleIDorName,
 		}
 
 		b, err := json.Marshal(newUser)
@@ -858,13 +858,13 @@ func TestGetOrganizations(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "successful organization request",
+			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request, bad password",
+			description:    "failed org request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
@@ -872,7 +872,7 @@ func TestGetOrganizations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -890,7 +890,7 @@ func TestGetOrganizations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET organizations unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			t.Fatalf("%s: GET orgs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -934,35 +934,35 @@ func TestGetOrganization(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request with ID",
+			description:    "successful org request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request with name",
+			description:    "successful org request with name",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request, bad password",
+			description:    "failed org request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "failed lookup of organization you do not belong to with ID",
+			description:    "failed lookup of org you do not belong to with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed lookup of organization you do not belong to with name",
+			description:    "failed lookup of org you do not belong to with name",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "org1",
@@ -980,7 +980,7 @@ func TestGetOrganization(t *testing.T) {
 			t.Fatal("service ID or name is not valid")
 		}
 
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations/"+ident.String(), nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+ident.String(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -998,7 +998,7 @@ func TestGetOrganization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET organizations/%s unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1088,7 +1088,7 @@ func TestGetOrganizationIPs(t *testing.T) {
 			t.Fatal("service ID or name is not valid")
 		}
 
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/organizations/"+ident.String()+"/ips", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+ident.String()+"/ips", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1106,7 +1106,7 @@ func TestGetOrganizationIPs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET organizations/%s/ips unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET orgs/%s/ips unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1186,7 +1186,7 @@ func TestPostOrganizations(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/organizations", r)
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs", r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1206,7 +1206,7 @@ func TestPostOrganizations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("POST organizations unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("POST orgs unexpected status code: %d (%s)", resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1241,19 +1241,19 @@ func TestGetServices(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request",
+			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request, bad auth",
+			description:    "failed org request, bad auth",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "failed user request (not assigned to organization)",
+			description:    "failed user request (not assigned to org)",
 			username:       "username3-no-org",
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
@@ -1323,42 +1323,42 @@ func TestGetService(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request with ID",
+			description:    "successful org request with ID",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request with name",
+			description:    "successful org request with name",
 			username:       "username1",
 			password:       "password1",
 			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request for service belonging to other organization with ID",
+			description:    "failed org request for service belonging to other org with ID",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed organization request for service belonging to other organization with name",
+			description:    "failed org request for service belonging to other org with name",
 			username:       "username2",
 			password:       "password2",
 			nameOrID:       "org1-service1",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed organization request not assigned to organization with ID",
+			description:    "failed org request not assigned to org with ID",
 			username:       "username3-no-org",
 			password:       "password3",
 			nameOrID:       "00000003-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed organization request not assigned to organization with name",
+			description:    "failed org request not assigned to org with name",
 			username:       "username3-no-org",
 			password:       "password3",
 			nameOrID:       "org1-service1",
@@ -1426,7 +1426,7 @@ func TestPostServices(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		organization   string
+		org            string
 	}{
 		{
 			description:    "successful superuser request",
@@ -1434,7 +1434,7 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-admin-service",
-			organization:   "org1",
+			org:            "org1",
 		},
 		{
 			description:    "successful superuser request with name right at limit",
@@ -1442,7 +1442,7 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			newService:     strings.Repeat("a", 63),
-			organization:   "org1",
+			org:            "org1",
 		},
 		{
 			description:    "failed superuser request with name above limit",
@@ -1450,7 +1450,7 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     strings.Repeat("a", 64),
-			organization:   "org1",
+			org:            "org1",
 		},
 		{
 			description:    "failed superuser request with name below limit",
@@ -1458,47 +1458,47 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "",
-			organization:   "org1",
+			org:            "org1",
 		},
 		{
-			description:    "failed superuser request without organization",
+			description:    "failed superuser request without org",
 			username:       "admin",
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-admin-service",
 		},
 		{
-			description:    "successful organization request (organization based on auth)",
+			description:    "successful org request (org based on auth)",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-username1-service1",
 		},
 		{
-			description:    "failed organization request with duplicate service name",
+			description:    "failed org request with duplicate service name",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusConflict,
 			newService:     "new-username1-service1",
 		},
 		{
-			description:    "successful organization request with organization matching auth",
+			description:    "successful org request with org matching auth",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusCreated,
 			newService:     "new-username1-service2",
-			organization:   "org1",
+			org:            "org1",
 		},
 		{
-			description:    "failed organization request with organization not matching auth",
+			description:    "failed org request with org not matching auth",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusForbidden,
 			newService:     "new-username1-service3",
-			organization:   "org2",
+			org:            "org2",
 		},
 		{
-			description:    "failed organization request not assigned to organization",
+			description:    "failed org request not assigned to org",
 			username:       "username3-no-org",
 			password:       "password3",
 			newService:     "new-username3-service1",
@@ -1508,14 +1508,14 @@ func TestPostServices(t *testing.T) {
 
 	for _, test := range tests {
 		newService := struct {
-			Name         string  `json:"name"`
-			Organization *string `json:"organization,omitempty"`
+			Name string  `json:"name"`
+			Org  *string `json:"org,omitempty"`
 		}{
 			Name: test.newService,
 		}
 
-		if test.organization != "" {
-			newService.Organization = &test.organization
+		if test.org != "" {
+			newService.Org = &test.org
 		}
 
 		b, err := json.Marshal(newService)
@@ -1571,7 +1571,7 @@ func TestGetServiceVersions(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		organization   string
+		org            string
 	}{
 		{
 			description:    "successful superuser request",
@@ -1580,13 +1580,13 @@ func TestGetServiceVersions(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful organization request",
+			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request not assigned to organization",
+			description:    "failed org request not assigned to org",
 			username:       "username3-no-org",
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
@@ -1640,19 +1640,19 @@ func TestPostServiceVersion(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		organization   string
+		org            string
 		serviceID      string
 		domains        []string
 		origins        []origin
 		active         bool
 	}{
 		{
-			description:  "successful superuser request",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-000000000001",
-			organization: "org1",
-			domains:      []string{"example.com", "example.se"},
+			description: "successful superuser request",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
+			org:         "org1",
+			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1669,12 +1669,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request with too many domains",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-000000000001",
-			organization: "org1",
-			domains:      []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
+			description: "failed superuser request with too many domains",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
+			org:         "org1",
+			domains:     []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1691,12 +1691,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request, too long Host in origin list",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-000000000001",
-			organization: "org1",
-			domains:      []string{"example.com", "example.se"},
+			description: "failed superuser request, too long Host in origin list",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
+			org:         "org1",
+			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: strings.Repeat("a", 254),
@@ -1713,12 +1713,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request, too long domain in domains list",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-000000000001",
-			organization: "org1",
-			domains:      []string{strings.Repeat("a", 254), "example.se"},
+			description: "failed superuser request, too long domain in domains list",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-000000000001",
+			org:         "org1",
+			domains:     []string{strings.Repeat("a", 254), "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1735,12 +1735,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request with invalid uuid (too long)",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-0000000000001",
-			organization: "org1",
-			domains:      []string{"example.com", "example.se"},
+			description: "failed superuser request with invalid uuid (too long)",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-0000000000001",
+			org:         "org1",
+			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1757,12 +1757,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request with invalid uuid (too short)",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "00000003-0000-0000-0000-00000000001",
-			organization: "org1",
-			domains:      []string{"example.com", "example.se"},
+			description: "failed superuser request with invalid uuid (too short)",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "00000003-0000-0000-0000-00000000001",
+			org:         "org1",
+			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1779,12 +1779,12 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description:  "failed superuser request with invalid uuid (not a UUID)",
-			username:     "admin",
-			password:     "adminpass1",
-			serviceID:    "junk",
-			organization: "org1",
-			domains:      []string{"example.com", "example.se"},
+			description: "failed superuser request with invalid uuid (not a UUID)",
+			username:    "admin",
+			password:    "adminpass1",
+			serviceID:   "junk",
+			org:         "org1",
+			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -1801,7 +1801,7 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description: "successful organization request",
+			description: "successful org request",
 			username:    "username1",
 			password:    "password1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
@@ -1822,7 +1822,7 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description: "failed organization request not assigned to organization",
+			description: "failed org request not assigned to org",
 			username:    "username3-no-org",
 			password:    "password3",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
@@ -1846,15 +1846,15 @@ func TestPostServiceVersion(t *testing.T) {
 
 	for _, test := range tests {
 		newServiceVersion := struct {
-			ServiceID    string   `json:"service_id"`
-			Organization string   `json:"organization,omitempty"`
-			Domains      []string `json:"domains"`
-			Origins      []origin `json:"origins"`
+			ServiceID string   `json:"service_id"`
+			Org       string   `json:"org,omitempty"`
+			Domains   []string `json:"domains"`
+			Origins   []origin `json:"origins"`
 		}{
-			ServiceID:    test.serviceID,
-			Organization: test.organization,
-			Domains:      test.domains,
-			Origins:      test.origins,
+			ServiceID: test.serviceID,
+			Org:       test.org,
+			Domains:   test.domains,
+			Origins:   test.origins,
 		}
 
 		b, err := json.Marshal(newServiceVersion)
@@ -1925,13 +1925,13 @@ func TestGetVcls(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			description:    "successful organization request",
+			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed organization request, bad password",
+			description:    "failed org request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
 			expectedStatus: http.StatusUnauthorized,

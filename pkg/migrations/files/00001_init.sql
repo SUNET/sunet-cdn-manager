@@ -1,5 +1,5 @@
 -- +goose up
-CREATE TABLE organizations (
+CREATE TABLE orgs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
@@ -25,7 +25,7 @@ CREATE TABLE org_ipv4_addresses (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ipv4_networks(id),
-    org_id uuid REFERENCES organizations(id),
+    org_id uuid REFERENCES orgs(id),
     address inet UNIQUE NOT NULL CONSTRAINT valid_v4 CHECK(family(address) = 4 AND masklen(address) = 32)
 );
 
@@ -33,7 +33,7 @@ CREATE TABLE org_ipv6_addresses (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ipv6_networks(id),
-    org_id uuid REFERENCES organizations(id),
+    org_id uuid REFERENCES orgs(id),
     address inet UNIQUE NOT NULL CONSTRAINT valid_v6 CHECK(family(address) = 6 AND masklen(address) = 128)
 );
 
@@ -53,7 +53,7 @@ CREATE TABLE auth_providers (
 CREATE TABLE users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    org_id uuid REFERENCES organizations(id),
+    org_id uuid REFERENCES orgs(id),
     role_id uuid NOT NULL REFERENCES roles(id),
     auth_provider_id uuid NOT NULL references auth_providers(id),
     name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
@@ -98,7 +98,7 @@ CREATE TABLE user_argon2keys (
 CREATE TABLE services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    org_id uuid NOT NULL REFERENCES organizations(id),
+    org_id uuid NOT NULL REFERENCES orgs(id),
     name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
     version_counter BIGINT DEFAULT 0 NOT NULL,
     UNIQUE(org_id, name)

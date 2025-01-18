@@ -8,7 +8,7 @@ package components
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-func ConsolePage(pageType string, heading string, username string, organizations []string, isSuperuser bool, services Services) templ.Component {
+func ConsolePage(pageType string, heading string, username string, orgs []string, isSuperuser bool, services Services) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -33,7 +33,7 @@ func ConsolePage(pageType string, heading string, username string, organizations
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = OrganizationSelector(organizations).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = OrganizationSelector(orgs).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -134,7 +134,7 @@ func Logout() templ.Component {
 	})
 }
 
-func OrganizationSelector(organizations []string) templ.Component {
+func OrganizationSelector(orgs []string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -163,11 +163,11 @@ func OrganizationSelector(organizations []string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<label for=\"organizations\">Organization:</label> <select name=\"organizations\" id=\"organizations\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<label for=\"orgs\">Organization:</label> <select name=\"orgs\" id=\"orgs\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if len(organizations) < 2 {
+		if len(orgs) < 2 {
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(" disabled")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -177,13 +177,13 @@ func OrganizationSelector(organizations []string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if len(organizations) == 0 {
+		if len(orgs) == 0 {
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<option value=\"undefined\">undefined</option>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			for _, org := range organizations {
+			for _, org := range orgs {
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString("<option value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
