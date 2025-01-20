@@ -1002,7 +1002,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		}
 
 		var userID pgtype.UUID
-		err := dbPool.QueryRow(context.Background(), "SELECT id, org_id, role_id, superuser FROM users WHERE name=$1", inputID).Scan(&userID, &orgID, &roleID)
+		err := dbPool.QueryRow(context.Background(), "SELECT id, org_id, role_id FROM users WHERE name=$1", inputID).Scan(&userID, &orgID, &roleID)
 		if err != nil {
 			logger.Err(err).Str("id", inputID).Msg("unable to SELECT user by name")
 			return user{}, fmt.Errorf("unable to SELECT user by name")
@@ -1045,23 +1045,106 @@ func passwordToArgon2(password string) (argon2Data, error) {
 	}, nil
 }
 
-func insertUserWithArgon2Tx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
-	var userID, keyID pgtype.UUID
-
-	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM auth_providers WHERE name=$4)) RETURNING id", name, orgID, roleID, "local").Scan(&userID)
+func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
+	var keyID pgtype.UUID
+	err := tx.QueryRow(
+		context.Background(),
+		"INSERT INTO user_argon2keys (key, salt, time, memory, threads, tag_size, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (user_id) DO UPDATE SET key = $1, salt = $2, time = $3, memory = $4, threads = $5, tag_size = $6 RETURNING id",
+		a2Data.key,
+		a2Data.salt,
+		a2Data.argonTime,
+		a2Data.argonMemory,
+		a2Data.argonThreads,
+		a2Data.argonTagSize,
+		userID,
+	).Scan(&keyID)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user with IDs: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 	}
 
-	err = tx.QueryRow(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", userID, a2Data.key, a2Data.salt, a2Data.argonTime, a2Data.argonMemory, a2Data.argonThreads, a2Data.argonTagSize).Scan(&keyID)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to INSERT user argon2 data with IDs: %w", err)
-	}
-
-	return userID, nil
+	return keyID, nil
 }
 
-func insertUser(dbPool *pgxpool.Pool, name string, password string, role string, org string, ad authData) (pgtype.UUID, error) {
+func setLocalPassword(ad authData, dbPool *pgxpool.Pool, user string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+	userIdent, err := parseNameOrID(user)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("unable to parse user for local-password: %w", err)
+	}
+
+	// While we could potentially do the argon2 operation inside the
+	// transaction below after we know the user is actually allowed to
+	// change the password it feels wrong to keep a transaction open
+	// longer than necessary. So do the initial hashing here. We still do
+	// another round of hashing when testing the oldPassword below but in
+	// that case it probably makes sense to know the database is in a
+	// consistent state (via FOR SHARE selects) during the operation.
+	a2Data, err := passwordToArgon2(newPassword)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("unable to generate argon2 data from newPassword: %w", err)
+	}
+
+	var keyID pgtype.UUID
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var userID pgtype.UUID
+		var userName string
+		if userIdent.isID() {
+			userID = *userIdent.id
+			userName, err = userIDToNameTx(tx, *userIdent.id)
+			if err != nil {
+				return fmt.Errorf("unable to resolve ID to username: %w", err)
+			}
+		} else {
+			userName = *userIdent.name
+			userID, err = userNameToIDTx(tx, *userIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to resolve username to ID: %w", err)
+			}
+		}
+
+		// We only allow the setting of passwords for users using the "local" auth provider
+		var authProviderName string
+		err = tx.QueryRow(context.Background(), "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
+		if err != nil {
+			return fmt.Errorf("unable to look up name of auth provider for user with id '%s'", userID)
+		}
+
+		if authProviderName != "local" {
+			return fmt.Errorf("ignoring local-password request for non-local user")
+		}
+
+		// A superuser can change any password and a normal user can only change their own password
+		if !ad.Superuser || ad.UserID != userID {
+			return errForbidden
+		}
+
+		// A normal user most supply the old password
+		if !ad.Superuser && oldPassword == "" {
+			return errors.New("old password required for non-superusers")
+		}
+
+		// ... and finally, verify that the password supplied by a normal user actually is correct
+		if !ad.Superuser {
+			_, err := dbUserLogin(dbPool, userName, oldPassword)
+			if err != nil {
+				return fmt.Errorf("unable to verify old password is valid: %w", err)
+			}
+		}
+
+		keyID, err = upsertArgon2Tx(tx, userID, a2Data)
+		if err != nil {
+			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("setLocalPassword: transaction failed: %w", err)
+	}
+
+	return keyID, nil
+}
+
+func createUser(dbPool *pgxpool.Pool, name string, role string, org string, ad authData) (pgtype.UUID, error) {
 	if !ad.Superuser {
 		return pgtype.UUID{}, errForbidden
 	}
@@ -1076,93 +1159,100 @@ func insertUser(dbPool *pgxpool.Pool, name string, password string, role string,
 		return pgtype.UUID{}, fmt.Errorf("unable to parse role for user INSERT: %w", err)
 	}
 
-	a2Data, err := passwordToArgon2(password)
+	var userID, roleID pgtype.UUID
+	var orgID *pgtype.UUID
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if !orgIdent.isID() {
+			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+		} else {
+			orgID = orgIdent.id
+		}
+
+		if !roleIdent.isID() {
+			roleID, err = roleNameToIDTx(tx, *roleIdent.name)
+		} else {
+			roleID = *roleIdent.id
+		}
+
+		authProviderID, err := authProviderNameToIDTx(tx, "local")
+		if err != nil {
+			return fmt.Errorf("unble to resolve authProvider name to ID: %w", err)
+		}
+
+		userID, err = insertUserTx(tx, name, orgID, roleID, authProviderID)
+		if err != nil {
+			return fmt.Errorf("createUser: INSERT failed: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to create password data for user INSERT: %w", err)
-	}
-
-	var userID pgtype.UUID
-	// If we already have all the IDs needed just insert them via VALUES
-	if orgIdent.isID() && roleIdent.isID() {
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			userID, err = insertUserWithArgon2Tx(tx, name, orgIdent.id, *roleIdent.id, a2Data)
-			if err != nil {
-				return fmt.Errorf("unable to INSERT user with IDs: %w", err)
-			}
-
-			return nil
-		})
-		if err != nil {
-			return pgtype.UUID{}, fmt.Errorf("user with IDs INSERT transaction failed: %w", err)
-		}
-	} else {
-		var roleID pgtype.UUID
-		var orgID pgtype.UUID
-		// Fetch the missing IDs based on names instead where necessary
-		// Use single transaction with FOR SHARE selects to make sure
-		// the INSERT uses consistent data. To avoid deadlocks make
-		// sure all code performans FOR SHARE selects in the same
-		// order (alphabetical).
-		err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			if !orgIdent.isID() {
-				err := tx.QueryRow(
-					context.Background(),
-					`SELECT id FROM orgs WHERE name=$1 FOR SHARE`, *orgIdent.name,
-				).Scan(
-					&orgID,
-				)
-				if err != nil {
-					return fmt.Errorf("unable to lookup organization ID from name for user INSERT: %w", err)
-				}
-			} else {
-				orgID = *orgIdent.id
-			}
-
-			if !roleIdent.isID() {
-				err := tx.QueryRow(
-					context.Background(),
-					`SELECT id FROM roles WHERE name=$1 FOR SHARE`, *roleIdent.name,
-				).Scan(
-					&roleID,
-				)
-				if err != nil {
-					return fmt.Errorf("unable to lookup role ID from name for user INSERT: %w", err)
-				}
-			} else {
-				roleID = *roleIdent.id
-			}
-
-			userID, err = insertUserWithArgon2Tx(tx, name, &orgID, roleID, a2Data)
-			if err != nil {
-				return fmt.Errorf("unable to INSERT user after looking up IDs: %w", err)
-			}
-
-			return nil
-		})
-		if err != nil {
-			return pgtype.UUID{}, fmt.Errorf("user INSERT transaction failed: %w", err)
-		}
+		return pgtype.UUID{}, fmt.Errorf("createUser: transaction failed: %w", err)
 	}
 
 	return userID, nil
 }
 
+func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
+	var userID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("INSERT user failed: %w", err)
+	}
+
+	return userID, nil
+}
+
+// Helpers for converting names to IDs and back.
+// The use of FOR SHARE in selects is to make sure later operations in the
+// already created transaction can know that nothing learned from these selects
+// has changed under their feet at the time of a write. FOR SHARE should be
+// fairly safe since multiple readers can hold them at once, but we need to be
+// careful to not introduce deadlocks if contending with FOR UPDATE calls etc.
 func orgNameToIDTx(tx pgx.Tx, name string) (*pgtype.UUID, error) {
 	var orgID *pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id from orgs WHERE name=$1 FOR SHARE", name).Scan(&orgID)
+	err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1 FOR SHARE", name).Scan(&orgID)
 	if err != nil {
 		return nil, err
 	}
 	return orgID, nil
 }
 
-func userNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
-	var orgID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id from users WHERE name=$1 FOR SHARE", name).Scan(&orgID)
+func roleNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+	var roleID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id FROM roles WHERE name=$1 FOR SHARE", name).Scan(&roleID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
-	return orgID, nil
+	return roleID, nil
+}
+
+func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+	var authProviderID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id FROM auth_providers WHERE name=$1 FOR SHARE", name).Scan(&authProviderID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return authProviderID, nil
+}
+
+func userNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+	var userID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id from users WHERE name=$1 FOR SHARE", name).Scan(&userID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return userID, nil
+}
+
+func userIDToNameTx(tx pgx.Tx, userID pgtype.UUID) (string, error) {
+	var name string
+	err := tx.QueryRow(context.Background(), "SELECT name from users WHERE id=$1 FOR SHARE", userID).Scan(&name)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) error {
@@ -1205,12 +1295,6 @@ func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) 
 			if err != nil {
 				return fmt.Errorf("unable to resolve user name to id: %w", err)
 			}
-		}
-
-		if orgID == nil {
-			fmt.Printf("orgID IS NIL\n")
-		} else {
-			fmt.Printf("orgID IS NOT NIL\n")
 		}
 
 		_, err := tx.Exec(context.Background(), "UPDATE users SET org_id = $1 WHERE id = $2", orgID, userID)
@@ -2211,10 +2295,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name     string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
-					Role     string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-					Org      string `json:"org" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-					Password string `json:"password" example:"verysecretpassword" doc:"The user password" minLength:"15" maxLength:"64"`
+					Name string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
+					Role string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+					Org  string `json:"org" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				}
 			},
 			) (*userOutput, error) {
@@ -2225,7 +2308,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				id, err := insertUser(dbPool, input.Body.Name, input.Body.Password, input.Body.Role, input.Body.Org, ad)
+				id, err := createUser(dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
 				if err != nil {
 					if errors.Is(err, errForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
@@ -2239,6 +2322,26 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return resp, nil
 			},
 		)
+
+		huma.Put(api, "/v1/users/{user}/local-password", func(ctx context.Context, input *struct {
+			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
+			Body struct {
+				OldPassword string `json:"old" example:"verysecretpassword" doc:"The previous local password, not needed if superuser" minLength:"15" maxLength:"64"`
+				NewPassword string `json:"new" example:"verysecretpassword" doc:"The new user password" minLength:"15" maxLength:"64"`
+			}
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from local-password PUT handler")
+			}
+
+			_, err := setLocalPassword(ad, dbPool, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			if err != nil {
+				return nil, fmt.Errorf("unable to set password: %w", err)
+			}
+			return nil, nil
+		})
 
 		huma.Patch(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
 			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
@@ -2976,16 +3079,26 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
 		}
 
+		var localAuthProviderID pgtype.UUID
 		for _, authProviderName := range authProviderNames {
-			_, err = tx.Exec(context.Background(), "INSERT INTO auth_providers (name) VALUES ($1)", authProviderName)
+			var authProviderID pgtype.UUID
+			err = tx.QueryRow(context.Background(), "INSERT INTO auth_providers (name) VALUES ($1) RETURNING id", authProviderName).Scan(&authProviderID)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT auth provider '%s': %w", authProviderName, err)
 			}
+			if authProviderName == "local" {
+				localAuthProviderID = authProviderID
+			}
 		}
 
-		userID, err := insertUserWithArgon2Tx(tx, u.Name, nil, adminRoleID, a2Data)
+		userID, err := insertUserTx(tx, u.Name, nil, adminRoleID, localAuthProviderID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user: %w", err)
+		}
+
+		_, err = upsertArgon2Tx(tx, userID, a2Data)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial user password: %w", err)
 		}
 
 		u.ID = userID

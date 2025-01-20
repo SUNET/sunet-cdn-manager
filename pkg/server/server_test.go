@@ -179,6 +179,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				id:           "00000006-0000-0000-0000-000000000004",
 				authProvider: "local",
 			},
+			{
+				name:         "username4-no-pw",
+				password:     "",
+				role:         "user",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000005",
+				authProvider: "local",
+			},
 		}
 
 		for _, localUser := range localUsers {
@@ -208,23 +216,26 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				return err
 			}
 
-			// Generate 16 byte (128 bit) salt as
-			// recommended for argon2 in RFC 9106
-			salt := make([]byte, 16)
-			_, err = rand.Read(salt)
-			if err != nil {
-				return err
-			}
+			// Set a local password for the user if not empty
+			if localUser.password != "" {
+				// Generate 16 byte (128 bit) salt as
+				// recommended for argon2 in RFC 9106
+				salt := make([]byte, 16)
+				_, err = rand.Read(salt)
+				if err != nil {
+					return err
+				}
 
-			timeSize := uint32(1)
-			memorySize := uint32(64 * 1024)
-			threads := uint8(4)
-			tagSize := uint32(32)
+				timeSize := uint32(1)
+				memorySize := uint32(64 * 1024)
+				threads := uint8(4)
+				tagSize := uint32(32)
 
-			key := argon2.IDKey([]byte(localUser.password), salt, timeSize, memorySize, threads, tagSize)
-			_, err = tx.Exec(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7)", userID, key, salt, timeSize, memorySize, threads, tagSize)
-			if err != nil {
-				return err
+				key := argon2.IDKey([]byte(localUser.password), salt, timeSize, memorySize, threads, tagSize)
+				_, err = tx.Exec(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7)", userID, key, salt, timeSize, memorySize, threads, tagSize)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -553,9 +564,15 @@ func TestGetUsers(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "failed org request, bad password",
+			description:    "failed user request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
 			expectedStatus: http.StatusUnauthorized,
 		},
 	}
@@ -644,6 +661,13 @@ func TestGetUser(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			nameOrID:       "username4-no-pw",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
 			description:    "failed lookup of another user with ID",
 			username:       "username2",
 			password:       "password2",
@@ -715,7 +739,6 @@ func TestPostUsers(t *testing.T) {
 		password       string
 		expectedStatus int
 		addedUser      string
-		addedPassword  string
 		roleIDorName   string
 		orgIDorName    string
 	}{
@@ -725,7 +748,6 @@ func TestPostUsers(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-1",
-			addedPassword:  "admin-created-password-1",
 			roleIDorName:   "00000005-0000-0000-0000-000000000002",
 			orgIDorName:    "00000002-0000-0000-0000-000000000001",
 		},
@@ -735,7 +757,6 @@ func TestPostUsers(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-2",
-			addedPassword:  "admin-created-password-2",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
@@ -745,7 +766,6 @@ func TestPostUsers(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			addedUser:      strings.Repeat("a", 63),
-			addedPassword:  "admin-created-password-2",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
@@ -755,7 +775,6 @@ func TestPostUsers(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      strings.Repeat("a", 64),
-			addedPassword:  "admin-created-password-2",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
@@ -765,7 +784,6 @@ func TestPostUsers(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      "",
-			addedPassword:  "admin-created-password-2",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
 		},
@@ -774,7 +792,6 @@ func TestPostUsers(t *testing.T) {
 			username:       "username1",
 			password:       "password1",
 			addedUser:      "user-created-user-1",
-			addedPassword:  "user-created-password-1",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
 			expectedStatus: http.StatusForbidden,
@@ -783,15 +800,13 @@ func TestPostUsers(t *testing.T) {
 
 	for _, test := range tests {
 		newUser := struct {
-			Name     string `json:"name"`
-			Password string `json:"password"`
-			Role     string `json:"role"`
-			Org      string `json:"org"`
+			Name string `json:"name"`
+			Role string `json:"role"`
+			Org  string `json:"org"`
 		}{
-			Name:     test.addedUser,
-			Password: test.addedPassword,
-			Org:      test.orgIDorName,
-			Role:     test.roleIDorName,
+			Name: test.addedUser,
+			Org:  test.orgIDorName,
+			Role: test.roleIDorName,
 		}
 
 		b, err := json.Marshal(newUser)
@@ -937,7 +952,7 @@ func TestPatchUser(t *testing.T) {
 	}
 }
 
-func TestGetOrganizations(t *testing.T) {
+func TestGetOrgs(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -1010,7 +1025,7 @@ func TestGetOrganizations(t *testing.T) {
 	}
 }
 
-func TestGetOrganization(t *testing.T) {
+func TestGetOrg(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -1118,7 +1133,7 @@ func TestGetOrganization(t *testing.T) {
 	}
 }
 
-func TestGetOrganizationIPs(t *testing.T) {
+func TestGetOrgIPs(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()

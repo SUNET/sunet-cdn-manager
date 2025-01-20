@@ -85,14 +85,13 @@ CREATE TABLE gorilla_csrf_keys (
 CREATE TABLE user_argon2keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    user_id uuid NOT NULL REFERENCES users(id),
+    user_id uuid UNIQUE NOT NULL REFERENCES users(id),
     key bytea NOT NULL CONSTRAINT non_empty_key CHECK(length(key)>0),
     salt bytea NOT NULL CONSTRAINT non_empty_salt CHECK(length(salt)>0),
     time bigint NOT NULL CONSTRAINT uint32_time CHECK(time >= 0 AND time <= 4294967295),
     memory bigint NOT NULL CONSTRAINT uint32_memory CHECK(memory >= 0 AND memory <= 4294967295),
     threads bigint NOT NULL CONSTRAINT uint8_threads CHECK(threads >= 0 AND threads <= 255),
-    tag_size bigint NOT NULL CONSTRAINT uint32_tag_sizie CHECK(tag_size >= 0 AND tag_size <= 4294967295),
-    UNIQUE(user_id, key, salt)
+    tag_size bigint NOT NULL CONSTRAINT uint32_tag_sizie CHECK(tag_size >= 0 AND tag_size <= 4294967295)
 );
 
 CREATE TABLE services (
