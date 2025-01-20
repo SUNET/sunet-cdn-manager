@@ -952,13 +952,13 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id ORDER BY users.time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name, org_id, role_id FROM users ORDER BY name")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT users.id, users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1 ORDER BY users.time_created", ad.UserID)
+		rows, err = dbPool.Query(context.Background(), "SELECT id, name, org_id, role_id FROM users WHERE users.id=$1 ORDER BY name", ad.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -982,15 +982,15 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		return user{}, fmt.Errorf("unable to parse name or id")
 	}
 
-	var roleName string
-	var superuser bool
+	var roleID pgtype.UUID
+	var orgID *pgtype.UUID
 	if userIdent.isID() {
 		if !ad.Superuser && (ad.UserID != *userIdent.id) {
 			return user{}, errNotFound
 		}
 
 		var userName string
-		err := dbPool.QueryRow(context.Background(), "SELECT users.name, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.id=$1", *userIdent.id).Scan(&userName, &roleName, &superuser)
+		err := dbPool.QueryRow(context.Background(), "SELECT name, org_id, role_id FROM users WHERE users.id=$1", *userIdent.id).Scan(&userName, &orgID, &roleID)
 		if err != nil {
 			return user{}, fmt.Errorf("unable to SELECT user by id: %w", err)
 		}
@@ -1002,7 +1002,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		}
 
 		var userID pgtype.UUID
-		err := dbPool.QueryRow(context.Background(), "SELECT users.id, roles.name as role_name, roles.superuser FROM users JOIN roles ON users.role_id=roles.id WHERE users.name=$1", inputID).Scan(&userID, &roleName, &superuser)
+		err := dbPool.QueryRow(context.Background(), "SELECT id, org_id, role_id, superuser FROM users WHERE name=$1", inputID).Scan(&userID, &orgID, &roleID)
 		if err != nil {
 			logger.Err(err).Str("id", inputID).Msg("unable to SELECT user by name")
 			return user{}, fmt.Errorf("unable to SELECT user by name")
@@ -1011,8 +1011,8 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		u.Name = *userIdent.name
 	}
 
-	u.RoleName = roleName
-	u.Superuser = superuser
+	u.RoleID = roleID
+	u.OrgID = orgID
 
 	return u, nil
 }
@@ -2727,10 +2727,10 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 }
 
 type user struct {
-	ID        pgtype.UUID `json:"id" doc:"ID of user"`
-	Name      string      `json:"name" example:"user1" doc:"name of user"`
-	RoleName  string      `json:"role_name" example:"customer"`
-	Superuser bool        `json:"superuser" example:"true" doc:"if user is a superuser"`
+	ID     pgtype.UUID  `json:"id" doc:"ID of user"`
+	Name   string       `json:"name" example:"user1" doc:"name of user"`
+	RoleID pgtype.UUID  `json:"role_id" doc:"ID of organization, UUIDv4"`
+	OrgID  *pgtype.UUID `json:"org_id" doc:"ID of organization, UUIDv4"`
 }
 
 type userOutput struct {
