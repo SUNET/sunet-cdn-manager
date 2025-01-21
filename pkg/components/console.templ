@@ -2,7 +2,7 @@ package components
 
 templ ConsolePage(heading string, orgs []string, contents templ.Component) {
 	@Logout()
-	@OrganizationSelector(orgs)
+	@OrgSelector(orgs)
 	@NavBar()
 	<h1>{ heading }</h1>
 	<div id="contents">
@@ -20,7 +20,7 @@ templ Logout() {
 	</div>
 }
 
-templ OrganizationSelector(orgs []string) {
+templ OrgSelector(orgs []string) {
 	<form action="/console">
 		@CSRF()
 		<label for="orgs">Organization:</label>
@@ -62,13 +62,25 @@ templ ServicesContent(services []Service) {
 	<a href="/console/create-service">Create service</a>
 }
 
-templ CreateServiceContent() {
+templ CreateServiceContent(reqState string) {
 	<form method="post" action="/console/create-service">
 		@CSRF()
 		<label for="name">Name:</label>
 		<input type="text" id="name" name="name"/>
 		<input type="submit"/>
 	</form>
+	switch reqState {
+		case "get":
+			<div>About to create a service</div>
+		case "create-success":
+			<div>Service creation successful</div>
+		case "create-fail":
+			<div>Service creation failed</div>
+		case "already-exists":
+			<div>Service already exists</div>
+		default:
+			<div>unexpected request state</div>
+	}
 }
 
 templ LoginPage(returnTo string, loginFailed bool) {

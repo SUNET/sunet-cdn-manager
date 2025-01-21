@@ -167,6 +167,88 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 	}
 }
 
+func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		heading := "Create service"
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing authData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(authData)
+
+		switch r.Method {
+		case "GET":
+			err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("get"))
+			if err != nil {
+				logger.Err(err).Msg("unable to render services page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case "POST":
+			err := r.ParseForm()
+			if err != nil {
+				logger.Err(err).Msg("unable to parse create-service POST form")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := createServiceForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-service form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST login form data, treating as failed login")
+				err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("create-fail"))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service creation page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = insertService(dbPool, formData.Name, ad.OrgName, ad)
+			if err != nil {
+				if errors.Is(err, errAlreadyExists) {
+					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("already-exists"))
+					if err != nil {
+						logger.Err(err).Msg("unable to render service creation page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
+					return
+				}
+				logger.Err(err).Msg("unable to insert service")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			err = renderConsolePage(w, r, ad, heading, components.CreateServiceContent("create-success"))
+			if err != nil {
+				logger.Err(err).Msg("unable to render service creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-service handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
 func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, heading string, contents templ.Component) error {
 	orgs := []string{}
 	if ad.OrgName != nil {
@@ -206,6 +288,12 @@ type loginForm struct {
 	// /api/v1/users POST endpoint for user creation
 	Password string `schema:"password" validate:"min=15,max=64"`
 	ReturnTo string `schema:"return_to"`
+}
+
+type createServiceForm struct {
+	// Username length validation needs to be kept in sync with the CHECK
+	// constraints in the service table, see the migrations module.
+	Name string `schema:"name" validate:"min=1,max=63"`
 }
 
 // Endpoint used for console login
@@ -926,11 +1014,6 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			logger := hlog.FromRequest(r)
-
-			if r.Method != "GET" {
-				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-				return
-			}
 
 			adRef := authFromSession(logger, cookieStore, r)
 			if adRef == nil {
@@ -2227,6 +2310,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get(consolePath, consoleHomeHandler(cookieStore))
 		r.Get(consolePath+"/services", consoleServicesHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
+		r.Post(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes
