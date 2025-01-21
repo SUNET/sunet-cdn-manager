@@ -1146,14 +1146,18 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 	return keyID, nil
 }
 
-func createUser(dbPool *pgxpool.Pool, name string, role string, org string, ad authData) (pgtype.UUID, error) {
+func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad authData) (pgtype.UUID, error) {
 	if !ad.Superuser {
 		return pgtype.UUID{}, errForbidden
 	}
 
-	orgIdent, err := parseNameOrID(org)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
+	var err error
+	var orgIdent identifier
+	if org != nil {
+		orgIdent, err = parseNameOrID(*org)
+		if err != nil {
+			return pgtype.UUID{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
+		}
 	}
 
 	roleIdent, err := parseNameOrID(role)
@@ -1165,14 +1169,22 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org string, ad a
 	var orgID *pgtype.UUID
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		if !orgIdent.isID() {
-			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-		} else {
-			orgID = orgIdent.id
+		if org != nil {
+			if !orgIdent.isID() {
+				orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+				if err != nil {
+					return fmt.Errorf("unable to map org name to id: %w", err)
+				}
+			} else {
+				orgID = orgIdent.id
+			}
 		}
 
 		if !roleIdent.isID() {
 			roleID, err = roleNameToIDTx(tx, *roleIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to map role name to id: %w", err)
+			}
 		} else {
 			roleID = *roleIdent.id
 		}
@@ -2297,9 +2309,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
-					Role string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-					Org  string `json:"org" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+					Name string  `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
+					Role string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+					Org  *string `json:"org,omitempty" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				}
 			},
 			) (*userOutput, error) {

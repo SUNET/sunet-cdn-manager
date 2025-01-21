@@ -777,6 +777,15 @@ func TestPostUsers(t *testing.T) {
 			orgIDorName:    "org1",
 		},
 		{
+			description:    "successful superuser request with IDs and no org",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			addedUser:      "admin-created-user-3",
+			roleIDorName:   "00000005-0000-0000-0000-000000000002",
+			orgIDorName:    "",
+		},
+		{
 			description:    "successful superuser request with name right at limit",
 			username:       "admin",
 			password:       "adminpass1",
@@ -818,7 +827,7 @@ func TestPostUsers(t *testing.T) {
 		newUser := struct {
 			Name string `json:"name"`
 			Role string `json:"role"`
-			Org  string `json:"org"`
+			Org  string `json:"org,omitempty"`
 		}{
 			Name: test.addedUser,
 			Org:  test.orgIDorName,
@@ -890,6 +899,7 @@ func TestPatchUser(t *testing.T) {
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
 			patchedOrgIDorName: Ptr("00000002-0000-0000-0000-000000000001"),
+			userIDorName:       "00000014-0000-0000-0000-000000000001",
 		},
 		{
 			description:        "successful superuser request with names",
@@ -897,6 +907,7 @@ func TestPatchUser(t *testing.T) {
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
 			patchedOrgIDorName: Ptr("org2"),
+			userIDorName:       "patch-user-1",
 		},
 		{
 			description:        "successful superuser request with names, null org",
@@ -904,6 +915,7 @@ func TestPatchUser(t *testing.T) {
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
 			patchedOrgIDorName: nil,
+			userIDorName:       "patch-user-1",
 		},
 	}
 
