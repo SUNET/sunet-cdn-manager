@@ -60,7 +60,8 @@ const (
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
 
-	consolePath = "/console"
+	consolePath  = "/console"
+	api403String = "not allowed to access resource"
 )
 
 var (
@@ -2256,7 +2257,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			users, err := selectUsers(dbPool, logger, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query users")
 				return nil, err
@@ -2282,7 +2283,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			user, err := selectUserByID(dbPool, logger, input.User, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, errNotFound) {
 					return nil, huma.Error404NotFound("user not found")
 				}
@@ -2377,7 +2378,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			err := patchUser(dbPool, ad, input.User, input.Body.Org)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, errNotFound) {
 					return nil, huma.Error404NotFound("user not found")
 				}
@@ -2399,7 +2400,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			orgs, err := selectOrgs(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query orgs")
 				return nil, err
@@ -2425,7 +2426,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			org, err := selectOrgByID(dbPool, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, errNotFound) {
 					return nil, huma.Error404NotFound("organization not found")
 				}
@@ -2452,7 +2453,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			oAddrs, err := selectOrgIPs(dbPool, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, errNotFound) {
 					return nil, huma.Error404NotFound("organization not found")
 				}
@@ -2610,7 +2611,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			serviceVersions, err := selectServiceVersions(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query service-versions")
 				return nil, err
@@ -2696,7 +2697,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			vcls, err := selectVcls(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query vcls")
 				return nil, err
@@ -2720,7 +2721,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			networks, err := selectIPv4Networks(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query ipv4 networks")
 				return nil, err
@@ -2787,7 +2788,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			networks, err := selectIPv6Networks(dbPool, ad)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to access resource")
+					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query ipv6 networks")
 				return nil, err
