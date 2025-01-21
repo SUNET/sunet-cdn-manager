@@ -23,6 +23,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/a-h/templ"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -116,9 +117,10 @@ func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 
 		ad := adRef.(authData)
 
-		err := renderConsolePage(w, r, ad, "home", "SUNET CDN manager", []components.Service{})
+		err := renderConsolePage(w, r, ad, "SUNET CDN manager", components.Home(ad.Username))
 		if err != nil {
-			logger.Err(err).Msg("unable to render console page")
+			logger.Err(err).Msg("unable to render console home page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -156,23 +158,22 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 			cServices = append(cServices, components.Service{Name: service.Name})
 		}
 
-		err = renderConsolePage(w, r, ad, "services", "SUNET CDN manager: Services", cServices)
+		err = renderConsolePage(w, r, ad, "Services", components.ServicesContent(cServices))
 		if err != nil {
-			logger.Err(err).Msg("unable to render console page")
+			logger.Err(err).Msg("unable to render services page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 	}
 }
 
-// Login page/form for browser based (not API) requests
-func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, pageType string, heading string, services []components.Service) error {
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, heading string, contents templ.Component) error {
 	orgs := []string{}
 	if ad.OrgName != nil {
 		orgs = append(orgs, *ad.OrgName)
 	}
-	component := components.ConsolePage(pageType, heading, ad.Username, orgs, ad.Superuser, services)
-	err := component.Render(r.Context(), w)
-	return err
+	component := components.ConsolePage(heading, orgs, contents)
+	return component.Render(r.Context(), w)
 }
 
 // Return user to content of return_to query parameter but only if it points to a place we control

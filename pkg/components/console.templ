@@ -1,18 +1,17 @@
 package components
 
-templ ConsolePage(pageType string, heading string, username string, orgs []string, isSuperuser bool, services []Service) {
+templ ConsolePage(heading string, orgs []string, contents templ.Component) {
 	@Logout()
 	@OrganizationSelector(orgs)
 	@NavBar()
 	<h1>{ heading }</h1>
-	switch pageType {
-		case "home":
-			<div>Hello { username }!</div>
-		case "services":
-			@ServicesContent(services)
-		default:
-			<div>{ "Unsupported page type" }</div>
-	}
+	<div id="contents">
+		@contents
+	</div>
+}
+
+templ Home(username string) {
+	<div>Hello { username }!</div>
 }
 
 templ Logout() {
@@ -60,11 +59,14 @@ templ ServicesContent(services []Service) {
 			}
 		</ul>
 	}
-	<form method="post" action="/console/services">
+	<a href="/console/create-service">Create service</a>
+}
+
+templ CreateServiceContent() {
+	<form method="post" action="/console/create-service">
 		@CSRF()
-		<label for="name">Service name:</label>
-		<input type="text" id="name" name="na,e"/>
-		<label for="services">Service:</label>
+		<label for="name">Name:</label>
+		<input type="text" id="name" name="name"/>
 		<input type="submit"/>
 	</form>
 }
