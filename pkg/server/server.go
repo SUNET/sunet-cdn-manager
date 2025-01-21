@@ -2577,7 +2577,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				ad, ok := ctx.Value(authDataKey{}).(authData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from service GET handler")
+					return nil, errors.New("unable to read auth data from service POST handler")
 				}
 
 				id, err := insertService(dbPool, input.Body.Name, input.Body.Org, ad)
@@ -2647,7 +2647,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				ad, ok := ctx.Value(authDataKey{}).(authData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from service GET handler")
+					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
 				// Seems we can not use pgtype.UUID as the type in the
