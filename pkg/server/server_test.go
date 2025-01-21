@@ -923,6 +923,16 @@ func TestPutUser(t *testing.T) {
 			updatedOrgIDorName:  "",
 			updatedRoleIDorName: "user",
 		},
+		{
+			description:         "failed non-superuser request with names",
+			username:            "username1",
+			password:            "password1",
+			expectedStatus:      http.StatusForbidden,
+			targetUserIDorName:  "username1",
+			updatedName:         "username1",
+			updatedOrgIDorName:  "org1",
+			updatedRoleIDorName: "user",
+		},
 	}
 
 	for _, test := range tests {
