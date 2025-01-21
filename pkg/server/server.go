@@ -1146,9 +1146,9 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 	return keyID, nil
 }
 
-func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad authData) (pgtype.UUID, error) {
+func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad authData) (user, error) {
 	if !ad.Superuser {
-		return pgtype.UUID{}, errForbidden
+		return user{}, errForbidden
 	}
 
 	var err error
@@ -1156,13 +1156,13 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 	if org != nil {
 		orgIdent, err = parseNameOrID(*org)
 		if err != nil {
-			return pgtype.UUID{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
+			return user{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
 		}
 	}
 
 	roleIdent, err := parseNameOrID(role)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to parse role for user INSERT: %w", err)
+		return user{}, fmt.Errorf("unable to parse role for user INSERT: %w", err)
 	}
 
 	var userID, roleID pgtype.UUID
@@ -1202,10 +1202,15 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 		return nil
 	})
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("createUser: transaction failed: %w", err)
+		return user{}, fmt.Errorf("createUser: transaction failed: %w", err)
 	}
 
-	return userID, nil
+	return user{
+		ID:     userID,
+		Name:   name,
+		RoleID: roleID,
+		OrgID:  orgID,
+	}, nil
 }
 
 func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
@@ -1269,14 +1274,28 @@ func userIDToNameTx(tx pgx.Tx, userID pgtype.UUID) (string, error) {
 	return name, nil
 }
 
-func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) error {
+func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
+	_, err := tx.Exec(context.Background(), "UPDATE users SET name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
+	if err != nil {
+		return fmt.Errorf("unable to update user with id '%s': %w", userID, err)
+	}
+
+	return nil
+}
+
+func updateUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string, role string) (user, error) {
 	if !ad.Superuser {
-		return errForbidden
+		return user{}, errForbidden
 	}
 
 	userIdent, err := parseNameOrID(nameOrID)
 	if err != nil {
-		return fmt.Errorf("unable to parse user name or ID for PATCH: %w", err)
+		return user{}, fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
+	}
+
+	roleIdent, err := parseNameOrID(role)
+	if err != nil {
+		return user{}, fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
 	}
 
 	var orgIdent identifier
@@ -1284,12 +1303,13 @@ func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) 
 	if org != nil {
 		orgIdent, err = parseNameOrID(*org)
 		if err != nil {
-			return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
+			return user{}, fmt.Errorf("unable to parse org ID for PATCH: %w", err)
 		}
 	}
 
-	var userID pgtype.UUID
+	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID
+	var userName string
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		if org != nil {
 			if orgIdent.isID() {
@@ -1304,25 +1324,44 @@ func patchUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string) 
 
 		if userIdent.isID() {
 			userID = *userIdent.id
+			userName, err = userIDToNameTx(tx, *userIdent.id)
+			if err != nil {
+				return fmt.Errorf("unable to resolve user id to name: %w", err)
+			}
 		} else {
+			userName = *userIdent.name
 			userID, err = userNameToIDTx(tx, *userIdent.name)
 			if err != nil {
 				return fmt.Errorf("unable to resolve user name to id: %w", err)
 			}
 		}
 
-		_, err := tx.Exec(context.Background(), "UPDATE users SET org_id = $1 WHERE id = $2", orgID, userID)
+		if roleIdent.isID() {
+			roleID = *roleIdent.id
+		} else {
+			roleID, err = roleNameToIDTx(tx, *roleIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to resolve user name to id: %w", err)
+			}
+		}
+
+		err := updateUserTx(tx, userID, userName, orgID, roleID)
 		if err != nil {
-			return fmt.Errorf("unable to update org for user id '%s' %w", userID, err)
+			return fmt.Errorf("update failed: %w", err)
 		}
 
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("user PATCH transaction failed: %w", err)
+		return user{}, fmt.Errorf("user PUT transaction failed: %w", err)
 	}
 
-	return nil
+	return user{
+		ID:     userID,
+		Name:   userName,
+		RoleID: roleID,
+		OrgID:  orgID,
+	}, nil
 }
 
 func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
@@ -2307,14 +2346,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				Path:          postUsersPath,
 				DefaultStatus: http.StatusCreated,
 			},
-			func(ctx context.Context, input *struct {
-				Body struct {
-					Name string  `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
-					Role string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-					Org  *string `json:"org,omitempty" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-				}
-			},
-			) (*userOutput, error) {
+			func(ctx context.Context, input *userPostInput) (*userOutput, error) {
 				logger := zlog.Ctx(ctx)
 
 				ad, ok := ctx.Value(authDataKey{}).(authData)
@@ -2322,7 +2354,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				id, err := createUser(dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
+				user, err := createUser(dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
 				if err != nil {
 					if errors.Is(err, errForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
@@ -2330,10 +2362,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					logger.Err(err).Msg("unable to add user")
 					return nil, err
 				}
-				resp := &userOutput{}
-				resp.Body.ID = id
-				resp.Body.Name = input.Body.Name
-				return resp, nil
+				return &userOutput{
+					Body: user,
+				}, nil
 			},
 		)
 
@@ -2361,13 +2392,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return nil, nil
 		})
 
-		huma.Patch(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
-			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
-			Body struct {
-				Org *string `json:"org" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-			}
-		},
-		) (*struct{}, error) {
+		huma.Put(api, "/v1/users/{user}", func(ctx context.Context, input *userPutInput) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
@@ -2375,17 +2400,17 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from user PATCH handler")
 			}
 
-			err := patchUser(dbPool, ad, input.User, input.Body.Org)
+			user, err := updateUser(dbPool, ad, input.User, input.Body.Org, input.Body.Role)
 			if err != nil {
 				if errors.Is(err, errForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, errNotFound) {
 					return nil, huma.Error404NotFound("user not found")
 				}
-				logger.Err(err).Msg("unable to patch user")
+				logger.Err(err).Msg("unable to update user")
 				return nil, err
 			}
-			return nil, nil
+			return &userOutput{Body: user}, nil
 		})
 
 		huma.Get(api, "/v1/orgs", func(ctx context.Context, _ *struct{},
@@ -2852,6 +2877,21 @@ type user struct {
 	Name   string       `json:"name" example:"user1" doc:"name of user"`
 	RoleID pgtype.UUID  `json:"role_id" doc:"ID of organization, UUIDv4"`
 	OrgID  *pgtype.UUID `json:"org_id" doc:"ID of organization, UUIDv4"`
+}
+
+type userBodyInput struct {
+	Name string  `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
+	Role string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+	Org  *string `json:"org,omitempty" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+}
+
+type userPostInput struct {
+	Body userBodyInput
+}
+
+type userPutInput struct {
+	User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
+	Body userBodyInput
 }
 
 type userOutput struct {

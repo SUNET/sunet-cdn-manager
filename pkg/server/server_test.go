@@ -130,7 +130,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 
 		// Users
 		// No org, local user
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'patch-user-1')",
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'put-user-1')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -873,7 +873,7 @@ func TestPostUsers(t *testing.T) {
 	}
 }
 
-func TestPatchUser(t *testing.T) {
+func TestPutUser(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -884,49 +884,59 @@ func TestPatchUser(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description        string
-		username           string
-		password           string
-		expectedStatus     int
-		addedUser          string
-		userIDorName       string
-		roleIDorName       string
-		patchedOrgIDorName *string
+		description         string
+		username            string
+		password            string
+		expectedStatus      int
+		targetUserIDorName  string
+		updatedOrgIDorName  string
+		updatedRoleIDorName string
+		updatedName         string
 	}{
 		{
-			description:        "successful superuser request with IDs",
-			username:           "admin",
-			password:           "adminpass1",
-			expectedStatus:     http.StatusNoContent,
-			patchedOrgIDorName: Ptr("00000002-0000-0000-0000-000000000001"),
-			userIDorName:       "00000014-0000-0000-0000-000000000001",
+			description:         "successful superuser request with IDs",
+			username:            "admin",
+			password:            "adminpass1",
+			expectedStatus:      http.StatusOK,
+			targetUserIDorName:  "00000014-0000-0000-0000-000000000001",
+			updatedOrgIDorName:  "00000002-0000-0000-0000-000000000001",
+			updatedRoleIDorName: "00000005-0000-0000-0000-000000000002",
+			updatedName:         "put-user-1",
 		},
 		{
-			description:        "successful superuser request with names",
-			username:           "admin",
-			password:           "adminpass1",
-			expectedStatus:     http.StatusNoContent,
-			patchedOrgIDorName: Ptr("org2"),
-			userIDorName:       "patch-user-1",
+			description:         "successful superuser request with names",
+			username:            "admin",
+			password:            "adminpass1",
+			expectedStatus:      http.StatusOK,
+			targetUserIDorName:  "put-user-1",
+			updatedName:         "put-user-1",
+			updatedOrgIDorName:  "org2",
+			updatedRoleIDorName: "user",
 		},
 		{
-			description:        "successful superuser request with names, null org",
-			username:           "admin",
-			password:           "adminpass1",
-			expectedStatus:     http.StatusNoContent,
-			patchedOrgIDorName: nil,
-			userIDorName:       "patch-user-1",
+			description:         "successful superuser request with names, null org",
+			username:            "admin",
+			password:            "adminpass1",
+			expectedStatus:      http.StatusOK,
+			targetUserIDorName:  "put-user-1",
+			updatedName:         "put-user-1",
+			updatedOrgIDorName:  "",
+			updatedRoleIDorName: "user",
 		},
 	}
 
 	for _, test := range tests {
-		patchUser := struct {
-			Org *string `json:"org"`
+		putUser := struct {
+			Org  string `json:"org,omitempty"`
+			Role string `json:"role"`
+			Name string `json:"name"`
 		}{
-			Org: test.patchedOrgIDorName,
+			Org:  test.updatedOrgIDorName,
+			Role: test.updatedRoleIDorName,
+			Name: test.updatedName,
 		}
 
-		b, err := json.Marshal(patchUser)
+		b, err := json.Marshal(putUser)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -935,7 +945,7 @@ func TestPatchUser(t *testing.T) {
 
 		fmt.Println(string(b))
 
-		req, err := http.NewRequest("PATCH", ts.URL+"/api/v1/users/"+test.userIDorName, r)
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserIDorName, r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -955,7 +965,7 @@ func TestPatchUser(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PATCH users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			t.Fatalf("%s: PUT users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
