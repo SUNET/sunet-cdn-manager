@@ -187,6 +187,22 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				id:           "00000006-0000-0000-0000-000000000005",
 				authProvider: "local",
 			},
+			{
+				name:         "username5-no-pw",
+				password:     "",
+				role:         "user",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000006",
+				authProvider: "local",
+			},
+			{
+				name:         "username6",
+				password:     "password6",
+				role:         "user",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000007",
+				authProvider: "local",
+			},
 		}
 
 		for _, localUser := range localUsers {
@@ -836,7 +852,7 @@ func TestPostUsers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("POST users unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("%s: POST users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -864,7 +880,6 @@ func TestPatchUser(t *testing.T) {
 		password           string
 		expectedStatus     int
 		addedUser          string
-		addedPassword      string
 		userIDorName       string
 		roleIDorName       string
 		patchedOrgIDorName *string
@@ -874,10 +889,6 @@ func TestPatchUser(t *testing.T) {
 			username:           "admin",
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
-			addedUser:          "admin-created-patch-user-1",
-			addedPassword:      "admin-created-password-1",
-			roleIDorName:       "00000005-0000-0000-0000-000000000002",
-			userIDorName:       "00000014-0000-0000-0000-000000000001",
 			patchedOrgIDorName: Ptr("00000002-0000-0000-0000-000000000001"),
 		},
 		{
@@ -885,10 +896,6 @@ func TestPatchUser(t *testing.T) {
 			username:           "admin",
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
-			addedUser:          "admin-created-patch-user-2",
-			addedPassword:      "admin-created-password-2",
-			roleIDorName:       "user",
-			userIDorName:       "patch-user-1",
 			patchedOrgIDorName: Ptr("org2"),
 		},
 		{
@@ -896,10 +903,6 @@ func TestPatchUser(t *testing.T) {
 			username:           "admin",
 			password:           "adminpass1",
 			expectedStatus:     http.StatusNoContent,
-			addedUser:          "admin-created-patch-user-2",
-			addedPassword:      "admin-created-password-2",
-			roleIDorName:       "user",
-			userIDorName:       "patch-user-1",
 			patchedOrgIDorName: nil,
 		},
 	}
@@ -940,7 +943,7 @@ func TestPatchUser(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("PATCH users unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("%s: PATCH users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -950,6 +953,174 @@ func TestPatchUser(t *testing.T) {
 
 		fmt.Printf("%s\n", jsonData)
 	}
+}
+
+func TestPutPassword(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description          string
+		username             string
+		password             string
+		expectedStatus       int
+		modifiedUserIDorName string
+		oldPassword          string
+		newPassword          string
+		shouldSucceed        bool
+	}{
+		{
+			description:          "successful superuser request with IDs",
+			username:             "admin",
+			password:             "adminpass1",
+			expectedStatus:       http.StatusNoContent,
+			modifiedUserIDorName: "username4-no-pw",
+			oldPassword:          "",
+			newPassword:          "updated-password-1",
+			shouldSucceed:        true,
+		},
+		{
+			description:          "failed request for user missing password",
+			username:             "username4-no-pw",
+			password:             "",
+			expectedStatus:       http.StatusUnauthorized,
+			modifiedUserIDorName: "username5-no-pw",
+			oldPassword:          "",
+			newPassword:          "updated-password-2",
+			shouldSucceed:        false,
+		},
+		{
+			description:          "successful request for user changing their own password",
+			username:             "username1",
+			password:             "password1",
+			expectedStatus:       http.StatusNoContent,
+			modifiedUserIDorName: "username1",
+			oldPassword:          "password1",
+			newPassword:          "updated-password-3",
+			shouldSucceed:        true,
+		},
+		{
+			description:          "failed request for user changing their own password with the wrong old password",
+			username:             "username6",
+			password:             "password6",
+			expectedStatus:       http.StatusBadRequest,
+			modifiedUserIDorName: "username6",
+			oldPassword:          "password6-wrong",
+			newPassword:          "updated-password-4",
+			shouldSucceed:        false,
+		},
+	}
+
+	for _, test := range tests {
+		patchUser := struct {
+			Old string `json:"old,omitempty"`
+			New string `json:"new,omitempty"`
+		}{
+			Old: test.oldPassword,
+			New: test.newPassword,
+		}
+
+		b, err := json.Marshal(patchUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		fmt.Println(string(b))
+
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserIDorName+"/local-password", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: PUT local-password unexpected status code: want %d, got: %d (%s)", test.description, test.expectedStatus, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+
+		// Verify old password no longer works
+		statusCode, err := testAuth(ts, test.modifiedUserIDorName, test.oldPassword)
+		if err == nil {
+			t.Fatal(errors.New("old password still works, unexpected"))
+		}
+		if statusCode != http.StatusUnauthorized {
+			t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+		}
+
+		// Verify new password works
+		statusCode, err = testAuth(ts, test.modifiedUserIDorName, test.newPassword)
+		if err != nil {
+			if test.shouldSucceed {
+				t.Fatal(err)
+			}
+		}
+		if test.shouldSucceed {
+			if statusCode != http.StatusOK {
+				t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+			}
+		} else {
+			if statusCode != http.StatusUnauthorized {
+				t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+			}
+		}
+	}
+}
+
+func testAuth(ts *httptest.Server, username string, password string) (int, error) {
+	req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+username, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	req.SetBasicAuth(username, password)
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, fmt.Errorf("unexpected status code for test auth: %d", resp.StatusCode)
+	}
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, err
+	}
+
+	fmt.Println(string(b))
+
+	return resp.StatusCode, nil
 }
 
 func TestGetOrgs(t *testing.T) {
@@ -1402,7 +1573,7 @@ func TestGetServices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET services unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("%s: GET services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1521,7 +1692,7 @@ func TestGetService(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("GET service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)

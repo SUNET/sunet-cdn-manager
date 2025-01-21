@@ -70,6 +70,7 @@ var (
 	errExclutionViolation      = errors.New("conflicting data in database")
 	errBadPassword             = errors.New("bad password")
 	errKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
+	errBadOldPassword          = errors.New("old password is invalid")
 
 	// Set a Decoder instance as a package global, because it caches
 	// meta-data about structs, and an instance can be shared safely.
@@ -1065,7 +1066,7 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 	return keyID, nil
 }
 
-func setLocalPassword(ad authData, dbPool *pgxpool.Pool, user string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, user string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	userIdent, err := parseNameOrID(user)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to parse user for local-password: %w", err)
@@ -1105,7 +1106,7 @@ func setLocalPassword(ad authData, dbPool *pgxpool.Pool, user string, oldPasswor
 		var authProviderName string
 		err = tx.QueryRow(context.Background(), "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
 		if err != nil {
-			return fmt.Errorf("unable to look up name of auth provider for user with id '%s'", userID)
+			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userID, err)
 		}
 
 		if authProviderName != "local" {
@@ -1113,7 +1114,7 @@ func setLocalPassword(ad authData, dbPool *pgxpool.Pool, user string, oldPasswor
 		}
 
 		// A superuser can change any password and a normal user can only change their own password
-		if !ad.Superuser || ad.UserID != userID {
+		if !ad.Superuser && ad.UserID != userID {
 			return errForbidden
 		}
 
@@ -1126,7 +1127,8 @@ func setLocalPassword(ad authData, dbPool *pgxpool.Pool, user string, oldPasswor
 		if !ad.Superuser {
 			_, err := dbUserLogin(dbPool, userName, oldPassword)
 			if err != nil {
-				return fmt.Errorf("unable to verify old password is valid: %w", err)
+				logger.Err(err).Msg("old password check failed")
+				return errBadOldPassword
 			}
 		}
 
@@ -2326,18 +2328,22 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 		huma.Put(api, "/v1/users/{user}/local-password", func(ctx context.Context, input *struct {
 			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
 			Body struct {
-				OldPassword string `json:"old" example:"verysecretpassword" doc:"The previous local password, not needed if superuser" minLength:"15" maxLength:"64"`
+				OldPassword string `json:"old,omitempty" example:"verysecretpassword" doc:"The previous local password, not needed if superuser" minLength:"1" maxLength:"64"`
 				NewPassword string `json:"new" example:"verysecretpassword" doc:"The new user password" minLength:"15" maxLength:"64"`
 			}
 		},
 		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
 
-			_, err := setLocalPassword(ad, dbPool, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			_, err := setLocalPassword(logger, ad, dbPool, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
+				if errors.Is(err, errBadOldPassword) {
+					return nil, huma.Error400BadRequest("old password is not correct")
+				}
 				return nil, fmt.Errorf("unable to set password: %w", err)
 			}
 			return nil, nil
