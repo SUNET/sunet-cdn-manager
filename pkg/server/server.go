@@ -869,12 +869,8 @@ func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Reques
 	ad, err := dbUserLogin(dbPool, username, password)
 	if err != nil {
 		switch err {
-		case pgx.ErrNoRows:
-			// The user does not exist etc, try again
-			sendBasicAuth(w)
-			return nil
-		case errBadPassword:
-			// Bad password, try again
+		case pgx.ErrNoRows, errBadPassword:
+			// The user does not exist etc or the password was bad, try again
 			sendBasicAuth(w)
 			return nil
 		}
