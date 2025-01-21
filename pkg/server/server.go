@@ -1777,7 +1777,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID,
 			domain,
 		).Scan(&serviceDomainID)
 		if err != nil {
-			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service domain: %w", err)
 		}
 		serviceDomainIDs = append(serviceDomainIDs, serviceDomainID)
 	}
@@ -1794,7 +1794,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, orgID pgtype.UUID,
 			origin.TLS,
 		).Scan(&serviceOriginID)
 		if err != nil {
-			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service origin: %w", err)
 		}
 		serviceOriginIDs = append(serviceOriginIDs, serviceOriginID)
 	}
