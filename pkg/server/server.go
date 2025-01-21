@@ -59,6 +59,8 @@ const (
 	pgCheckViolation = "23514"
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
+
+	consolePath = "/console"
 )
 
 var (
@@ -94,7 +96,7 @@ func (zew *zerologErrorWriter) Write(p []byte) (n int, err error) {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
-	validatedRedirect("/console", w, r)
+	validatedRedirect(consolePath, w, r)
 }
 
 func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
@@ -217,8 +219,8 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				switch returnTo {
 				case "":
 					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-					// http.Redirect(w, r, "/console", http.StatusFound)
-					validatedRedirect("/console", w, r)
+					// http.Redirect(w, r, consolePath, http.StatusFound)
+					validatedRedirect(consolePath, w, r)
 					return
 				default:
 					logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
@@ -295,7 +297,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				return
 			}
 
-			// Login is successful at this point, send the now authenticated user to their original location (or /console if no such hint is available)
+			// Login is successful at this point, send the now authenticated user to their original location (or consolePath if no such hint is available)
 			if formData.ReturnTo != "" {
 				u, err := url.Parse(formData.ReturnTo)
 				if err != nil {
@@ -308,8 +310,8 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				validatedRedirect(u.String(), w, r)
 				return
 			} else {
-				logger.Info().Msg("no return_to in POST data, redirecting logged in user to /console")
-				validatedRedirect("/console", w, r)
+				logger.Info().Msg("no return_to in POST data, redirecting logged in user to consolePath")
+				validatedRedirect(consolePath, w, r)
 				return
 			}
 		default:
@@ -334,8 +336,8 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			switch returnTo {
 			case "":
 				logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-				// http.Redirect(w, r, "/console", http.StatusFound)
-				validatedRedirect("/console", w, r)
+				// http.Redirect(w, r, consolePath, http.StatusFound)
+				validatedRedirect(consolePath, w, r)
 				return
 			default:
 				logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
@@ -365,7 +367,7 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 		}
 
 		// No return_to hint, just send them to the console
-		validatedRedirect("/console", w, r)
+		validatedRedirect(consolePath, w, r)
 	}
 }
 
@@ -579,7 +581,7 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 			return
 		}
 
-		validatedRedirect("/console", w, r)
+		validatedRedirect(consolePath, w, r)
 	}
 }
 
@@ -2185,8 +2187,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Group(func(r chi.Router) {
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get("/console", consoleHomeHandler(cookieStore))
-		r.Get("/console/services", consoleServicesHandler(dbPool, cookieStore))
+		r.Get(consolePath, consoleHomeHandler(cookieStore))
+		r.Get(consolePath+"/services", consoleServicesHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes
