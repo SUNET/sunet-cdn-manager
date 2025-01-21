@@ -1470,12 +1470,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY time_created")
 		if err != nil {
-			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
+			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
 		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY time_created", *ad.OrgID)
 		if err != nil {
-			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
+			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
 	} else {
 		return nil, errForbidden
@@ -1679,12 +1679,12 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	if ad.Superuser {
 		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id ORDER BY service_versions.version")
 		if err != nil {
-			return nil, fmt.Errorf("unable to Query for service versions as superuser: %w", err)
+			return nil, fmt.Errorf("unable to query for service versions as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
 		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
 		if err != nil {
-			return nil, fmt.Errorf("unable to Query for getServices as superuser: %w", err)
+			return nil, fmt.Errorf("unable to query for service versions as org member: %w", err)
 		}
 	} else {
 		return nil, errForbidden
