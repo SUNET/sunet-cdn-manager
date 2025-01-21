@@ -73,6 +73,7 @@ var (
 	errBadPassword             = errors.New("bad password")
 	errKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
 	errBadOldPassword          = errors.New("old password is invalid")
+	errUnableToParseNameOrID   = errors.New("unable to parse name or ID")
 
 	// Set a Decoder instance as a package global, because it caches
 	// meta-data about structs, and an instance can be shared safely.
@@ -978,7 +979,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 	u := user{}
 	userIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return user{}, fmt.Errorf("unable to parse name or id")
+		return user{}, errUnableToParseNameOrID
 	}
 
 	var roleID pgtype.UUID
@@ -1422,7 +1423,7 @@ func selectOrgByID(dbPool *pgxpool.Pool, inputID string, ad authData) (org, erro
 	o := org{}
 	orgIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return org{}, fmt.Errorf("unable to parse name or id")
+		return org{}, errUnableToParseNameOrID
 	}
 
 	if !isSuperuserOrOrgMember(ad, orgIdent) {
@@ -1507,7 +1508,7 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 
 	serviceIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return service{}, fmt.Errorf("unable to parse name or id")
+		return service{}, errUnableToParseNameOrID
 	}
 	if serviceIdent.isID() {
 		if ad.Superuser {
