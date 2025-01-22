@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
@@ -66,17 +67,6 @@ const (
 )
 
 var (
-	errForbidden               = errors.New("access to resource is not allowed")
-	errNotFound                = errors.New("resource not found")
-	errUnprocessable           = errors.New("resource not processable")
-	errAlreadyExists           = errors.New("resource already exists")
-	errCheckViolation          = errors.New("invalid input data")
-	errExclutionViolation      = errors.New("conflicting data in database")
-	errBadPassword             = errors.New("bad password")
-	errKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
-	errBadOldPassword          = errors.New("old password is invalid")
-	errUnableToParseNameOrID   = errors.New("unable to parse name or ID")
-
 	// Set a Decoder instance as a package global, because it caches
 	// meta-data about structs, and an instance can be shared safely.
 	schemaDecoder = schema.NewDecoder()
@@ -143,7 +133,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 
 		services, err := selectServices(dbPool, ad)
 		if err != nil {
-			if errors.Is(err, errForbidden) {
+			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("services console: not authorized to view page")
 				http.Error(w, "not allowed to view this page, you need to be a member of an organization", http.StatusForbidden)
 				return
@@ -186,7 +176,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("get"))
+			err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -211,8 +201,8 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 			err = validate.Struct(formData)
 			if err != nil {
-				logger.Err(err).Msg("unable to validate POST login form data, treating as failed login")
-				err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("create-fail"))
+				logger.Err(err).Msg("unable to validate POST create-service form data")
+				err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -222,8 +212,8 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 			_, err = insertService(dbPool, formData.Name, ad.OrgName, ad)
 			if err != nil {
-				if errors.Is(err, errAlreadyExists) {
-					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent("already-exists"))
+				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(err))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -235,12 +225,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				return
 			}
 
-			err = renderConsolePage(w, r, ad, heading, components.CreateServiceContent("create-success"))
-			if err != nil {
-				logger.Err(err).Msg("unable to render service creation page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+			validatedRedirect("/console/services", w, r)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -364,7 +349,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 						logger.Err(err).Msg("unable to render bad password page for non-existant user")
 					}
 					return
-				case errBadPassword:
+				case cdnerrors.ErrBadPassword:
 					// Bad password, try again
 					err := renderLoginPage(w, r, formData.ReturnTo, true)
 					if err != nil {
@@ -650,7 +635,7 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 		ad, err := keycloakUser(dbPool, logger, idToken.Subject, kcc)
 		if err != nil {
 			logger.Err(err).Msg("unable to get keycloak user")
-			if errors.Is(err, errKeyCloakEmailUnverified) {
+			if errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			} else {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -934,7 +919,7 @@ func dbUserLogin(dbPool *pgxpool.Pool, username string, password string) (authDa
 	passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
 
 	if !passwordMatch {
-		return authData{}, errBadPassword
+		return authData{}, cdnerrors.ErrBadPassword
 	}
 
 	return authData{
@@ -960,7 +945,7 @@ func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Reques
 	ad, err := dbUserLogin(dbPool, username, password)
 	if err != nil {
 		switch err {
-		case pgx.ErrNoRows, errBadPassword:
+		case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
 			// The user does not exist etc or the password was bad, try again
 			sendBasicAuth(w)
 			return nil
@@ -1048,7 +1033,7 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[user])
@@ -1064,14 +1049,14 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 	u := user{}
 	userIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return user{}, errUnableToParseNameOrID
+		return user{}, cdnerrors.ErrUnableToParseNameOrID
 	}
 
 	var roleID pgtype.UUID
 	var orgID *pgtype.UUID
 	if userIdent.isID() {
 		if !ad.Superuser && (ad.UserID != *userIdent.id) {
-			return user{}, errNotFound
+			return user{}, cdnerrors.ErrNotFound
 		}
 
 		var userName string
@@ -1083,7 +1068,7 @@ func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string
 		u.Name = userName
 	} else {
 		if !ad.Superuser && (ad.Username != inputID) {
-			return user{}, errNotFound
+			return user{}, cdnerrors.ErrNotFound
 		}
 
 		var userID pgtype.UUID
@@ -1199,7 +1184,7 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 
 		// A superuser can change any password and a normal user can only change their own password
 		if !ad.Superuser && ad.UserID != userID {
-			return errForbidden
+			return cdnerrors.ErrForbidden
 		}
 
 		// A normal user most supply the old password
@@ -1212,7 +1197,7 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 			_, err := dbUserLogin(dbPool, userName, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
-				return errBadOldPassword
+				return cdnerrors.ErrBadOldPassword
 			}
 		}
 
@@ -1232,7 +1217,7 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 
 func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad authData) (user, error) {
 	if !ad.Superuser {
-		return user{}, errForbidden
+		return user{}, cdnerrors.ErrForbidden
 	}
 
 	var err error
@@ -1369,7 +1354,7 @@ func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID
 
 func updateUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string, role string) (user, error) {
 	if !ad.Superuser {
-		return user{}, errForbidden
+		return user{}, cdnerrors.ErrForbidden
 	}
 
 	userIdent, err := parseNameOrID(nameOrID)
@@ -1462,7 +1447,7 @@ func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByName[org])
@@ -1498,7 +1483,7 @@ func selectOrgIPs(dbPool *pgxpool.Pool, inputID string, ad authData) (orgAddress
 	}
 
 	if !isSuperuserOrOrgMember(ad, orgIdent) {
-		return orgAddresses{}, errNotFound
+		return orgAddresses{}, cdnerrors.ErrNotFound
 	}
 
 	var orgID pgtype.UUID
@@ -1547,11 +1532,11 @@ func selectOrgByID(dbPool *pgxpool.Pool, inputID string, ad authData) (org, erro
 	o := org{}
 	orgIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return org{}, errUnableToParseNameOrID
+		return org{}, cdnerrors.ErrUnableToParseNameOrID
 	}
 
 	if !isSuperuserOrOrgMember(ad, orgIdent) {
-		return org{}, errNotFound
+		return org{}, cdnerrors.ErrNotFound
 	}
 
 	if orgIdent.isID() {
@@ -1578,7 +1563,7 @@ func selectOrgByID(dbPool *pgxpool.Pool, inputID string, ad authData) (org, erro
 func insertOrg(dbPool *pgxpool.Pool, name string, ad authData) (pgtype.UUID, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
-		return pgtype.UUID{}, errForbidden
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 	err := dbPool.QueryRow(context.Background(), "INSERT INTO orgs (name) VALUES ($1) RETURNING id", name).Scan(&id)
 	if err != nil {
@@ -1602,7 +1587,7 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	services := []service{}
@@ -1632,7 +1617,7 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 
 	serviceIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return service{}, errUnableToParseNameOrID
+		return service{}, cdnerrors.ErrUnableToParseNameOrID
 	}
 	if serviceIdent.isID() {
 		if ad.Superuser {
@@ -1646,14 +1631,14 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.id=$1 AND orgs.id=$2", *serviceIdent.id, ad.OrgID).Scan(&serviceName)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return service{}, errNotFound
+					return service{}, cdnerrors.ErrNotFound
 				}
 				return service{}, fmt.Errorf("unable to SELECT service by id for organization")
 			}
 			s.Name = serviceName
 			s.ID = *serviceIdent.id
 		} else {
-			return service{}, errNotFound
+			return service{}, cdnerrors.ErrNotFound
 		}
 	} else {
 		if ad.Superuser {
@@ -1667,14 +1652,14 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.name=$1 AND orgs.id=$2", inputID, ad.OrgID).Scan(&serviceID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return service{}, errNotFound
+					return service{}, cdnerrors.ErrNotFound
 				}
 				return service{}, fmt.Errorf("unable to SELECT service by name for organization")
 			}
 			s.Name = inputID
 			s.ID = serviceID
 		} else {
-			return service{}, errNotFound
+			return service{}, cdnerrors.ErrNotFound
 		}
 	}
 
@@ -1743,13 +1728,13 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 	if orgNameOrID != nil {
 		orgIdent, err = parseNameOrID(*orgNameOrID)
 		if err != nil {
-			return pgtype.UUID{}, errUnprocessable
+			return pgtype.UUID{}, cdnerrors.ErrUnprocessable
 		}
 	}
 
 	if ad.Superuser {
 		if !orgIdent.isValid() {
-			return pgtype.UUID{}, errUnprocessable
+			return pgtype.UUID{}, cdnerrors.ErrUnprocessable
 		}
 		if orgIdent.isID() {
 			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *orgIdent.id).Scan(&serviceID)
@@ -1764,7 +1749,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		}
 	} else {
 		if ad.OrgID == nil {
-			return pgtype.UUID{}, errForbidden
+			return pgtype.UUID{}, cdnerrors.ErrForbidden
 		}
 
 		// If a user is trying to supply an org id for an org they are
@@ -1773,11 +1758,11 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 		if orgIdent.isValid() {
 			if orgIdent.isID() {
 				if *ad.OrgID != *orgIdent.id {
-					return pgtype.UUID{}, errForbidden
+					return pgtype.UUID{}, cdnerrors.ErrForbidden
 				}
 			} else {
 				if *ad.OrgName != *orgIdent.name {
-					return pgtype.UUID{}, errForbidden
+					return pgtype.UUID{}, cdnerrors.ErrForbidden
 				}
 			}
 		}
@@ -1787,7 +1772,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
 				if pgErr.Code == pgUniqueViolation {
-					return pgtype.UUID{}, errAlreadyExists
+					return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
 				}
 			}
 			return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for organization with id: %w", err)
@@ -1811,7 +1796,7 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 			return nil, fmt.Errorf("unable to query for service versions as org member: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	serviceVersions := []serviceVersion{}
@@ -1954,13 +1939,13 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 	if orgNameOrID != nil {
 		orgIdent, err = parseNameOrID(*orgNameOrID)
 		if err != nil {
-			return serviceVersionInsertResult{}, errUnprocessable
+			return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
 		}
 	}
 
 	if ad.Superuser {
 		if !orgIdent.isValid() {
-			return serviceVersionInsertResult{}, errUnprocessable
+			return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
 		}
 		if orgIdent.isID() {
 			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -1995,7 +1980,7 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 		}
 	} else {
 		if ad.OrgID == nil {
-			return serviceVersionInsertResult{}, errForbidden
+			return serviceVersionInsertResult{}, cdnerrors.ErrForbidden
 		}
 
 		// If a user is trying to supply an org id for an org they are
@@ -2004,11 +1989,11 @@ func insertServiceVersion(dbPool *pgxpool.Pool, serviceID pgtype.UUID, orgNameOr
 		if orgIdent.isValid() {
 			if orgIdent.isID() {
 				if *ad.OrgID != *orgIdent.id {
-					return serviceVersionInsertResult{}, errForbidden
+					return serviceVersionInsertResult{}, cdnerrors.ErrForbidden
 				}
 			} else {
 				if *ad.OrgName != *orgIdent.name {
-					return serviceVersionInsertResult{}, errForbidden
+					return serviceVersionInsertResult{}, cdnerrors.ErrForbidden
 				}
 			}
 		}
@@ -2161,7 +2146,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 			return nil, fmt.Errorf("unable to query for vcls as normal user: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	selectedVcls, err := pgx.CollectRows(rows, pgx.RowToStructByName[selectVcl])
@@ -2196,7 +2181,7 @@ func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error
 			return nil, fmt.Errorf("unable to query for ipv4_networks: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	ipv4Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv4Network])
@@ -2210,7 +2195,7 @@ func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error
 func insertIPv4Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv4Network, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
-		return ipv4Network{}, errForbidden
+		return ipv4Network{}, cdnerrors.ErrForbidden
 	}
 	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv4_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
 	if err != nil {
@@ -2218,11 +2203,11 @@ func insertIPv4Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) 
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
 			case pgUniqueViolation:
-				return ipv4Network{}, errAlreadyExists
+				return ipv4Network{}, cdnerrors.ErrAlreadyExists
 			case pgCheckViolation:
-				return ipv4Network{}, errCheckViolation
+				return ipv4Network{}, cdnerrors.ErrCheckViolation
 			case pgExclusionViolation:
-				return ipv4Network{}, errExclutionViolation
+				return ipv4Network{}, cdnerrors.ErrExclutionViolation
 			}
 		}
 		return ipv4Network{}, fmt.Errorf("unable to INSERT ipv4 network '%s': %w", network, err)
@@ -2243,7 +2228,7 @@ func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error
 			return nil, fmt.Errorf("unable to query for ipv6_networks: %w", err)
 		}
 	} else {
-		return nil, errForbidden
+		return nil, cdnerrors.ErrForbidden
 	}
 
 	ipv6Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv6Network])
@@ -2257,7 +2242,7 @@ func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error
 func insertIPv6Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv6Network, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
-		return ipv6Network{}, errForbidden
+		return ipv6Network{}, cdnerrors.ErrForbidden
 	}
 	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv6_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
 	if err != nil {
@@ -2265,11 +2250,11 @@ func insertIPv6Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) 
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
 			case pgUniqueViolation:
-				return ipv6Network{}, errAlreadyExists
+				return ipv6Network{}, cdnerrors.ErrAlreadyExists
 			case pgCheckViolation:
-				return ipv6Network{}, errCheckViolation
+				return ipv6Network{}, cdnerrors.ErrCheckViolation
 			case pgExclusionViolation:
-				return ipv6Network{}, errExclutionViolation
+				return ipv6Network{}, cdnerrors.ErrExclutionViolation
 			}
 		}
 		return ipv6Network{}, fmt.Errorf("unable to INSERT ipv6 network '%s': %w", network, err)
@@ -2381,7 +2366,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			users, err := selectUsers(dbPool, logger, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query users")
@@ -2407,9 +2392,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			user, err := selectUserByID(dbPool, logger, input.User, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, errNotFound) {
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("user not found")
 				}
 				logger.Err(err).Msg("unable to query users")
@@ -2442,7 +2427,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				user, err := createUser(dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
 				if err != nil {
-					if errors.Is(err, errForbidden) {
+					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
 					}
 					logger.Err(err).Msg("unable to add user")
@@ -2470,7 +2455,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			_, err := setLocalPassword(logger, ad, dbPool, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
-				if errors.Is(err, errBadOldPassword) {
+				if errors.Is(err, cdnerrors.ErrBadOldPassword) {
 					return nil, huma.Error400BadRequest("old password is not correct")
 				}
 				return nil, fmt.Errorf("unable to set password: %w", err)
@@ -2488,9 +2473,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			user, err := updateUser(dbPool, ad, input.User, input.Body.Org, input.Body.Role)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, errNotFound) {
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("user not found")
 				}
 				logger.Err(err).Msg("unable to update user")
@@ -2510,7 +2495,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			orgs, err := selectOrgs(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query orgs")
@@ -2536,9 +2521,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			org, err := selectOrgByID(dbPool, input.Org, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, errNotFound) {
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("organization not found")
 				}
 				logger.Err(err).Msg("unable to query organization")
@@ -2563,9 +2548,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			oAddrs, err := selectOrgIPs(dbPool, input.Org, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, errNotFound) {
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("organization not found")
 				}
 				logger.Err(err).Msg("unable to query organization ips")
@@ -2602,7 +2587,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				id, err := insertOrg(dbPool, input.Body.Name, ad)
 				if err != nil {
-					if errors.Is(err, errForbidden) {
+					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
 					}
 					logger.Err(err).Msg("unable to add organization")
@@ -2626,7 +2611,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			services, err := selectServices(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to query for services")
 				}
 				logger.Err(err).Msg("unable to query services")
@@ -2652,9 +2637,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			services, err := selectServiceByID(dbPool, input.Service, ad)
 			if err != nil {
-				if errors.Is(err, errNotFound) {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("service not found")
-				} else if errors.Is(err, errForbidden) {
+				} else if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("access to this service is not allowed")
 				}
 				logger.Err(err).Msg("unable to query service by ID")
@@ -2693,11 +2678,11 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				id, err := insertService(dbPool, input.Body.Name, input.Body.Org, ad)
 				if err != nil {
-					if errors.Is(err, errUnprocessable) {
+					if errors.Is(err, cdnerrors.ErrUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
-					} else if errors.Is(err, errAlreadyExists) {
+					} else if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 						return nil, huma.Error409Conflict("service already exists")
-					} else if errors.Is(err, errForbidden) {
+					} else if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to create this service")
 					}
 					logger.Err(err).Msg("unable to add service")
@@ -2721,7 +2706,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			serviceVersions, err := selectServiceVersions(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query service-versions")
@@ -2777,11 +2762,11 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				serviceVersionInsertRes, err := insertServiceVersion(dbPool, pgServiceID, input.Body.Org, input.Body.Domains, input.Body.Origins, input.Body.Active, ad)
 				if err != nil {
-					if errors.Is(err, errUnprocessable) {
+					if errors.Is(err, cdnerrors.ErrUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
-					} else if errors.Is(err, errAlreadyExists) {
+					} else if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 						return nil, huma.Error409Conflict("service version already exists")
-					} else if errors.Is(err, errForbidden) {
+					} else if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to create this service version")
 					}
 					logger.Err(err).Msg("unable to add service")
@@ -2807,7 +2792,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			vcls, err := selectVcls(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query vcls")
@@ -2831,7 +2816,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			networks, err := selectIPv4Networks(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query ipv4 networks")
@@ -2870,13 +2855,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				ipv4Net, err := insertIPv4Network(dbPool, input.Body.Network, ad)
 				if err != nil {
 					switch {
-					case errors.Is(err, errAlreadyExists):
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("IPv4 network already exists")
-					case errors.Is(err, errForbidden):
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this IPv4 network")
-					case errors.Is(err, errCheckViolation):
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error400BadRequest("content of request is not valid for IPv4 network")
-					case errors.Is(err, errExclutionViolation):
+					case errors.Is(err, cdnerrors.ErrExclutionViolation):
 						return nil, huma.Error409Conflict("IPv4 network is already covered by existing networks")
 					}
 					logger.Err(err).Msg("unable to add IPv4 network")
@@ -2898,7 +2883,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 			networks, err := selectIPv6Networks(dbPool, ad)
 			if err != nil {
-				if errors.Is(err, errForbidden) {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query ipv6 networks")
@@ -2937,13 +2922,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				ipv6Net, err := insertIPv6Network(dbPool, input.Body.Network, ad)
 				if err != nil {
 					switch {
-					case errors.Is(err, errAlreadyExists):
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("IPv6 network already exists")
-					case errors.Is(err, errForbidden):
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this IPv6 network")
-					case errors.Is(err, errCheckViolation):
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error400BadRequest("invalid data for IPv6 network")
-					case errors.Is(err, errExclutionViolation):
+					case errors.Is(err, cdnerrors.ErrExclutionViolation):
 						return nil, huma.Error409Conflict("IPv6 network is already covered by existing networks")
 					}
 					logger.Err(err).Str("network", input.Body.Network.String()).Msg("unable to add IPv6 network")

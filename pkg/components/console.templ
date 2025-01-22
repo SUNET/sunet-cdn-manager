@@ -1,5 +1,10 @@
 package components
 
+import (
+	"errors"
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
+)
+
 templ ConsolePage(heading string, orgs []string, contents templ.Component) {
 	@Logout()
 	@OrgSelector(orgs)
@@ -62,24 +67,22 @@ templ ServicesContent(services []Service) {
 	<a href="/console/create-service">Create service</a>
 }
 
-templ CreateServiceContent(reqState string) {
+templ CreateServiceContent(err error) {
 	<form method="post" action="/console/create-service">
 		@CSRF()
 		<label for="name">Name:</label>
 		<input type="text" id="name" name="name"/>
 		<input type="submit"/>
 	</form>
-	switch reqState {
-		case "get":
-			<div>About to create a service</div>
-		case "create-success":
-			<div>Service creation successful</div>
-		case "create-fail":
-			<div>Service creation failed</div>
-		case "already-exists":
-			<div>Service already exists</div>
-		default:
-			<div>unexpected request state</div>
+	if err != nil {
+		switch  {
+			case errors.Is(err, cdnerrors.ErrAlreadyExists):
+				<div>Service already exists</div>
+			case errors.Is(err, cdnerrors.ErrInvalidFormData):
+				<div>Invalid form data</div>
+			default:
+				<div>Service creation failed</div>
+		}
 	}
 }
 
