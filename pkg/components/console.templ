@@ -2,6 +2,7 @@ package components
 
 import (
 	"errors"
+	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 )
 
@@ -21,12 +22,12 @@ templ Home(username string) {
 
 templ Logout() {
 	<div class="logout">
-		<div><a href="/auth/logout">Logout</a></div>
+		<div><a href={ templ.URL("/auth/logout") }>Logout</a></div>
 	</div>
 }
 
 templ OrgSelector(orgs []string) {
-	<form action="/console">
+	<form action={ templ.URL("/console") }>
 		@CSRF()
 		<label for="orgs">Organization:</label>
 		<select name="orgs" id="orgs" disabled?={ len(orgs) < 2 }>
@@ -46,8 +47,8 @@ templ NavBar() {
 	<div>
 		<nav>
 			<ul>
-				<li><a href="/console">Home</a></li>
-				<li><a href="/console/services">Services</a></li>
+				<li><a href={ templ.URL("/console") }>Home</a></li>
+				<li><a href={ templ.URL("/console/services") }>Services</a></li>
 			</ul>
 		</nav>
 	</div>
@@ -60,15 +61,15 @@ templ ServicesContent(services []Service) {
 		<div>Services:</div>
 		<ul>
 			for _, service := range services {
-				<li>{ service.Name }</li>
+				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s", service.Name)) }>{ service.Name }</a></li>
 			}
 		</ul>
 	}
-	<a href="/console/create-service">Create service</a>
+	<a href={ templ.URL("/console/create-service") }>Create service</a>
 }
 
 templ CreateServiceContent(err error) {
-	<form method="post" action="/console/create-service">
+	<form method="post" action={ templ.URL("/console/create-service") }>
 		@CSRF()
 		<label for="name">Name:</label>
 		<input type="text" id="name" name="name"/>
@@ -89,7 +90,7 @@ templ CreateServiceContent(err error) {
 templ LoginPage(returnTo string, loginFailed bool) {
 	<h1>Login</h1>
 	<h2>Local</h2>
-	<form method="post" action="/auth/login">
+	<form method="post" action={ templ.URL("/auth/login") }>
 		@CSRF()
 		if returnTo != "" {
 			<input type="hidden" name="return_to" value={ returnTo }/>
@@ -107,7 +108,7 @@ templ LoginPage(returnTo string, loginFailed bool) {
 		<div>Login failed!</div>
 	}
 	<h2>OpenID Connect</h2>
-	<div><a href="/auth/oidc/keycloak">Login with Keycloak</a></div>
+	<div><a href={ templ.URL("/auth/oidc/keycloak") }>Login with Keycloak</a></div>
 }
 
 // https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf
