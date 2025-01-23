@@ -208,6 +208,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
 				}
 				return
 			}
@@ -219,6 +220,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+						return
 					}
 					return
 				}
@@ -474,6 +476,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 			if err != nil {
 				logger.Err(err).Msg("unable to render login page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
 			}
 		case "POST":
 			err := r.ParseForm()
@@ -499,6 +502,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				if err != nil {
 					logger.Err(err).Msg("unable to render login page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
 				}
 				return
 			}
@@ -601,6 +605,7 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			if err != nil {
 				logger.Err(err).Msg("unable to parse returnTo in logout handler")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
 			}
 			validatedRedirect(u.String(), w, r)
 			return
@@ -801,9 +806,9 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 			logger.Err(err).Msg("unable to get keycloak user")
 			if errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
-			} else {
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
 			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -1171,6 +1176,7 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Han
 				if err != nil {
 					logger.Err(err).Msg("unable to redirect to login page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
 				}
 				return
 			}
