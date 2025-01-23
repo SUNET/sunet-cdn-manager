@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
+	"strconv"
 )
 
 templ ConsolePage(heading string, orgs []string, contents templ.Component) {
@@ -83,6 +84,46 @@ templ CreateServiceContent(err error) {
 				<div>Invalid form data</div>
 			default:
 				<div>Service creation failed</div>
+		}
+	}
+}
+
+templ ServiceVersionsContent(serviceName string, serviceVersions []ServiceVersion) {
+	if len(serviceVersions) == 0 {
+		<div>No versions created</div>
+	} else {
+		<div>Versions:</div>
+		<ul>
+			for _, serviceVersion := range serviceVersions {
+				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, serviceVersion.Version)) }>{ strconv.FormatInt(serviceVersion.Version, 10) }</a></li>
+			}
+		</ul>
+	}
+	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>Create service version</a>
+}
+
+templ CreateServiceVersionContent(serviceName string, err error) {
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>
+		@CSRF()
+		<label for="domains">Domains:</label>
+		<input type="text" id="domains" name="domains"/>
+		<fieldset>
+			<legend>Origins:</legend>
+			<label for="origins">Origins:</label>
+			<input type="text" id="origins" name="origins"/>
+			<label for="origins-tls">TLS:</label>
+			<input type="checkbox" id="origins-tls" name="origins-tls"/>
+		</fieldset>
+		<label for="vcl_recv">VCL recv:</label>
+		<textarea id="vcl_recv" name="vcl_recv" placeholder="Enter your VLC here..."></textarea>
+		<input type="submit"/>
+	</form>
+	if err != nil {
+		switch  {
+			case errors.Is(err, cdnerrors.ErrInvalidFormData):
+				<div>Invalid form data</div>
+			default:
+				<div>Service version creation failed</div>
 		}
 	}
 }

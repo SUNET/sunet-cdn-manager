@@ -1966,7 +1966,6 @@ func TestPostServiceVersion(t *testing.T) {
 		password       string
 		expectedStatus int
 		newService     string
-		org            string
 		serviceID      string
 		domains        []string
 		origins        []origin
@@ -1977,7 +1976,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
-			org:         "org1",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -1999,7 +1997,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
-			org:         "org1",
 			domains:     []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
 			origins: []origin{
 				{
@@ -2021,7 +2018,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
-			org:         "org1",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -2043,7 +2039,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
-			org:         "org1",
 			domains:     []string{strings.Repeat("a", 254), "example.se"},
 			origins: []origin{
 				{
@@ -2065,7 +2060,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-0000000000001",
-			org:         "org1",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -2087,7 +2081,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "00000003-0000-0000-0000-00000000001",
-			org:         "org1",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -2109,7 +2102,6 @@ func TestPostServiceVersion(t *testing.T) {
 			username:    "admin",
 			password:    "adminpass1",
 			serviceID:   "junk",
-			org:         "org1",
 			domains:     []string{"example.com", "example.se"},
 			origins: []origin{
 				{
@@ -2127,7 +2119,7 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description: "successful org request",
+			description: "successful user request",
 			username:    "username1",
 			password:    "password1",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
@@ -2148,7 +2140,7 @@ func TestPostServiceVersion(t *testing.T) {
 			active:         true,
 		},
 		{
-			description: "failed org request not assigned to org",
+			description: "failed user request not assigned to org",
 			username:    "username3-no-org",
 			password:    "password3",
 			serviceID:   "00000003-0000-0000-0000-000000000001",
@@ -2173,12 +2165,10 @@ func TestPostServiceVersion(t *testing.T) {
 	for _, test := range tests {
 		newServiceVersion := struct {
 			ServiceID string   `json:"service_id"`
-			Org       string   `json:"org,omitempty"`
 			Domains   []string `json:"domains"`
 			Origins   []origin `json:"origins"`
 		}{
 			ServiceID: test.serviceID,
-			Org:       test.org,
 			Domains:   test.domains,
 			Origins:   test.origins,
 		}
