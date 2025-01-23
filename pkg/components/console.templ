@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
+	"github.com/SUNET/sunet-cdn-manager/pkg/types"
 	"strconv"
 )
 
@@ -100,6 +101,28 @@ templ ServiceVersionsContent(serviceName string, serviceVersions []ServiceVersio
 		</ul>
 	}
 	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>Create service version</a>
+}
+
+templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
+	<ul>
+		<li>Service ID: { sv.ServiceID.String() }</li>
+		<li>ID: { sv.ID.String() }</li>
+		<li>Version: { strconv.FormatInt(sv.Version, 10) }</li>
+		<li>Active: { strconv.FormatBool(sv.Active) }</li>
+		<li>VCL Recv: { sv.VclRecvContent }</li>
+	</ul>
+	for _, origin := range sv.Origins {
+		<ul>
+			<li>Host: { origin.Host }</li>
+			<li>Port: { strconv.Itoa(origin.Port) }</li>
+			<li>TLS: { strconv.FormatBool(origin.TLS) }</li>
+		</ul>
+	}
+	for _, domain := range sv.Domains {
+		<ul>
+			<li>Domain: { domain }</li>
+		</ul>
+	}
 }
 
 templ CreateServiceVersionContent(serviceName string, err error) {

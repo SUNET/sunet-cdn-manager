@@ -1970,6 +1970,7 @@ func TestPostServiceVersion(t *testing.T) {
 		domains        []string
 		origins        []origin
 		active         bool
+		vclRecv        string
 	}{
 		{
 			description: "successful superuser request",
@@ -1991,6 +1992,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusCreated,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request with too many domains",
@@ -2012,6 +2014,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request, too long Host in origin list",
@@ -2033,6 +2036,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request, too long domain in domains list",
@@ -2054,6 +2058,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request with invalid uuid (too long)",
@@ -2075,6 +2080,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request with invalid uuid (too short)",
@@ -2096,6 +2102,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed superuser request with invalid uuid (not a UUID)",
@@ -2117,6 +2124,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "successful user request",
@@ -2138,6 +2146,7 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusCreated,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 		{
 			description: "failed user request not assigned to org",
@@ -2159,18 +2168,23 @@ func TestPostServiceVersion(t *testing.T) {
 			},
 			expectedStatus: http.StatusForbidden,
 			active:         true,
+			vclRecv:        "vcl_recv content",
 		},
 	}
 
 	for _, test := range tests {
 		newServiceVersion := struct {
 			ServiceID string   `json:"service_id"`
+			Active    bool     `json:"active"`
 			Domains   []string `json:"domains"`
 			Origins   []origin `json:"origins"`
+			VclRecv   string   `json:"vcl_recv"`
 		}{
 			ServiceID: test.serviceID,
+			Active:    test.active,
 			Domains:   test.domains,
 			Origins:   test.origins,
+			VclRecv:   test.vclRecv,
 		}
 
 		b, err := json.Marshal(newServiceVersion)

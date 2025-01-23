@@ -26,6 +26,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/SUNET/sunet-cdn-manager/pkg/types"
 	"github.com/a-h/templ"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/danielgtaylor/huma/v2"
@@ -285,6 +286,60 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 	}
 }
 
+func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		serviceName := chi.URLParam(r, "service")
+		if serviceName == "" {
+			logger.Error().Msg("console: missing service parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		serviceVersionStr := chi.URLParam(r, "version")
+		if serviceVersionStr == "" {
+			logger.Error().Msg("console: missing version parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		serviceVersion, err := strconv.ParseInt(serviceVersionStr, 10, 64)
+		if err != nil {
+			logger.Error().Msg("console: unable to convert version parameter to int")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		heading := "Service version"
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing authData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(authData)
+
+		svc, err := getServiceVersionConfig(dbPool, ad, serviceName, serviceVersion)
+		if err != nil {
+			logger.Err(err).Msg("console: unable to select service version config")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = renderConsolePage(w, r, ad, heading, components.ServiceVersionContent(serviceName, svc))
+		if err != nil {
+			logger.Err(err).Msg("unable to render services page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -368,7 +423,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				})
 			}
 
-			_, err = insertServiceVersion(logger, dbPool, serviceName, formData.Domains, origins, Ptr(false), ad)
+			_, err = insertServiceVersion(logger, ad, dbPool, serviceName, formData.Domains, origins, false, formData.VclRecv)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(err))
@@ -2008,6 +2063,90 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	return serviceVersions, nil
 }
 
+func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, serviceNameOrID string, version int64) (types.ServiceVersionConfig, error) {
+	// If neither a superuser or a normal user belonging to an org there
+	// is nothing further that is allowed
+	if !ad.Superuser {
+		if ad.OrgID == nil {
+			return types.ServiceVersionConfig{}, cdnerrors.ErrForbidden
+		}
+	}
+
+	serviceIdent, err := parseNameOrID(serviceNameOrID)
+	if err != nil {
+		return types.ServiceVersionConfig{}, cdnerrors.ErrUnprocessable
+	}
+
+	var serviceID pgtype.UUID
+
+	var svc types.ServiceVersionConfig
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if serviceIdent.isID() {
+			serviceID = *serviceIdent.id
+		} else {
+			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to get service id by name: %w", err)
+			}
+		}
+
+		if !ad.Superuser {
+			orgID, err := getServiceOrgIDTx(tx, serviceID)
+			if err != nil {
+				return fmt.Errorf("unable to get org id for service: %w", err)
+			}
+
+			if *ad.OrgID != orgID {
+				return cdnerrors.ErrForbidden
+			}
+		}
+
+		// Usage of JOIN with subqueries based on
+		// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
+		rows, err := tx.Query(
+			context.Background(),
+			`SELECT
+				services.id AS service_id,
+				service_versions.id,
+				service_versions.version,
+				service_versions.active,
+				service_vcl_recv.content AS vcl_recv_content,
+				(SELECT
+					array_agg(domain ORDER BY domain)
+					FROM service_domains
+					WHERE service_version_id = service_versions.id
+				) AS domains,
+				(SELECT
+					array_agg((host, port, tls) ORDER BY host, port)
+					FROM service_origins
+					WHERE service_version_id = service_versions.id
+				) AS origins
+			FROM
+				services
+				JOIN service_versions ON services.id = service_versions.service_id
+				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+			WHERE services.id=$1 AND service_versions.version=$2`,
+			serviceID,
+			version,
+		)
+		if err != nil {
+			return fmt.Errorf("unable to query for service version config: %w", err)
+		}
+
+		svc, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[types.ServiceVersionConfig])
+		if err != nil {
+			return fmt.Errorf("unable to collect service version config into struct: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return types.ServiceVersionConfig{}, fmt.Errorf("getServiceVersionConfig transaction failed: %w", err)
+	}
+
+	return svc, nil
+}
+
 type serviceVersionInsertResult struct {
 	versionID     pgtype.UUID
 	version       int64
@@ -2015,9 +2154,10 @@ type serviceVersionInsertResult struct {
 	domainIDs     []pgtype.UUID
 	originIDs     []pgtype.UUID
 	deactivatedID pgtype.UUID
+	vclRecvID     pgtype.UUID
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainString, origins []origin, active *bool) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersion pgtype.UUID
@@ -2031,6 +2171,18 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE version_counter for service version: %w", err)
 	}
 
+	// If the new version is expected to be active we need to deactivate the currently active version
+	if active {
+		err := tx.QueryRow(
+			context.Background(),
+			"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
+			serviceID,
+		).Scan(&deactivatedServiceVersion)
+		if err != nil {
+			return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
+		}
+	}
+
 	err = tx.QueryRow(
 		context.Background(),
 		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
@@ -2040,18 +2192,6 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 	).Scan(&serviceVersionID)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
-	}
-
-	// If the new version is expected to be active we need to unset the currently active version
-	if active != nil && *active {
-		err := tx.QueryRow(
-			context.Background(),
-			"UPDATE service_versions SET active=NULL WHERE service_id=$1 AND active=true returning id",
-			serviceID,
-		).Scan(&deactivatedServiceVersion)
-		if err != nil {
-			return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
-		}
 	}
 
 	var serviceDomainIDs []pgtype.UUID
@@ -2086,16 +2226,25 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 		serviceOriginIDs = append(serviceOriginIDs, serviceOriginID)
 	}
 
+	var serviceVclRecvID pgtype.UUID
+	err = tx.QueryRow(
+		context.Background(),
+		"INSERT INTO service_vcl_recv (service_version_id, content) VALUES ($1, $2) RETURNING id",
+		serviceVersionID,
+		vclRecv,
+	).Scan(&serviceVclRecvID)
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service vcl recv: %w", err)
+	}
+
 	res := serviceVersionInsertResult{
 		versionID:     serviceVersionID,
 		version:       versionCounter,
 		domainIDs:     serviceDomainIDs,
 		originIDs:     serviceOriginIDs,
 		deactivatedID: deactivatedServiceVersion,
-	}
-
-	if active != nil && *active {
-		res.active = *active
+		vclRecvID:     serviceVclRecvID,
+		active:        active,
 	}
 
 	return res, nil
@@ -2111,7 +2260,7 @@ func getServiceOrgIDTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtype.UUID, error) {
 	return orgID, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, dbPool *pgxpool.Pool, serviceNameOrID string, domains []domainString, origins []origin, active *bool, ad authData) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, serviceNameOrID string, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2121,13 +2270,6 @@ func insertServiceVersion(logger *zerolog.Logger, dbPool *pgxpool.Pool, serviceN
 	}
 
 	var serviceVersionResult serviceVersionInsertResult
-
-	// The "active" column in the database uses NULL to represent "false"
-	// so we can have a UNIQUE constraint for "true". For this reason,
-	// translate boolean "false" to nil if necessary:
-	if active != nil && !*active {
-		active = nil
-	}
 
 	serviceIdent, err := parseNameOrID(serviceNameOrID)
 	if err != nil {
@@ -2159,7 +2301,7 @@ func insertServiceVersion(logger *zerolog.Logger, dbPool *pgxpool.Pool, serviceN
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, domains, origins, active)
+		serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, domains, origins, active, vclRecv)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -2457,7 +2599,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get(consolePath+"/services/{service}", consoleServiceHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
-		// r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
 	})
@@ -2897,7 +3039,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					ServiceID uuid.UUID      `json:"service_id" doc:"Service ID"`
 					Domains   []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins   []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active    *bool          `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					Active    bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					VclRecv   string         `json:"vcl_recv" doc:"The VCL recv content"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -2922,7 +3065,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to convert uuid to pgtype")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, dbPool, pgServiceID.String(), input.Body.Domains, input.Body.Origins, input.Body.Active, ad)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, pgServiceID.String(), input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")

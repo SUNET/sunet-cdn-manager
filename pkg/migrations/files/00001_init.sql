@@ -108,10 +108,11 @@ CREATE TABLE service_versions (
     time_created timestamptz NOT NULL DEFAULT now(),
     service_id uuid NOT NULL REFERENCES services(id),
     version bigint NOT NULL,
-    active boolean,
-    UNIQUE(service_id, version),
-    UNIQUE(service_id, active)
+    active boolean DEFAULT false NOT NULL,
+    UNIQUE(service_id, version)
 );
+-- https://dba.stackexchange.com/questions/197562/constraint-one-boolean-row-is-true-all-other-rows-false
+CREATE UNIQUE INDEX service_versions_active_only_1_true ON service_versions (service_id, active) WHERE active;
 
 CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
