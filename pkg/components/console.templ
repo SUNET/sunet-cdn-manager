@@ -8,14 +8,23 @@ import (
 	"strconv"
 )
 
-templ ConsolePage(heading string, orgs []string, contents templ.Component) {
-	@Logout()
-	@OrgSelector(orgs)
-	@NavBar()
-	<h1>{ heading }</h1>
-	<div id="contents">
-		@contents
-	</div>
+templ ConsolePage(title string, orgs []string, contents templ.Component) {
+	<html>
+		@headerComponent(title)
+		<body>
+			@Logout()
+			@OrgSelector(orgs)
+			@NavBar()
+			<h1>{ title }</h1>
+			<div id="contents">
+				@contents
+			</div>
+		</body>
+	</html>
+}
+
+templ headerComponent(title string) {
+	<head><title>{ title }</title></head>
 }
 
 templ Home(username string) {
