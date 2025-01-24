@@ -3596,19 +3596,10 @@ func insertGorillaCSRFKey(tx pgx.Tx, authKey []byte, active bool) (pgtype.UUID, 
 		}
 	}
 
-	// If active is false we actually want to insert NULL in the database
-	// since the UNIQUE constraint will error out if we try to store
-	// multiple FALSE entries at the same time. So only actually set the
-	// pointer to a bool value if true.
-	var activePtr *bool
-	if active {
-		activePtr = &active
-	}
-
 	err := tx.QueryRow(
 		context.Background(),
 		"INSERT INTO gorilla_csrf_keys (active, auth_key) VALUES ($1, $2) RETURNING id",
-		activePtr,
+		active,
 		authKey,
 	).Scan(&csrfKeyID)
 	if err != nil {

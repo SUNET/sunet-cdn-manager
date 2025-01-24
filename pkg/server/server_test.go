@@ -420,21 +420,41 @@ func TestGorillaCSRFKey(t *testing.T) {
 	}
 	defer ts.Close()
 
-	gorillaCSRFAuthKey, err := generateRandomKey(32)
-	if err != nil {
-		t.Fatalf("unable to create random gorilla CSRF key: %s", err)
+	tests := []struct {
+		description string
+		active      bool
+	}{
+		{
+			description: "insert new active key",
+			active:      true,
+		},
+		{
+			description: "insert another active key",
+			active:      true,
+		},
+		{
+			description: "insert new inactive key",
+			active:      false,
+		},
 	}
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, true)
+	for _, test := range tests {
+		gorillaCSRFAuthKey, err := generateRandomKey(32)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT CSRF key: %w", err)
+			t.Fatalf("unable to create random gorilla CSRF key: %s", err)
 		}
 
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("transaction failed: %s", err)
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, test.active)
+			if err != nil {
+				return fmt.Errorf("unable to INSERT CSRF key: %w", err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("transaction failed: %s", err)
+		}
 	}
 }
 
