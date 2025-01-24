@@ -550,7 +550,14 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				return
 			}
 
-			ad, err := dbUserLogin(dbPool, formData.Username, formData.Password)
+			var ad authData
+			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+				ad, err = dbUserLogin(tx, formData.Username, formData.Password)
+				if err != nil {
+					return err
+				}
+				return nil
+			})
 			if err != nil {
 				switch err {
 				case pgx.ErrNoRows:
@@ -1076,7 +1083,7 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func dbUserLogin(dbPool *pgxpool.Pool, username string, password string) (authData, error) {
+func dbUserLogin(tx pgx.Tx, username string, password string) (authData, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
@@ -1086,7 +1093,7 @@ func dbUserLogin(dbPool *pgxpool.Pool, username string, password string) (authDa
 	var superuser bool
 	var roleName string
 
-	err := dbPool.QueryRow(
+	err := tx.QueryRow(
 		context.Background(),
 		`SELECT
 				users.id,
@@ -1154,16 +1161,27 @@ func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Reques
 		return nil
 	}
 
-	ad, err := dbUserLogin(dbPool, username, password)
-	if err != nil {
-		switch err {
-		case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-			// The user does not exist etc or the password was bad, try again
-			sendBasicAuth(w)
+	var ad authData
+	var err error
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		ad, err = dbUserLogin(tx, username, password)
+		if err != nil {
+			switch err {
+			case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+				// The user does not exist etc or the password was bad, try again
+				sendBasicAuth(w)
+				return nil
+			}
+
+			logger.Err(err).Msg("failed looking up username for authentication")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return nil
 		}
 
-		logger.Err(err).Msg("failed looking up username for authentication")
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("handleBasicAuth transaction failed")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil
 	}
@@ -1407,7 +1425,7 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 
 		// ... and finally, verify that the password supplied by a normal user actually is correct
 		if !ad.Superuser {
-			_, err := dbUserLogin(dbPool, userName, oldPassword)
+			_, err := dbUserLogin(tx, userName, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword

@@ -341,6 +341,9 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		return nil, nil, err
 	}
 
+	// Make sure tests do not hang even if they only have access to a single db connection
+	pgConfig.MaxConns = 1
+
 	fmt.Println(pgConfig.ConnString())
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
