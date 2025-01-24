@@ -159,7 +159,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
-		heading := "Create service"
+		title := "Create service"
 
 		session := getSession(r, cookieStore)
 
@@ -174,7 +174,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -200,7 +200,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -212,7 +212,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			_, err = insertService(dbPool, formData.Name, ad.OrgName, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(err))
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -245,7 +245,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		heading := "Service"
+		title := "Service"
 
 		session := getSession(r, cookieStore)
 
@@ -265,7 +265,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, heading, components.ServiceContent(serviceName, serviceVersions))
+		err = renderConsolePage(w, r, ad, title, components.ServiceContent(serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -299,7 +299,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		heading := "Service version"
+		title := "Service version"
 
 		session := getSession(r, cookieStore)
 
@@ -319,7 +319,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, heading, components.ServiceVersionContent(serviceName, svc))
+		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -339,7 +339,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			return
 		}
 
-		heading := "Create service version"
+		title := "Create service version"
 
 		session := getSession(r, cookieStore)
 
@@ -354,7 +354,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, heading, components.CreateServiceVersionContent(serviceName, nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -380,7 +380,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, heading, components.CreateServiceVersionContent(serviceName, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -414,7 +414,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			_, err = insertServiceVersion(logger, ad, dbPool, serviceName, formData.Domains, origins, false, formData.VclRecv)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(w, r, ad, heading, components.CreateServiceContent(err))
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -436,12 +436,12 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 	}
 }
 
-func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, heading string, contents templ.Component) error {
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad authData, title string, contents templ.Component) error {
 	orgs := []string{}
 	if ad.OrgName != nil {
 		orgs = append(orgs, *ad.OrgName)
 	}
-	component := components.ConsolePage(heading, orgs, contents)
+	component := components.ConsolePage(title, orgs, contents)
 	return component.Render(r.Context(), w)
 }
 
