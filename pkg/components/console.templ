@@ -83,12 +83,22 @@ templ ServiceContent(serviceName string, serviceVersions []types.ServiceVersion)
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
 	} else {
-		<div>Versions:</div>
-		<ul>
+		<table>
+			<tr>
+				<th>Version</th>
+				<th>Active</th>
+			</tr>
 			for _, sv := range serviceVersions {
-				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a></li>
+				<tr>
+					<td>
+						<a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
+					</td>
+					<td>
+						{ strconv.FormatBool(sv.Active) }
+					</td>
+				</tr>
 			}
-		</ul>
+		</table>
 	}
 	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>Create service version</a>
 }
