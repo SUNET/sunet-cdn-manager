@@ -2020,12 +2020,12 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id ORDER BY service_versions.version")
+		rows, err = dbPool.Query(context.Background(), "SELECT id, version, active FROM service_versions ORDER BY service_versions.version")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for service versions as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.name FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for service versions as org member: %w", err)
 		}
@@ -2037,15 +2037,13 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	var id pgtype.UUID
 	var version int64
 	var active bool
-	var serviceName string
-	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &serviceName}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active}, func() error {
 		serviceVersions = append(
 			serviceVersions,
 			serviceVersion{
-				ID:          id,
-				ServiceName: serviceName,
-				Version:     version,
-				Active:      active,
+				ID:      id,
+				Version: version,
+				Active:  active,
 			},
 		)
 		return nil
@@ -3312,10 +3310,9 @@ type servicesOutput struct {
 }
 
 type serviceVersion struct {
-	ID          pgtype.UUID `json:"id"`
-	Version     int64       `json:"version"`
-	Active      bool        `json:"active"`
-	ServiceName string      `json:"service_name,omitempty"`
+	ID      pgtype.UUID `json:"id"`
+	Version int64       `json:"version"`
+	Active  bool        `json:"active"`
 }
 
 type serviceVersionOutput struct {
