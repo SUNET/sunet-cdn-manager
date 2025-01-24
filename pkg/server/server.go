@@ -265,7 +265,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, heading, components.ServiceVersionsContent(serviceName, serviceVersions))
+		err = renderConsolePage(w, r, ad, heading, components.ServiceContent(serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
