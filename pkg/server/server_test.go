@@ -410,6 +410,34 @@ func TestServerInit(t *testing.T) {
 	}
 }
 
+func TestGorillaCSRFKey(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	gorillaCSRFAuthKey, err := generateRandomKey(32)
+	if err != nil {
+		t.Fatalf("unable to create random gorilla CSRF key: %s", err)
+	}
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, true)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT CSRF key: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("transaction failed: %s", err)
+	}
+}
+
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {

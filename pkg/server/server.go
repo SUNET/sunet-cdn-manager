@@ -3588,7 +3588,7 @@ func insertGorillaCSRFKey(tx pgx.Tx, authKey []byte, active bool) (pgtype.UUID, 
 	var prevCSRFKeyID, csrfKeyID pgtype.UUID
 
 	if active {
-		err := tx.QueryRow(context.Background(), "UPDATE gorilla_csrf_keys SET active = NULL WHERE active = TRUE RETURNING id").Scan(&prevCSRFKeyID)
+		err := tx.QueryRow(context.Background(), "UPDATE gorilla_csrf_keys SET active = false WHERE active = TRUE RETURNING id").Scan(&prevCSRFKeyID)
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("unable to deactivate previous gorilla CSRF key: %w", err)

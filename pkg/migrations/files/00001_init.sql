@@ -78,9 +78,10 @@ CREATE TABLE auth_provider_keycloak (
 CREATE TABLE gorilla_csrf_keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    active boolean UNIQUE,
+    active boolean NOT NULL,
     auth_key bytea UNIQUE NOT NULL CONSTRAINT auth_length CHECK(length(auth_key)=32)
 );
+CREATE UNIQUE INDEX gorilla_csrf_keys_active_only_1_true ON gorilla_csrf_keys (active) WHERE active;
 
 CREATE TABLE user_argon2keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
