@@ -95,8 +95,8 @@ templ ServiceVersionsContent(serviceName string, serviceVersions []types.Service
 	} else {
 		<div>Versions:</div>
 		<ul>
-			for _, serviceVersion := range serviceVersions {
-				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, serviceVersion.Version)) }>{ strconv.FormatInt(serviceVersion.Version, 10) }</a></li>
+			for _, sv := range serviceVersions {
+				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a></li>
 			}
 		</ul>
 	}
@@ -104,25 +104,40 @@ templ ServiceVersionsContent(serviceName string, serviceVersions []types.Service
 }
 
 templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
-	<ul>
-		<li>Service ID: { sv.ServiceID.String() }</li>
-		<li>ID: { sv.ID.String() }</li>
-		<li>Version: { strconv.FormatInt(sv.Version, 10) }</li>
-		<li>Active: { strconv.FormatBool(sv.Active) }</li>
-		<li>VCL Recv: { sv.VclRecvContent }</li>
-	</ul>
-	for _, origin := range sv.Origins {
-		<ul>
-			<li>Host: { origin.Host }</li>
-			<li>Port: { strconv.Itoa(origin.Port) }</li>
-			<li>TLS: { strconv.FormatBool(origin.TLS) }</li>
-		</ul>
-	}
-	for _, domain := range sv.Domains {
-		<ul>
-			<li>Domain: { domain }</li>
-		</ul>
-	}
+	<table>
+		<tr>
+			<th>ID</th>
+			<th>Service ID</th>
+			<th>Version</th>
+			<th>Active</th>
+			<th>VCL Recv</th>
+			<th>Origins</th>
+			<th>Domains</th>
+		</tr>
+		<tr>
+			<td>{ sv.ID.String() }</td>
+			<td>{ sv.ServiceID.String() }</td>
+			<td>{ strconv.FormatInt(sv.Version, 10) }</td>
+			<td>{ strconv.FormatBool(sv.Active) }</td>
+			<td>{ sv.VclRecvContent }</td>
+			<td>
+				for _, origin := range sv.Origins {
+					<ul>
+						<li>Host: { origin.Host }</li>
+						<li>Port: { strconv.Itoa(origin.Port) }</li>
+						<li>TLS: { strconv.FormatBool(origin.TLS) }</li>
+					</ul>
+				}
+			</td>
+			<td>
+				for _, domain := range sv.Domains {
+					<ul>
+						<li>Domain: { domain }</li>
+					</ul>
+				}
+			</td>
+		</tr>
+	</table>
 }
 
 templ CreateServiceVersionContent(serviceName string, err error) {
