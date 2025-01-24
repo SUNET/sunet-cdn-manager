@@ -79,6 +79,20 @@ templ ServicesContent(services []types.Service) {
 	<a href={ templ.URL("/console/create-service") }>Create service</a>
 }
 
+templ ServiceContent(serviceName string, serviceVersions []types.ServiceVersion) {
+	if len(serviceVersions) == 0 {
+		<div>No versions created</div>
+	} else {
+		<div>Versions:</div>
+		<ul>
+			for _, sv := range serviceVersions {
+				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a></li>
+			}
+		</ul>
+	}
+	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>Create service version</a>
+}
+
 templ CreateServiceContent(err error) {
 	<form method="post" action={ templ.URL("/console/create-service") }>
 		@CSRF()
@@ -96,20 +110,6 @@ templ CreateServiceContent(err error) {
 				<div>Service creation failed</div>
 		}
 	}
-}
-
-templ ServiceContent(serviceName string, serviceVersions []types.ServiceVersion) {
-	if len(serviceVersions) == 0 {
-		<div>No versions created</div>
-	} else {
-		<div>Versions:</div>
-		<ul>
-			for _, sv := range serviceVersions {
-				<li><a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d", serviceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a></li>
-			}
-		</ul>
-	}
-	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>Create service version</a>
 }
 
 templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
