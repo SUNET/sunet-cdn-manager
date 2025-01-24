@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"time"
+
 	"github.com/SUNET/sunet-cdn-manager/pkg/server"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +19,12 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
-		err = server.Run(cdnLogger, devMode)
+		shutdownDelay, err := cmd.Flags().GetDuration("shutdown-delay")
+		if err != nil {
+			return err
+		}
+
+		err = server.Run(cdnLogger, devMode, shutdownDelay)
 		return err
 	},
 }
@@ -35,4 +42,5 @@ func init() {
 	// is called directly, e.g.:
 	// serverCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	serverCmd.Flags().BoolP("dev", "", false, "run server in development mode")
+	serverCmd.Flags().Duration("shutdown-delay", time.Second*5, "how long to wait before stopping http request handling on shutdown")
 }

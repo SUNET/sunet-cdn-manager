@@ -3654,7 +3654,7 @@ func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) ht
 	return csrfMiddleware, nil
 }
 
-func Run(logger zerolog.Logger, devMode bool) error {
+func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -3733,10 +3733,9 @@ func Run(logger zerolog.Logger, devMode bool) error {
 	// Handle graceful shutdown of HTTP server when receiving signal
 	idleConnsClosed := make(chan struct{})
 
-	go func(ctx context.Context, logger zerolog.Logger) {
+	go func(ctx context.Context, logger zerolog.Logger, shutdownDelay time.Duration) {
 		<-ctx.Done()
 
-		shutdownDelay := time.Second * 5
 		logger.Info().Msgf("sleeping for %s then calling Shutdown()", shutdownDelay)
 		time.Sleep(shutdownDelay)
 		if err := srv.Shutdown(context.Background()); err != nil {
@@ -3744,7 +3743,7 @@ func Run(logger zerolog.Logger, devMode bool) error {
 			logger.Err(err).Msg("HTTP server Shutdown failure")
 		}
 		close(idleConnsClosed)
-	}(ctx, logger)
+	}(ctx, logger, shutdownDelay)
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Fatal().Err(err).Msg("HTTP server ListenAndServe failed")
