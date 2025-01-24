@@ -146,12 +146,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 			return
 		}
 
-		cServices := []components.Service{}
-		for _, service := range services {
-			cServices = append(cServices, components.Service{Name: service.Name})
-		}
-
-		err = renderConsolePage(w, r, ad, "Services", components.ServicesContent(cServices))
+		err = renderConsolePage(w, r, ad, "Services", components.ServicesContent(services))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1800,7 +1795,7 @@ func insertOrg(dbPool *pgxpool.Pool, name string, ad authData) (pgtype.UUID, err
 	return id, nil
 }
 
-func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
+func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -1817,13 +1812,13 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	services := []service{}
+	services := []types.Service{}
 	var serviceID pgtype.UUID
 	var serviceName string
 	_, err = pgx.ForEachRow(rows, []any{&serviceID, &serviceName}, func() error {
 		services = append(
 			services,
-			service{
+			types.Service{
 				ID:   serviceID,
 				Name: serviceName,
 			},
@@ -1837,20 +1832,20 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]service, error) {
 	return services, nil
 }
 
-func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (service, error) {
-	s := service{}
+func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (types.Service, error) {
+	s := types.Service{}
 	var serviceName string
 	var serviceID pgtype.UUID
 
 	serviceIdent, err := parseNameOrID(inputID)
 	if err != nil {
-		return service{}, cdnerrors.ErrUnableToParseNameOrID
+		return types.Service{}, cdnerrors.ErrUnableToParseNameOrID
 	}
 	if serviceIdent.isID() {
 		if ad.Superuser {
 			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *serviceIdent.id).Scan(&serviceName)
 			if err != nil {
-				return service{}, fmt.Errorf("unable to SELECT service by id for superuser")
+				return types.Service{}, fmt.Errorf("unable to SELECT service by id for superuser")
 			}
 			s.Name = serviceName
 			s.ID = *serviceIdent.id
@@ -1858,20 +1853,20 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.id=$1 AND orgs.id=$2", *serviceIdent.id, ad.OrgID).Scan(&serviceName)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return service{}, cdnerrors.ErrNotFound
+					return types.Service{}, cdnerrors.ErrNotFound
 				}
-				return service{}, fmt.Errorf("unable to SELECT service by id for organization")
+				return types.Service{}, fmt.Errorf("unable to SELECT service by id for organization")
 			}
 			s.Name = serviceName
 			s.ID = *serviceIdent.id
 		} else {
-			return service{}, cdnerrors.ErrNotFound
+			return types.Service{}, cdnerrors.ErrNotFound
 		}
 	} else {
 		if ad.Superuser {
 			err := dbPool.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1", inputID).Scan(&serviceID)
 			if err != nil {
-				return service{}, fmt.Errorf("unable to SELECT service by name for superuser")
+				return types.Service{}, fmt.Errorf("unable to SELECT service by name for superuser")
 			}
 			s.Name = inputID
 			s.ID = serviceID
@@ -1879,14 +1874,14 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (servi
 			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.name=$1 AND orgs.id=$2", inputID, ad.OrgID).Scan(&serviceID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return service{}, cdnerrors.ErrNotFound
+					return types.Service{}, cdnerrors.ErrNotFound
 				}
-				return service{}, fmt.Errorf("unable to SELECT service by name for organization")
+				return types.Service{}, fmt.Errorf("unable to SELECT service by name for organization")
 			}
 			s.Name = inputID
 			s.ID = serviceID
 		} else {
-			return service{}, cdnerrors.ErrNotFound
+			return types.Service{}, cdnerrors.ErrNotFound
 		}
 	}
 
@@ -3289,17 +3284,12 @@ type orgIPsOutput struct {
 	Body orgAddresses
 }
 
-type service struct {
-	ID   pgtype.UUID `json:"id" doc:"ID of service"`
-	Name string      `json:"name" example:"service 1" doc:"name of service"`
-}
-
 type serviceOutput struct {
-	Body service
+	Body types.Service
 }
 
 type servicesOutput struct {
-	Body []service
+	Body []types.Service
 }
 
 type serviceVersionOutput struct {

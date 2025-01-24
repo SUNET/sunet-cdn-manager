@@ -6,6 +6,11 @@ import (
 
 // Types that can be shared across the other packages
 
+type Service struct {
+	ID   pgtype.UUID `json:"id" doc:"ID of service"`
+	Name string      `json:"name" example:"service 1" doc:"name of service"`
+}
+
 // A 1:1 mapping to service_versions in the database
 type ServiceVersion struct {
 	ID      pgtype.UUID `json:"id"`
