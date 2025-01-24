@@ -1944,7 +1944,6 @@ func TestGetServiceVersions(t *testing.T) {
 		username       string
 		password       string
 		expectedStatus int
-		newService     string
 		org            string
 	}{
 		{
@@ -2267,6 +2266,127 @@ func TestPostServiceVersion(t *testing.T) {
 		r := bytes.NewReader(b)
 
 		req, err := http.NewRequest("POST", ts.URL+"/api/v1/service-versions", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestActivateServiceVersion(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description     string
+		username        string
+		password        string
+		expectedStatus  int
+		serviceNameOrID string
+		version         int64
+		active          bool
+	}{
+		{
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusNoContent,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			version:         2,
+			active:          true,
+		},
+		{
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusNoContent,
+			serviceNameOrID: "org1-service1",
+			version:         1,
+			active:          true,
+		},
+		{
+			description:     "failed superuser request with ID, not active",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			version:         2,
+			active:          false,
+		},
+		{
+			description:     "failed superuser request with name, not active",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "org1-service1",
+			version:         1,
+			active:          false,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant version",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusNotFound,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			version:         9999,
+			active:          true,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant ID",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusNotFound,
+			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
+			version:         1,
+			active:          true,
+		},
+	}
+
+	for _, test := range tests {
+		active := struct {
+			Active bool `json:"active"`
+		}{
+			Active: test.active,
+		}
+
+		b, err := json.Marshal(active)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Println(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/service-versions/"+test.serviceNameOrID+"/"+strconv.FormatInt(test.version, 10)+"/active", r)
 		if err != nil {
 			t.Fatal(err)
 		}

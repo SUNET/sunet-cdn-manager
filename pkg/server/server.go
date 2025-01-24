@@ -2137,10 +2137,24 @@ type serviceVersionInsertResult struct {
 	vclRecvID     pgtype.UUID
 }
 
+func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtype.UUID, error) {
+	var deactivatedServiceVersionID pgtype.UUID
+	err := tx.QueryRow(
+		context.Background(),
+		"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
+		serviceID,
+	).Scan(&deactivatedServiceVersionID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
+	}
+
+	return deactivatedServiceVersionID, nil
+}
+
 func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
-	var deactivatedServiceVersion pgtype.UUID
+	var deactivatedServiceVersionID pgtype.UUID
 
 	err := tx.QueryRow(
 		context.Background(),
@@ -2153,13 +2167,9 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 
 	// If the new version is expected to be active we need to deactivate the currently active version
 	if active {
-		err := tx.QueryRow(
-			context.Background(),
-			"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
-			serviceID,
-		).Scan(&deactivatedServiceVersion)
+		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(tx, serviceID)
 		if err != nil {
-			return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
+			return serviceVersionInsertResult{}, err
 		}
 	}
 
@@ -2222,7 +2232,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 		version:       versionCounter,
 		domainIDs:     serviceDomainIDs,
 		originIDs:     serviceOriginIDs,
-		deactivatedID: deactivatedServiceVersion,
+		deactivatedID: deactivatedServiceVersionID,
 		vclRecvID:     serviceVclRecvID,
 		active:        active,
 	}
@@ -2296,6 +2306,80 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 	}
 
 	return serviceVersionResult, nil
+}
+
+func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, serviceNameOrID string, version int64) error {
+	// If neither a superuser or a normal user belonging to an org there
+	// is nothing further that is allowed
+	if !ad.Superuser {
+		if ad.OrgID == nil {
+			return cdnerrors.ErrForbidden
+		}
+	}
+
+	serviceIdent, err := parseNameOrID(serviceNameOrID)
+	if err != nil {
+		logger.Err(err).Msg("parsing service name or id failed")
+		return cdnerrors.ErrUnprocessable
+	}
+
+	var serviceID pgtype.UUID
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if serviceIdent.isID() {
+			serviceID = *serviceIdent.id
+		} else {
+			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return cdnerrors.ErrNotFound
+				}
+				return fmt.Errorf("unable to resolve service name to id: %w", err)
+			}
+		}
+
+		orgID, err := getServiceOrgIDTx(tx, serviceID)
+		if err != nil {
+			return fmt.Errorf("unable to get org id for service: %w", err)
+		}
+
+		// If the user is not a superuser they must belong to the same
+		// org as the service they are trying activate a version for
+		if !ad.Superuser {
+			if *ad.OrgID != orgID {
+				return cdnerrors.ErrForbidden
+			}
+		}
+
+		_, err = activateServiceVersionTx(tx, serviceID, version)
+		if err != nil {
+			return fmt.Errorf("unable to activate service version with version: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cdnerrors.ErrNotFound
+		}
+		return fmt.Errorf("service version activation transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func activateServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, version int64) (pgtype.UUID, error) {
+	_, err := deactivatePreviousServiceVersionTx(tx, serviceID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+
+	var activatedServiceVersionID pgtype.UUID
+	err = tx.QueryRow(context.Background(), "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceID, version).Scan(&activatedServiceVersionID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+
+	return activatedServiceVersionID, nil
 }
 
 func generateCompleteVcl(sv selectVcl) (string, error) {
@@ -3056,6 +3140,34 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return resp, nil
 			},
 		)
+
+		huma.Put(api, "/v1/service-versions/{service}/{version}/active", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Version int64  `path:"version" example:"1" doc:"The service version to activate"`
+			Body    struct {
+				Active bool `json:"active" example:"true" doc:"If the version should be active (must be true)" minLength:"15" maxLength:"64"`
+			}
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service version active PUT handler")
+			}
+
+			if !input.Body.Active {
+				return nil, huma.Error422UnprocessableEntity("active must be true")
+			}
+
+			err := activateServiceVersion(logger, ad, dbPool, input.Service, input.Version)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("service or version does not exist")
+				}
+				return nil, fmt.Errorf("unable to update active version: %w", err)
+			}
+			return nil, nil
+		})
 
 		huma.Get(api, "/v1/vcls", func(ctx context.Context, _ *struct{},
 		) (*completeVclsOutput, error) {
