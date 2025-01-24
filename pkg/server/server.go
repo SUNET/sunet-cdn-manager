@@ -2264,6 +2264,9 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 		} else {
 			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
 			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return cdnerrors.ErrNotFound
+				}
 				return fmt.Errorf("unable to resolve service name to id: %w", err)
 			}
 		}
@@ -3016,11 +3019,11 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					ServiceID uuid.UUID      `json:"service_id" doc:"Service ID"`
-					Domains   []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins   []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active    bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
-					VclRecv   string         `json:"vcl_recv" doc:"The VCL recv content"`
+					Service string         `json:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active  bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					VclRecv string         `json:"vcl_recv" doc:"The VCL recv content"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -3031,30 +3034,19 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				// Seems we can not use pgtype.UUID as the type in the
-				// input body directly, so go via google/uuid module
-				// instead and convert here.
-				//
-				// Might be possible to make this work with pgtype.UUID
-				// directly if it would implement
-				// encoding.TextUnmarshaler as described here:
-				// https://github.com/danielgtaylor/huma/issues/654
-				var pgServiceID pgtype.UUID
-				err := pgServiceID.Scan(input.Body.ServiceID.String())
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
 				if err != nil {
-					return nil, errors.New("unable to convert uuid to pgtype")
-				}
-
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, pgServiceID.String(), input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
-				if err != nil {
-					if errors.Is(err, cdnerrors.ErrUnprocessable) {
+					switch {
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
-					} else if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("service version already exists")
-					} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this service version")
+					case errors.Is(err, cdnerrors.ErrNotFound):
+						return nil, huma.Error422UnprocessableEntity("service name not found")
 					}
-					logger.Err(err).Msg("unable to add service")
+					logger.Err(err).Msg("unable to add service version")
 					return nil, err
 				}
 				resp := &serviceVersionOutput{}

@@ -2009,23 +2009,23 @@ func TestPostServiceVersion(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		expectedStatus int
-		newService     string
-		serviceID      string
-		domains        []string
-		origins        []origin
-		active         bool
-		vclRecv        string
+		description     string
+		username        string
+		password        string
+		expectedStatus  int
+		newService      string
+		serviceNameOrID string
+		domains         []string
+		origins         []origin
+		active          bool
+		vclRecv         string
 	}{
 		{
-			description: "successful superuser request",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2043,11 +2043,33 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request with too many domains",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service1",
+			domains:         []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusCreated,
+			active:         true,
+			vclRecv:        "vcl_recv content",
+		},
+		{
+			description:     "failed superuser request with name (name does not exist)",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "does-not-exist",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2065,11 +2087,33 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request, too long Host in origin list",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "failed superuser request with too many domains",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
+			origins: []origin{
+				{
+					Host: "srv1.example.com",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "srv2.example.com",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+			vclRecv:        "vcl_recv content",
+		},
+		{
+			description:     "failed superuser request, too long Host in origin list",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: strings.Repeat("a", 254),
@@ -2087,11 +2131,11 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request, too long domain in domains list",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{strings.Repeat("a", 254), "example.se"},
+			description:     "failed superuser request, too long domain in domains list",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{strings.Repeat("a", 254), "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2109,11 +2153,11 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request with invalid uuid (too long)",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-0000000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "failed superuser request with invalid service name (too long)",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: strings.Repeat("a", 64),
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2131,11 +2175,11 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request with invalid uuid (too short)",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "00000003-0000-0000-0000-00000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "failed superuser request with invalid uuid (too short)",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2153,33 +2197,11 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed superuser request with invalid uuid (not a UUID)",
-			username:    "admin",
-			password:    "adminpass1",
-			serviceID:   "junk",
-			domains:     []string{"example.com", "example.se"},
-			origins: []origin{
-				{
-					Host: "srv1.example.com",
-					Port: 443,
-					TLS:  true,
-				},
-				{
-					Host: "srv2.example.com",
-					Port: 80,
-					TLS:  false,
-				},
-			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecv:        "vcl_recv content",
-		},
-		{
-			description: "successful user request",
-			username:    "username1",
-			password:    "password1",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "successful user request",
+			username:        "username1",
+			password:        "password1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2197,11 +2219,11 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecv:        "vcl_recv content",
 		},
 		{
-			description: "failed user request not assigned to org",
-			username:    "username3-no-org",
-			password:    "password3",
-			serviceID:   "00000003-0000-0000-0000-000000000001",
-			domains:     []string{"example.com", "example.se"},
+			description:     "failed user request not assigned to org",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
 					Host: "srv1.example.com",
@@ -2222,17 +2244,17 @@ func TestPostServiceVersion(t *testing.T) {
 
 	for _, test := range tests {
 		newServiceVersion := struct {
-			ServiceID string   `json:"service_id"`
-			Active    bool     `json:"active"`
-			Domains   []string `json:"domains"`
-			Origins   []origin `json:"origins"`
-			VclRecv   string   `json:"vcl_recv"`
+			Service string   `json:"service"`
+			Active  bool     `json:"active"`
+			Domains []string `json:"domains"`
+			Origins []origin `json:"origins"`
+			VclRecv string   `json:"vcl_recv"`
 		}{
-			ServiceID: test.serviceID,
-			Active:    test.active,
-			Domains:   test.domains,
-			Origins:   test.origins,
-			VclRecv:   test.vclRecv,
+			Service: test.serviceNameOrID,
+			Active:  test.active,
+			Domains: test.domains,
+			Origins: test.origins,
+			VclRecv: test.vclRecv,
 		}
 
 		b, err := json.Marshal(newServiceVersion)
