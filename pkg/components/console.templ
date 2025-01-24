@@ -89,7 +89,7 @@ templ CreateServiceContent(err error) {
 	}
 }
 
-templ ServiceVersionsContent(serviceName string, serviceVersions []ServiceVersion) {
+templ ServiceVersionsContent(serviceName string, serviceVersions []types.ServiceVersion) {
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
 	} else {

@@ -6,7 +6,3 @@ package components
 type Service struct {
 	Name string
 }
-
-type ServiceVersion struct {
-	Version int64
-}

@@ -270,14 +270,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		cServiceVersions := []components.ServiceVersion{}
-		for _, serviceVersion := range serviceVersions {
-			cServiceVersions = append(cServiceVersions, components.ServiceVersion{
-				Version: serviceVersion.Version,
-			})
-		}
-
-		err = renderConsolePage(w, r, ad, heading, components.ServiceVersionsContent(serviceName, cServiceVersions))
+		err = renderConsolePage(w, r, ad, heading, components.ServiceVersionsContent(serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2016,7 +2009,7 @@ func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad au
 	return serviceID, nil
 }
 
-func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion, error) {
+func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]types.ServiceVersion, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -2033,14 +2026,14 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	serviceVersions := []serviceVersion{}
+	serviceVersions := []types.ServiceVersion{}
 	var id pgtype.UUID
 	var version int64
 	var active bool
 	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active}, func() error {
 		serviceVersions = append(
 			serviceVersions,
-			serviceVersion{
+			types.ServiceVersion{
 				ID:      id,
 				Version: version,
 				Active:  active,
@@ -3309,18 +3302,12 @@ type servicesOutput struct {
 	Body []service
 }
 
-type serviceVersion struct {
-	ID      pgtype.UUID `json:"id"`
-	Version int64       `json:"version"`
-	Active  bool        `json:"active"`
-}
-
 type serviceVersionOutput struct {
-	Body serviceVersion
+	Body types.ServiceVersion
 }
 
 type serviceVersionsOutput struct {
-	Body []serviceVersion
+	Body []types.ServiceVersion
 }
 
 type origin struct {
