@@ -2036,22 +2036,16 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]serviceVersion,
 	serviceVersions := []serviceVersion{}
 	var id pgtype.UUID
 	var version int64
-	// active can be NULL in the database so that we can force uniqeness on
-	// the TRUE value. Treat NULL as false in the API.
-	var active *bool
+	var active bool
 	var serviceName string
 	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &serviceName}, func() error {
-		if active == nil {
-			b := false
-			active = &b
-		}
 		serviceVersions = append(
 			serviceVersions,
 			serviceVersion{
 				ID:          id,
 				ServiceName: serviceName,
 				Version:     version,
-				Active:      *active,
+				Active:      active,
 			},
 		)
 		return nil
