@@ -240,7 +240,14 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service parameter in URL")
+			logger.Error().Msg("console: missing service path in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgName := r.URL.Query().Get("org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org parameter in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -265,7 +272,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, title, components.ServiceContent(serviceName, serviceVersions))
+		err = renderConsolePage(w, r, ad, title, components.ServiceContent(orgName, serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -280,14 +287,14 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service parameter in URL")
+			logger.Error().Msg("console: missing service path in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 
 		serviceVersionStr := chi.URLParam(r, "version")
 		if serviceVersionStr == "" {
-			logger.Error().Msg("console: missing version parameter in URL")
+			logger.Error().Msg("console: missing version path in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -295,6 +302,13 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 		serviceVersion, err := strconv.ParseInt(serviceVersionStr, 10, 64)
 		if err != nil {
 			logger.Error().Msg("console: unable to convert version parameter to int")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgName := r.URL.Query().Get("org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org parameter in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -312,7 +326,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		ad := adRef.(authData)
 
-		svc, err := getServiceVersionConfig(dbPool, ad, serviceName, serviceVersion)
+		svc, err := getServiceVersionConfig(dbPool, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
 			logger.Err(err).Msg("console: unable to select service version config")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -331,6 +345,13 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
@@ -411,7 +432,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				})
 			}
 
-			_, err = insertServiceVersion(logger, ad, dbPool, serviceName, formData.Domains, origins, false, formData.VclRecv)
+			_, err = insertServiceVersion(logger, ad, dbPool, orgName, serviceName, formData.Domains, origins, false, formData.VclRecv)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
@@ -430,6 +451,115 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			validatedRedirect(fmt.Sprintf("/console/services/%s", serviceName), w, r)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service-version handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		versionStr := chi.URLParam(r, "version")
+		if versionStr == "" {
+			logger.Error().Msg("console: missing version path in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		version, err := strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			logger.Err(err).Msg("unable to parse service version")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+		// Query parameters
+		orgName := r.URL.Query().Get("org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		serviceName := r.URL.Query().Get("service")
+		if serviceName == "" {
+			logger.Error().Msg("console: missing service parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := "Activate service version"
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing authData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(authData)
+
+		switch r.Method {
+		case "GET":
+			err := renderConsolePage(w, r, ad, title, components.ActivateServiceVersionContent(orgName, serviceName, version, nil))
+			if err != nil {
+				logger.Err(err).Msg("unable to render activate-service-version page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case "POST":
+			err := r.ParseForm()
+			if err != nil {
+				logger.Err(err).Msg("unable to parse activate-service-version POST form")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := activateServiceVersionForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST activate-service-version form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST activate-service form data")
+				err := renderConsolePage(w, r, ad, title, components.ActivateServiceVersionContent(orgName, serviceName, version, cdnerrors.ErrInvalidFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service version activation page in POST")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				return
+			}
+
+			if !formData.Confirmation {
+				validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
+			}
+
+			if formData.Confirmation {
+				err := activateServiceVersion(logger, ad, dbPool, orgName, serviceName, version)
+				if err != nil {
+					logger.Err(err).Msg("service version activation failed")
+					err = renderConsolePage(w, r, ad, title, components.ActivateServiceVersionContent(orgName, serviceName, version, err))
+					if err != nil {
+						logger.Err(err).Msg("unable to render activate-service-version page on activation failure")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+						return
+					}
+					return
+				}
+			}
+
+			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for activate-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
@@ -488,6 +618,10 @@ type createServiceVersionForm struct {
 	Origins   []string       `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
 	OriginTLS []bool         `schema:"origins-tls" validate:"eqfield=Origins"`
 	VclRecv   string         `schema:"vcl_recv" validate:"min=1,max=63"`
+}
+
+type activateServiceVersionForm struct {
+	Confirmation bool `schema:"confirmation"`
 }
 
 // Endpoint used for console login
@@ -1538,6 +1672,12 @@ func orgNameToIDTx(tx pgx.Tx, name string) (*pgtype.UUID, error) {
 	return orgID, nil
 }
 
+func orgIDExistsTx(tx pgx.Tx, id *pgtype.UUID) error {
+	var orgID *pgtype.UUID
+	err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE id=$1 FOR SHARE", id).Scan(&orgID)
+	return err
+}
+
 func roleNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
 	var roleID pgtype.UUID
 	err := tx.QueryRow(context.Background(), "SELECT id FROM roles WHERE name=$1 FOR SHARE", name).Scan(&roleID)
@@ -1556,9 +1696,9 @@ func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
 	return authProviderID, nil
 }
 
-func serviceNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+func serviceNameToIDTx(tx pgx.Tx, orgID pgtype.UUID, name string) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1 FOR SHARE", name).Scan(&serviceID)
+	err := tx.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1 AND org_id=$2 FOR SHARE", name, orgID).Scan(&serviceID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
@@ -1817,12 +1957,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services ORDER BY time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, name FROM services WHERE org_id=$1 ORDER BY time_created", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
@@ -1831,14 +1971,16 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	}
 
 	services := []types.Service{}
-	var serviceID pgtype.UUID
-	var serviceName string
-	_, err = pgx.ForEachRow(rows, []any{&serviceID, &serviceName}, func() error {
+	var serviceID, orgID pgtype.UUID
+	var serviceName, orgName string
+	_, err = pgx.ForEachRow(rows, []any{&serviceID, &orgID, &serviceName, &orgName}, func() error {
 		services = append(
 			services,
 			types.Service{
-				ID:   serviceID,
-				Name: serviceName,
+				ID:      serviceID,
+				Name:    serviceName,
+				OrgID:   orgID,
+				OrgName: orgName,
 			},
 		)
 		return nil
@@ -2026,12 +2168,12 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]types.ServiceVe
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, version, active FROM service_versions ORDER BY service_versions.version")
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.id, services.name, orgs.id, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs on services.org_id = orgs.id ORDER BY service_versions.version")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for service versions as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active FROM service_versions JOIN services ON service_versions.service_id = services.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.id, services.name, orgs.id, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for service versions as org member: %w", err)
 		}
@@ -2040,16 +2182,21 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]types.ServiceVe
 	}
 
 	serviceVersions := []types.ServiceVersion{}
-	var id pgtype.UUID
+	var id, serviceID, orgID pgtype.UUID
+	var serviceName, orgName string
 	var version int64
 	var active bool
-	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &serviceID, &serviceName, &orgID, &orgName}, func() error {
 		serviceVersions = append(
 			serviceVersions,
 			types.ServiceVersion{
-				ID:      id,
-				Version: version,
-				Active:  active,
+				ID:          id,
+				ServiceID:   serviceID,
+				ServiceName: serviceName,
+				Version:     version,
+				Active:      active,
+				OrgID:       orgID,
+				OrgName:     orgName,
 			},
 		)
 		return nil
@@ -2061,7 +2208,7 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]types.ServiceVe
 	return serviceVersions, nil
 }
 
-func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, serviceNameOrID string, version int64) (types.ServiceVersionConfig, error) {
+func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID string, serviceNameOrID string, version int64) (types.ServiceVersionConfig, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2070,19 +2217,34 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, serviceNameOrID 
 		}
 	}
 
+	orgIdent, err := parseNameOrID(orgNameOrID)
+	if err != nil {
+		return types.ServiceVersionConfig{}, cdnerrors.ErrUnprocessable
+	}
+
 	serviceIdent, err := parseNameOrID(serviceNameOrID)
 	if err != nil {
 		return types.ServiceVersionConfig{}, cdnerrors.ErrUnprocessable
 	}
 
 	var serviceID pgtype.UUID
+	var orgID *pgtype.UUID
 
 	var svc types.ServiceVersionConfig
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if orgIdent.isID() {
+			orgID = orgIdent.id
+		} else {
+			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+			if err != nil {
+				return fmt.Errorf("unable to get org id by name: %w", err)
+			}
+		}
+
 		if serviceIdent.isID() {
 			serviceID = *serviceIdent.id
 		} else {
-			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
+			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
 			if err != nil {
 				return fmt.Errorf("unable to get service id by name: %w", err)
 			}
@@ -2104,7 +2266,10 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, serviceNameOrID 
 		rows, err := tx.Query(
 			context.Background(),
 			`SELECT
+				orgs.id AS org_id,
+				orgs.name AS org_name,
 				services.id AS service_id,
+				services.name AS service_name,
 				service_versions.id,
 				service_versions.version,
 				service_versions.active,
@@ -2120,7 +2285,8 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, serviceNameOrID 
 					WHERE service_version_id = service_versions.id
 				) AS origins
 			FROM
-				services
+				orgs
+				JOIN services ON orgs.id = services.org_id
 				JOIN service_versions ON services.id = service_versions.service_id
 				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
 			WHERE services.id=$1 AND service_versions.version=$2`,
@@ -2151,19 +2317,35 @@ type serviceVersionInsertResult struct {
 	active        bool
 	domainIDs     []pgtype.UUID
 	originIDs     []pgtype.UUID
-	deactivatedID pgtype.UUID
+	deactivatedID *pgtype.UUID
 	vclRecvID     pgtype.UUID
 }
 
-func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtype.UUID, error) {
-	var deactivatedServiceVersionID pgtype.UUID
+func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (*pgtype.UUID, error) {
+	var deactivatedServiceVersionID *pgtype.UUID
+
+	// Start with finding out if there even is any active version at all,
+	// if not there is nothing more to do.
+	var found bool
 	err := tx.QueryRow(
+		context.Background(),
+		"SELECT TRUE FROM service_versions WHERE service_id=$1 AND active=true",
+		serviceID,
+	).Scan(&found)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	err = tx.QueryRow(
 		context.Background(),
 		"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
 		serviceID,
 	).Scan(&deactivatedServiceVersionID)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
+		return nil, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
 	}
 
 	return deactivatedServiceVersionID, nil
@@ -2172,7 +2354,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtyp
 func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
-	var deactivatedServiceVersionID pgtype.UUID
+	var deactivatedServiceVersionID *pgtype.UUID
 
 	err := tx.QueryRow(
 		context.Background(),
@@ -2268,7 +2450,7 @@ func getServiceOrgIDTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtype.UUID, error) {
 	return orgID, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, serviceNameOrID string, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2279,18 +2461,37 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 
 	var serviceVersionResult serviceVersionInsertResult
 
+	orgIdent, err := parseNameOrID(orgNameOrID)
+	if err != nil {
+		logger.Err(err).Msg("parsing org name or id failed")
+		return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
+	}
+
 	serviceIdent, err := parseNameOrID(serviceNameOrID)
 	if err != nil {
 		logger.Err(err).Msg("parsing service name or id failed")
 		return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
 	}
 
+	var orgID *pgtype.UUID
 	var serviceID pgtype.UUID
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if orgIdent.isID() {
+			orgID = orgIdent.id
+		} else {
+			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return cdnerrors.ErrNotFound
+				}
+				return fmt.Errorf("unable to resolve org name to id: %w", err)
+			}
+		}
+
 		if serviceIdent.isID() {
 			serviceID = *serviceIdent.id
 		} else {
-			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
+			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return cdnerrors.ErrNotFound
@@ -2299,15 +2500,10 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 			}
 		}
 
-		orgID, err := getServiceOrgIDTx(tx, serviceID)
-		if err != nil {
-			return fmt.Errorf("unable to get org id for service: %w", err)
-		}
-
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying to add a version to
 		if !ad.Superuser {
-			if *ad.OrgID != orgID {
+			if *ad.OrgID != *orgID {
 				return cdnerrors.ErrForbidden
 			}
 		}
@@ -2326,13 +2522,19 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 	return serviceVersionResult, nil
 }
 
-func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, serviceNameOrID string, version int64) error {
+func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, version int64) error {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
 		if ad.OrgID == nil {
 			return cdnerrors.ErrForbidden
 		}
+	}
+
+	orgIdent, err := parseNameOrID(orgNameOrID)
+	if err != nil {
+		logger.Err(err).Msg("parsing org name or id failed")
+		return cdnerrors.ErrUnprocessable
 	}
 
 	serviceIdent, err := parseNameOrID(serviceNameOrID)
@@ -2342,11 +2544,29 @@ func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool
 	}
 
 	var serviceID pgtype.UUID
+	var orgID *pgtype.UUID
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if orgIdent.isID() {
+			orgID = orgIdent.id
+			err := orgIDExistsTx(tx, orgID)
+			if err != nil {
+				logger.Err(err).Msg("org id does not exist")
+				return cdnerrors.ErrUnprocessable
+			}
+		} else {
+			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return cdnerrors.ErrNotFound
+				}
+				return fmt.Errorf("unable to resolve org name to id: %w", err)
+			}
+		}
+
 		if serviceIdent.isID() {
 			serviceID = *serviceIdent.id
 		} else {
-			serviceID, err = serviceNameToIDTx(tx, *serviceIdent.name)
+			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return cdnerrors.ErrNotFound
@@ -2355,15 +2575,10 @@ func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool
 			}
 		}
 
-		orgID, err := getServiceOrgIDTx(tx, serviceID)
-		if err != nil {
-			return fmt.Errorf("unable to get org id for service: %w", err)
-		}
-
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying activate a version for
 		if !ad.Superuser {
-			if *ad.OrgID != orgID {
+			if *ad.OrgID != *orgID {
 				return cdnerrors.ErrForbidden
 			}
 		}
@@ -2687,6 +2902,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/activate-service-version/{version}", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Post(consolePath+"/activate-service-version/{version}", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes
@@ -3121,6 +3338,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
+					Org     string         `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 					Service string         `json:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
@@ -3136,7 +3354,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Body.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -3159,8 +3377,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 		)
 
-		huma.Put(api, "/v1/service-versions/{service}/{version}/active", func(ctx context.Context, input *struct {
-			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+		huma.Put(api, "/v1/service-versions/{version}/active", func(ctx context.Context, input *struct {
+			Org     string `query:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+			Service string `query:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 			Version int64  `path:"version" example:"1" doc:"The service version to activate"`
 			Body    struct {
 				Active bool `json:"active" example:"true" doc:"If the version should be active (must be true)" minLength:"15" maxLength:"64"`
@@ -3177,10 +3396,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, huma.Error422UnprocessableEntity("active must be true")
 			}
 
-			err := activateServiceVersion(logger, ad, dbPool, input.Service, input.Version)
+			err := activateServiceVersion(logger, ad, dbPool, input.Org, input.Service, input.Version)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrNotFound) {
+				switch {
+				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound("service or version does not exist")
+				case errors.Is(err, cdnerrors.ErrUnprocessable):
+					return nil, huma.Error422UnprocessableEntity("invalid data in request")
 				}
 				return nil, fmt.Errorf("unable to update active version: %w", err)
 			}

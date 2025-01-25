@@ -2016,6 +2016,7 @@ func TestPostServiceVersion(t *testing.T) {
 		password        string
 		expectedStatus  int
 		newService      string
+		orgNameOrID     string
 		serviceNameOrID string
 		domains         []string
 		origins         []origin
@@ -2026,6 +2027,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "successful superuser request with ID",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2048,6 +2050,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "successful superuser request with name",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "org1-service1",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2070,6 +2073,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request with name (name does not exist)",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "does-not-exist",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2092,6 +2096,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request with too many domains",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
 			origins: []origin{
@@ -2114,6 +2119,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request, too long Host in origin list",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2136,6 +2142,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request, too long domain in domains list",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{strings.Repeat("a", 254), "example.se"},
 			origins: []origin{
@@ -2158,6 +2165,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request with invalid service name (too long)",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: strings.Repeat("a", 64),
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2180,6 +2188,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed superuser request with invalid uuid (too short)",
 			username:        "admin",
 			password:        "adminpass1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2202,6 +2211,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "successful user request",
 			username:        "username1",
 			password:        "password1",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2224,6 +2234,7 @@ func TestPostServiceVersion(t *testing.T) {
 			description:     "failed user request not assigned to org",
 			username:        "username3-no-org",
 			password:        "password3",
+			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
@@ -2246,12 +2257,14 @@ func TestPostServiceVersion(t *testing.T) {
 
 	for _, test := range tests {
 		newServiceVersion := struct {
+			Org     string   `json:"org"`
 			Service string   `json:"service"`
 			Active  bool     `json:"active"`
 			Domains []string `json:"domains"`
 			Origins []origin `json:"origins"`
 			VclRecv string   `json:"vcl_recv"`
 		}{
+			Org:     test.orgNameOrID,
 			Service: test.serviceNameOrID,
 			Active:  test.active,
 			Domains: test.domains,
@@ -2314,6 +2327,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		password        string
 		expectedStatus  int
 		serviceNameOrID string
+		orgNameOrID     string
 		version         int64
 		active          bool
 	}{
@@ -2323,6 +2337,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusNoContent,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         2,
 			active:          true,
 		},
@@ -2332,6 +2347,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusNoContent,
 			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
 			version:         1,
 			active:          true,
 		},
@@ -2341,6 +2357,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         2,
 			active:          false,
 		},
@@ -2350,6 +2367,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
 			version:         1,
 			active:          false,
 		},
@@ -2359,6 +2377,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         9999,
 			active:          true,
 		},
@@ -2368,6 +2387,17 @@ func TestActivateServiceVersion(t *testing.T) {
 			password:        "adminpass1",
 			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			version:         1,
+			active:          true,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant org",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
 			version:         1,
 			active:          true,
 		},
@@ -2389,10 +2419,15 @@ func TestActivateServiceVersion(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/service-versions/"+test.serviceNameOrID+"/"+strconv.FormatInt(test.version, 10)+"/active", r)
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		values := req.URL.Query()
+		values.Add("org", test.orgNameOrID)
+		values.Add("service", test.serviceNameOrID)
+		req.URL.RawQuery = values.Encode()
 
 		req.SetBasicAuth(test.username, test.password)
 
