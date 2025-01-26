@@ -1724,54 +1724,52 @@ func isSuperuserOrOrgMember(ad authData, orgIdent identifier) bool {
 	return false
 }
 
-func selectOrgIPs(dbPool *pgxpool.Pool, inputID string, ad authData) (orgAddresses, error) {
-	orgIdent, err := parseNameOrID(inputID)
-	if err != nil {
-		return orgAddresses{}, fmt.Errorf("unable to parse org name or id")
-	}
-
-	if !isSuperuserOrOrgMember(ad, orgIdent) {
-		return orgAddresses{}, cdnerrors.ErrNotFound
-	}
-
-	var orgID pgtype.UUID
-	if !orgIdent.isID() {
-		err := dbPool.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1", inputID).Scan(&orgID)
+func selectOrgIPs(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (orgAddresses, error) {
+	oAddrs := orgAddresses{}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
 		if err != nil {
-			return orgAddresses{}, fmt.Errorf("unable to SELECT organization by name: %w", err)
+			return fmt.Errorf("unable to parse org name or id")
 		}
-	} else {
-		orgID = *orgIdent.id
-	}
 
-	oAddrs := orgAddresses{
-		OrgID:              orgID,
-		AllocatedAddresses: []orgAddress{},
-	}
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+			return cdnerrors.ErrNotFound
+		}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT address FROM org_ipv4_addresses WHERE org_id=$1", orgID)
+		oAddrs = orgAddresses{
+			OrgID:              orgIdent.id,
+			AllocatedAddresses: []orgAddress{},
+		}
+
+		rows, err := tx.Query(context.Background(), "SELECT address FROM org_ipv4_addresses WHERE org_id=$1", orgIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to SELECT IPv4 addresses for organization by id: %w", err)
+		}
+
+		ipv4Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+		if err != nil {
+			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
+		}
+
+		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv4Addrs...)
+
+		rows, err = tx.Query(context.Background(), "SELECT address FROM org_ipv6_addresses WHERE org_id=$1", orgIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to SELECT IPv6 addresses for organization by id: %w", err)
+		}
+
+		ipv6Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+		if err != nil {
+			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
+		}
+
+		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv6Addrs...)
+
+		return nil
+	})
 	if err != nil {
-		return orgAddresses{}, fmt.Errorf("unable to SELECT IPv4 addresses for organization by id: %w", err)
+		return orgAddresses{}, fmt.Errorf("selectOrgIPs: transaction failed: %w", err)
 	}
-
-	ipv4Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
-	if err != nil {
-		return orgAddresses{}, fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
-	}
-
-	oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv4Addrs...)
-
-	rows, err = dbPool.Query(context.Background(), "SELECT address FROM org_ipv6_addresses WHERE org_id=$1", orgID)
-	if err != nil {
-		return orgAddresses{}, fmt.Errorf("unable to SELECT IPv6 addresses for organization by id: %w", err)
-	}
-
-	ipv6Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
-	if err != nil {
-		return orgAddresses{}, fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
-	}
-
-	oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv6Addrs...)
 
 	return oAddrs, nil
 }
