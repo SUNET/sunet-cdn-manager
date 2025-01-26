@@ -2019,6 +2019,7 @@ type orgIdentifier struct {
 
 type serviceIdentifier struct {
 	resourceIdentifier
+	orgID pgtype.UUID
 }
 
 type roleIdentifier struct {
@@ -2063,25 +2064,25 @@ func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	}, nil
 }
 
-func newServiceIdentifier(tx pgx.Tx, input string, orgID pgtype.UUID) (serviceIdentifier, error) {
+func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
 	if input == "" {
 		return serviceIdentifier{}, errors.New("input identfier is empty")
 	}
 
-	var id pgtype.UUID
+	var id, orgID pgtype.UUID
 	var name string
 
 	inputID := new(pgtype.UUID)
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM services WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return serviceIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, orgID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return serviceIdentifier{}, err
 		}
@@ -2092,6 +2093,7 @@ func newServiceIdentifier(tx pgx.Tx, input string, orgID pgtype.UUID) (serviceId
 			name: name,
 			id:   id,
 		},
+		orgID: orgID,
 	}, nil
 }
 
@@ -2314,46 +2316,20 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 		}
 	}
 
-	orgIdent, err := parseNameOrID(orgNameOrID)
-	if err != nil {
-		return types.ServiceVersionConfig{}, cdnerrors.ErrUnprocessable
-	}
-
-	serviceIdent, err := parseNameOrID(serviceNameOrID)
-	if err != nil {
-		return types.ServiceVersionConfig{}, cdnerrors.ErrUnprocessable
-	}
-
-	var serviceID pgtype.UUID
-	var orgID *pgtype.UUID
-
 	var svc types.ServiceVersionConfig
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		if orgIdent.isID() {
-			orgID = orgIdent.id
-		} else {
-			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to get org id by name: %w", err)
-			}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnprocessable
 		}
 
-		if serviceIdent.isID() {
-			serviceID = *serviceIdent.id
-		} else {
-			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to get service id by name: %w", err)
-			}
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+		if err != nil {
+			return cdnerrors.ErrUnprocessable
 		}
 
 		if !ad.Superuser {
-			orgID, err := getServiceOrgIDTx(tx, serviceID)
-			if err != nil {
-				return fmt.Errorf("unable to get org id for service: %w", err)
-			}
-
-			if *ad.OrgID != orgID {
+			if *ad.OrgID != serviceIdent.orgID {
 				return cdnerrors.ErrForbidden
 			}
 		}
@@ -2387,7 +2363,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 				JOIN service_versions ON services.id = service_versions.service_id
 				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
 			WHERE services.id=$1 AND service_versions.version=$2`,
-			serviceID,
+			serviceIdent.id,
 			version,
 		)
 		if err != nil {
