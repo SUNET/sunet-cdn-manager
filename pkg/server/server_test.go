@@ -1845,17 +1845,10 @@ func TestPostServices(t *testing.T) {
 			newService:     "new-admin-service",
 		},
 		{
-			description:    "successful org request (org based on auth)",
+			description:    "failed org request with org matching auth (no org supplied in request)",
 			username:       "username1",
 			password:       "password1",
-			expectedStatus: http.StatusCreated,
-			newService:     "new-username1-service1",
-		},
-		{
-			description:    "failed org request with duplicate service name",
-			username:       "username1",
-			password:       "password1",
-			expectedStatus: http.StatusConflict,
+			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-username1-service1",
 		},
 		{
@@ -1863,7 +1856,15 @@ func TestPostServices(t *testing.T) {
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusCreated,
-			newService:     "new-username1-service2",
+			newService:     "new-username1-service1",
+			org:            "org1",
+		},
+		{
+			description:    "failed org request with duplicate service name",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusConflict,
+			newService:     "new-username1-service1",
 			org:            "org1",
 		},
 		{
@@ -1879,7 +1880,7 @@ func TestPostServices(t *testing.T) {
 			username:       "username3-no-org",
 			password:       "password3",
 			newService:     "new-username3-service1",
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusUnprocessableEntity,
 		},
 	}
 

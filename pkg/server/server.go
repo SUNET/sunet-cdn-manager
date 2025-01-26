@@ -209,7 +209,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				return
 			}
 
-			_, err = insertService(dbPool, formData.Name, ad.OrgName, ad)
+			_, err = insertService(logger, dbPool, formData.Name, ad.OrgName, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
@@ -1599,7 +1599,6 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 			}
 		}
 
-		fmt.Printf("DEBUG: role: %s\n", role)
 		roleIdent, err = newRoleIdentifier(tx, role)
 		if err != nil {
 			return fmt.Errorf("unable to parse role for user INSERT: %w", err)
@@ -2190,64 +2189,46 @@ func (i identifier) String() string {
 	return ""
 }
 
-func insertService(dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
+func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
-	var orgIdent identifier
+	var orgIdent orgIdentifier
 	var err error
 
-	if orgNameOrID != nil {
-		orgIdent, err = parseNameOrID(*orgNameOrID)
-		if err != nil {
-			return pgtype.UUID{}, cdnerrors.ErrUnprocessable
-		}
+	if !ad.Superuser && ad.OrgID == nil {
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
-	if ad.Superuser {
-		if !orgIdent.isValid() {
-			return pgtype.UUID{}, cdnerrors.ErrUnprocessable
-		}
-		if orgIdent.isID() {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, *orgIdent.id).Scan(&serviceID)
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		if orgNameOrID != nil {
+			orgIdent, err = newOrgIdentifier(tx, *orgNameOrID)
 			if err != nil {
-				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
-			}
-		} else {
-			err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) SELECT $1, orgs.id FROM orgs WHERE orgs.name=$2 returning id", name, *orgIdent.name).Scan(&serviceID)
-			if err != nil {
-				return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for superuser with organization name: %w", err)
-			}
-		}
-	} else {
-		if ad.OrgID == nil {
-			return pgtype.UUID{}, cdnerrors.ErrForbidden
-		}
-
-		// If a user is trying to supply an org id for an org they are
-		// not part of just error out to signal they are sending bad
-		// data.
-		if orgIdent.isValid() {
-			if orgIdent.isID() {
-				if *ad.OrgID != *orgIdent.id {
-					return pgtype.UUID{}, cdnerrors.ErrForbidden
-				}
-			} else {
-				if *ad.OrgName != *orgIdent.name {
-					return pgtype.UUID{}, cdnerrors.ErrForbidden
-				}
+				return cdnerrors.ErrUnprocessable
 			}
 		}
 
-		err := dbPool.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, ad.OrgID).Scan(&serviceID)
+		// A normal user must supply an org id for an org they are
+		// a member of
+		if !ad.Superuser && *ad.OrgID != orgIdent.id {
+			return cdnerrors.ErrForbidden
+		}
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, orgIdent.id).Scan(&serviceID)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
-				if pgErr.Code == pgUniqueViolation {
-					return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
-				}
-			}
-			return pgtype.UUID{}, fmt.Errorf("unable to INSERT service for organization with id: %w", err)
+			return fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
 		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("insertServices transaction failed")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return pgtype.UUID{}, fmt.Errorf("insertService transaction failed: %w", err)
 	}
 
 	return serviceID, nil
@@ -3303,8 +3284,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string  `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
-					Org  *string `json:"org,omitempty" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Name string `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
+					Org  string `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 				}
 			},
 			) (*orgOutput, error) {
@@ -3315,7 +3296,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service POST handler")
 				}
 
-				id, err := insertService(dbPool, input.Body.Name, input.Body.Org, ad)
+				id, err := insertService(logger, dbPool, input.Body.Name, &input.Body.Org, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrUnprocessable) {
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
