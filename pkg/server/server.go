@@ -1617,24 +1617,6 @@ func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID
 // has changed under their feet at the time of a write. FOR SHARE should be
 // fairly safe since multiple readers can hold them at once, but we need to be
 // careful to not introduce deadlocks if contending with FOR UPDATE calls etc.
-func orgNameToIDTx(tx pgx.Tx, name string) (*pgtype.UUID, error) {
-	var orgID *pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1 FOR SHARE", name).Scan(&orgID)
-	if err != nil {
-		return nil, err
-	}
-	return orgID, nil
-}
-
-func roleNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
-	var roleID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM roles WHERE name=$1 FOR SHARE", name).Scan(&roleID)
-	if err != nil {
-		return pgtype.UUID{}, err
-	}
-	return roleID, nil
-}
-
 func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
 	var authProviderID pgtype.UUID
 	err := tx.QueryRow(context.Background(), "SELECT id FROM auth_providers WHERE name=$1 FOR SHARE", name).Scan(&authProviderID)
@@ -1642,24 +1624,6 @@ func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
 		return pgtype.UUID{}, err
 	}
 	return authProviderID, nil
-}
-
-func userNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
-	var userID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id from users WHERE name=$1 FOR SHARE", name).Scan(&userID)
-	if err != nil {
-		return pgtype.UUID{}, err
-	}
-	return userID, nil
-}
-
-func userIDToNameTx(tx pgx.Tx, userID pgtype.UUID) (string, error) {
-	var name string
-	err := tx.QueryRow(context.Background(), "SELECT name from users WHERE id=$1 FOR SHARE", userID).Scan(&name)
-	if err != nil {
-		return "", err
-	}
-	return name, nil
 }
 
 func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
@@ -1676,67 +1640,37 @@ func updateUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string,
 		return user{}, cdnerrors.ErrForbidden
 	}
 
-	userIdent, err := parseNameOrID(nameOrID)
-	if err != nil {
-		return user{}, fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
-	}
-
-	roleIdent, err := parseNameOrID(role)
-	if err != nil {
-		return user{}, fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
-	}
-
-	var orgIdent identifier
-	// org can be nil when the user should have its org value unset
-	if org != nil {
-		orgIdent, err = parseNameOrID(*org)
+	var u user
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(tx, nameOrID)
 		if err != nil {
-			return user{}, fmt.Errorf("unable to parse org ID for PATCH: %w", err)
+			return fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
 		}
-	}
 
-	var userID, roleID pgtype.UUID
-	var orgID *pgtype.UUID
-	var userName string
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		roleIdent, err := newRoleIdentifier(tx, role)
+		if err != nil {
+			return fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
+		}
+
+		// org can be nil when the user should have its org value unset
+		var orgID *pgtype.UUID
 		if org != nil {
-			if orgIdent.isID() {
-				orgID = orgIdent.id
-			} else {
-				orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-				if err != nil {
-					return fmt.Errorf("unable to resolve org name to id: %w", err)
-				}
+			orgIdent, err := newOrgIdentifier(tx, *org)
+			if err != nil {
+				return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
 			}
+			orgID = &orgIdent.id
 		}
 
-		if userIdent.isID() {
-			userID = *userIdent.id
-			userName, err = userIDToNameTx(tx, *userIdent.id)
-			if err != nil {
-				return fmt.Errorf("unable to resolve user id to name: %w", err)
-			}
-		} else {
-			userName = *userIdent.name
-			userID, err = userNameToIDTx(tx, *userIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to resolve user name to id: %w", err)
-			}
-		}
-
-		if roleIdent.isID() {
-			roleID = *roleIdent.id
-		} else {
-			roleID, err = roleNameToIDTx(tx, *roleIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to resolve user name to id: %w", err)
-			}
-		}
-
-		err := updateUserTx(tx, userID, userName, orgID, roleID)
+		err = updateUserTx(tx, userIdent.id, userIdent.name, orgID, roleIdent.id)
 		if err != nil {
 			return fmt.Errorf("update failed: %w", err)
 		}
+
+		u.ID = userIdent.id
+		u.Name = userIdent.name
+		u.RoleID = roleIdent.id
+		u.OrgID = orgID
 
 		return nil
 	})
@@ -1744,12 +1678,7 @@ func updateUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string,
 		return user{}, fmt.Errorf("user PUT transaction failed: %w", err)
 	}
 
-	return user{
-		ID:     userID,
-		Name:   userName,
-		RoleID: roleID,
-		OrgID:  orgID,
-	}, nil
+	return u, nil
 }
 
 func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
