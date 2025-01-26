@@ -2382,10 +2382,10 @@ func TestActivateServiceVersion(t *testing.T) {
 			active:          true,
 		},
 		{
-			description:     "failed superuser request with ID, non-existant ID",
+			description:     "failed superuser request with ID, non-existant service ID",
 			username:        "admin",
 			password:        "adminpass1",
-			expectedStatus:  http.StatusNotFound,
+			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         1,

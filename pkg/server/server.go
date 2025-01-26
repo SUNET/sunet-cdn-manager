@@ -1586,41 +1586,23 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 	}
 
 	var err error
-	var orgIdent identifier
-	if org != nil {
-		orgIdent, err = parseNameOrID(*org)
-		if err != nil {
-			return user{}, fmt.Errorf("unable to parse organization for user INSERT: %w", err)
-		}
-	}
 
-	roleIdent, err := parseNameOrID(role)
-	if err != nil {
-		return user{}, fmt.Errorf("unable to parse role for user INSERT: %w", err)
-	}
+	var userID pgtype.UUID
 
-	var userID, roleID pgtype.UUID
-	var orgID *pgtype.UUID
-
+	var orgIdent orgIdentifier
+	var roleIdent roleIdentifier
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		if org != nil {
-			if !orgIdent.isID() {
-				orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-				if err != nil {
-					return fmt.Errorf("unable to map org name to id: %w", err)
-				}
-			} else {
-				orgID = orgIdent.id
+			orgIdent, err = newOrgIdentifier(tx, *org)
+			if err != nil {
+				return fmt.Errorf("unable to parse organization for user INSERT: %w", err)
 			}
 		}
 
-		if !roleIdent.isID() {
-			roleID, err = roleNameToIDTx(tx, *roleIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to map role name to id: %w", err)
-			}
-		} else {
-			roleID = *roleIdent.id
+		fmt.Printf("DEBUG: role: %s\n", role)
+		roleIdent, err = newRoleIdentifier(tx, role)
+		if err != nil {
+			return fmt.Errorf("unable to parse role for user INSERT: %w", err)
 		}
 
 		authProviderID, err := authProviderNameToIDTx(tx, "local")
@@ -1628,7 +1610,7 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 			return fmt.Errorf("unble to resolve authProvider name to ID: %w", err)
 		}
 
-		userID, err = insertUserTx(tx, name, orgID, roleID, authProviderID)
+		userID, err = insertUserTx(tx, name, &orgIdent.id, roleIdent.id, authProviderID)
 		if err != nil {
 			return fmt.Errorf("createUser: INSERT failed: %w", err)
 		}
@@ -1642,8 +1624,8 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 	return user{
 		ID:     userID,
 		Name:   name,
-		RoleID: roleID,
-		OrgID:  orgID,
+		RoleID: roleIdent.id,
+		OrgID:  &orgIdent.id,
 	}, nil
 }
 
@@ -1670,12 +1652,6 @@ func orgNameToIDTx(tx pgx.Tx, name string) (*pgtype.UUID, error) {
 		return nil, err
 	}
 	return orgID, nil
-}
-
-func orgIDExistsTx(tx pgx.Tx, id *pgtype.UUID) error {
-	var orgID *pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE id=$1 FOR SHARE", id).Scan(&orgID)
-	return err
 }
 
 func roleNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
@@ -2048,6 +2024,119 @@ func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (types
 	return s, nil
 }
 
+type resourceIdentifier struct {
+	name string
+	id   pgtype.UUID
+}
+
+type orgIdentifier struct {
+	resourceIdentifier
+}
+
+type serviceIdentifier struct {
+	resourceIdentifier
+}
+
+type roleIdentifier struct {
+	resourceIdentifier
+}
+
+func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
+	if input == "" {
+		return orgIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE id = $1", *inputID).Scan(&id, &name)
+		if err != nil {
+			return orgIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE name = $1", input).Scan(&id, &name)
+		if err != nil {
+			return orgIdentifier{}, err
+		}
+	}
+
+	return orgIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+	}, nil
+}
+
+func newServiceIdentifier(tx pgx.Tx, input string, orgID pgtype.UUID) (serviceIdentifier, error) {
+	if input == "" {
+		return serviceIdentifier{}, errors.New("input identfier is empty")
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE id = $1", *inputID).Scan(&id, &name)
+		if err != nil {
+			return serviceIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE name = $1 and org_id = $2", input, orgID).Scan(&id, &name)
+		if err != nil {
+			return serviceIdentifier{}, err
+		}
+	}
+
+	return serviceIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+	}, nil
+}
+
+func newRoleIdentifier(tx pgx.Tx, input string) (roleIdentifier, error) {
+	if input == "" {
+		return roleIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE id = $1", *inputID).Scan(&id, &name)
+		if err != nil {
+			return roleIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (role names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE name = $1", input).Scan(&id, &name)
+		if err != nil {
+			return roleIdentifier{}, err
+		}
+	}
+
+	return roleIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+	}, nil
+}
+
 type identifier struct {
 	name *string
 	id   *pgtype.UUID
@@ -2321,7 +2410,7 @@ type serviceVersionInsertResult struct {
 	vclRecvID     pgtype.UUID
 }
 
-func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (*pgtype.UUID, error) {
+func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier) (*pgtype.UUID, error) {
 	var deactivatedServiceVersionID *pgtype.UUID
 
 	// Start with finding out if there even is any active version at all,
@@ -2330,7 +2419,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (*pgty
 	err := tx.QueryRow(
 		context.Background(),
 		"SELECT TRUE FROM service_versions WHERE service_id=$1 AND active=true",
-		serviceID,
+		serviceIdent.id,
 	).Scan(&found)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2342,7 +2431,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (*pgty
 	err = tx.QueryRow(
 		context.Background(),
 		"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
-		serviceID,
+		serviceIdent.id,
 	).Scan(&deactivatedServiceVersionID)
 	if err != nil {
 		return nil, fmt.Errorf("unable to UPDATE active status for previous service version: %w", err)
@@ -2351,7 +2440,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID) (*pgty
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -2359,7 +2448,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 	err := tx.QueryRow(
 		context.Background(),
 		"UPDATE services SET version_counter=version_counter+1 WHERE id=$1 RETURNING version_counter",
-		serviceID,
+		serviceIdent.id,
 	).Scan(&versionCounter)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE version_counter for service version: %w", err)
@@ -2367,7 +2456,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 
 	// If the new version is expected to be active we need to deactivate the currently active version
 	if active {
-		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(tx, serviceID)
+		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(tx, serviceIdent)
 		if err != nil {
 			return serviceVersionInsertResult{}, err
 		}
@@ -2376,7 +2465,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, domains []domainSt
 	err = tx.QueryRow(
 		context.Background(),
 		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
-		serviceID,
+		serviceIdent.id,
 		versionCounter,
 		active,
 	).Scan(&serviceVersionID)
@@ -2461,54 +2550,28 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 
 	var serviceVersionResult serviceVersionInsertResult
 
-	orgIdent, err := parseNameOrID(orgNameOrID)
-	if err != nil {
-		logger.Err(err).Msg("parsing org name or id failed")
-		return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
-	}
-
-	serviceIdent, err := parseNameOrID(serviceNameOrID)
-	if err != nil {
-		logger.Err(err).Msg("parsing service name or id failed")
-		return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
-	}
-
-	var orgID *pgtype.UUID
-	var serviceID pgtype.UUID
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		if orgIdent.isID() {
-			orgID = orgIdent.id
-		} else {
-			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return cdnerrors.ErrNotFound
-				}
-				return fmt.Errorf("unable to resolve org name to id: %w", err)
-			}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("looking up org failed")
+			return cdnerrors.ErrUnprocessable
 		}
 
-		if serviceIdent.isID() {
-			serviceID = *serviceIdent.id
-		} else {
-			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return cdnerrors.ErrNotFound
-				}
-				return fmt.Errorf("unable to resolve service name to id: %w", err)
-			}
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("looking up service failed")
+			return cdnerrors.ErrUnprocessable
 		}
 
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying to add a version to
 		if !ad.Superuser {
-			if *ad.OrgID != *orgID {
+			if *ad.OrgID != orgIdent.id {
 				return cdnerrors.ErrForbidden
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, serviceID, domains, origins, active, vclRecv)
+		serviceVersionResult, err = insertServiceVersionTx(tx, serviceIdent, domains, origins, active, vclRecv)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -2531,59 +2594,28 @@ func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool
 		}
 	}
 
-	orgIdent, err := parseNameOrID(orgNameOrID)
-	if err != nil {
-		logger.Err(err).Msg("parsing org name or id failed")
-		return cdnerrors.ErrUnprocessable
-	}
-
-	serviceIdent, err := parseNameOrID(serviceNameOrID)
-	if err != nil {
-		logger.Err(err).Msg("parsing service name or id failed")
-		return cdnerrors.ErrUnprocessable
-	}
-
-	var serviceID pgtype.UUID
-	var orgID *pgtype.UUID
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		if orgIdent.isID() {
-			orgID = orgIdent.id
-			err := orgIDExistsTx(tx, orgID)
-			if err != nil {
-				logger.Err(err).Msg("org id does not exist")
-				return cdnerrors.ErrUnprocessable
-			}
-		} else {
-			orgID, err = orgNameToIDTx(tx, *orgIdent.name)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return cdnerrors.ErrNotFound
-				}
-				return fmt.Errorf("unable to resolve org name to id: %w", err)
-			}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("unable to validate org id")
+			return cdnerrors.ErrUnprocessable
 		}
 
-		if serviceIdent.isID() {
-			serviceID = *serviceIdent.id
-		} else {
-			serviceID, err = serviceNameToIDTx(tx, *orgID, *serviceIdent.name)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return cdnerrors.ErrNotFound
-				}
-				return fmt.Errorf("unable to resolve service name to id: %w", err)
-			}
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("unable to validate org id")
+			return cdnerrors.ErrUnprocessable
 		}
 
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying activate a version for
 		if !ad.Superuser {
-			if *ad.OrgID != *orgID {
+			if *ad.OrgID != orgIdent.id {
 				return cdnerrors.ErrForbidden
 			}
 		}
 
-		_, err = activateServiceVersionTx(tx, serviceID, version)
+		_, err = activateServiceVersionTx(tx, serviceIdent, version)
 		if err != nil {
 			return fmt.Errorf("unable to activate service version with version: %w", err)
 		}
@@ -2600,14 +2632,14 @@ func activateServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool
 	return nil
 }
 
-func activateServiceVersionTx(tx pgx.Tx, serviceID pgtype.UUID, version int64) (pgtype.UUID, error) {
-	_, err := deactivatePreviousServiceVersionTx(tx, serviceID)
+func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version int64) (pgtype.UUID, error) {
+	_, err := deactivatePreviousServiceVersionTx(tx, serviceIdent)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
 
 	var activatedServiceVersionID pgtype.UUID
-	err = tx.QueryRow(context.Background(), "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceID, version).Scan(&activatedServiceVersionID)
+	err = tx.QueryRow(context.Background(), "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceIdent.id, version).Scan(&activatedServiceVersionID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
