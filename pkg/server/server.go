@@ -1833,57 +1833,44 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	return services, nil
 }
 
-func selectServiceByID(dbPool *pgxpool.Pool, inputID string, ad authData) (types.Service, error) {
+func selectService(dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad authData) (types.Service, error) {
 	s := types.Service{}
-	var serviceName string
-	var serviceID pgtype.UUID
 
-	serviceIdent, err := parseNameOrID(inputID)
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var serviceIdent serviceIdentifier
+		var orgIdent orgIdentifier
+		var err error
+		// Looking up a service by ID works without supplying an org,
+		// for looking up service by name an org must be included
+		if orgNameOrID == "" {
+			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, pgtype.UUID{})
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+		} else {
+			orgIdent, err = newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+
+			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+		}
+
+		// Normal users are only allowed to see services belonging to the same org as they are
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
+			return cdnerrors.ErrNotFound
+		}
+
+		s.Name = serviceIdent.name
+		s.ID = serviceIdent.id
+
+		return nil
+	})
 	if err != nil {
-		return types.Service{}, cdnerrors.ErrUnableToParseNameOrID
-	}
-	if serviceIdent.isID() {
-		if ad.Superuser {
-			err := dbPool.QueryRow(context.Background(), "SELECT name FROM services WHERE id=$1", *serviceIdent.id).Scan(&serviceName)
-			if err != nil {
-				return types.Service{}, fmt.Errorf("unable to SELECT service by id for superuser")
-			}
-			s.Name = serviceName
-			s.ID = *serviceIdent.id
-		} else if ad.OrgID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.id=$1 AND orgs.id=$2", *serviceIdent.id, ad.OrgID).Scan(&serviceName)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return types.Service{}, cdnerrors.ErrNotFound
-				}
-				return types.Service{}, fmt.Errorf("unable to SELECT service by id for organization")
-			}
-			s.Name = serviceName
-			s.ID = *serviceIdent.id
-		} else {
-			return types.Service{}, cdnerrors.ErrNotFound
-		}
-	} else {
-		if ad.Superuser {
-			err := dbPool.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1", inputID).Scan(&serviceID)
-			if err != nil {
-				return types.Service{}, fmt.Errorf("unable to SELECT service by name for superuser")
-			}
-			s.Name = inputID
-			s.ID = serviceID
-		} else if ad.OrgID != nil {
-			err := dbPool.QueryRow(context.Background(), "SELECT services.id FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.name=$1 AND orgs.id=$2", inputID, ad.OrgID).Scan(&serviceID)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return types.Service{}, cdnerrors.ErrNotFound
-				}
-				return types.Service{}, fmt.Errorf("unable to SELECT service by name for organization")
-			}
-			s.Name = inputID
-			s.ID = serviceID
-		} else {
-			return types.Service{}, cdnerrors.ErrNotFound
-		}
+		return types.Service{}, fmt.Errorf("selectService: transaction failed: %w", err)
 	}
 
 	return s, nil
@@ -2069,10 +2056,6 @@ func parseNameOrID(inputID string) (identifier, error) {
 	return identifier{
 		name: &inputID,
 	}, nil
-}
-
-func (i identifier) isID() bool {
-	return i.id != nil
 }
 
 func (i identifier) isValid() bool {
@@ -3120,6 +3103,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 		huma.Get(api, "/v1/services/{service}", func(ctx context.Context, input *struct {
 			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"my-org" doc:"Organization ID or name, required if service is supplied by name" minLength:"1" maxLength:"63"`
 		},
 		) (*serviceOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -3129,7 +3113,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from service GET handler")
 			}
 
-			services, err := selectServiceByID(dbPool, input.Service, ad)
+			services, err := selectService(dbPool, input.Org, input.Service, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("service not found")

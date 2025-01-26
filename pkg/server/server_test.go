@@ -1679,76 +1679,89 @@ func TestGetService(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		nameOrID       string
-		expectedStatus int
+		description     string
+		username        string
+		password        string
+		serviceNameOrID string
+		orgNameOrID     string
+		expectedStatus  int
 	}{
 		{
-			description:    "successful superuser request with ID",
-			username:       "admin",
-			password:       "adminpass1",
-			nameOrID:       "00000003-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful superuser request with name",
-			username:       "admin",
-			password:       "adminpass1",
-			nameOrID:       "org1-service1",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful org request with ID",
-			username:       "username1",
-			password:       "password1",
-			nameOrID:       "00000003-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser request with name and org by id",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful org request with name",
-			username:       "username1",
-			password:       "password1",
-			nameOrID:       "org1-service1",
-			expectedStatus: http.StatusOK,
+			description:     "successful user request with ID",
+			username:        "username1",
+			password:        "password1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "failed org request for service belonging to other org with ID",
-			username:       "username2",
-			password:       "password2",
-			nameOrID:       "00000003-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusNotFound,
+			description:     "successful user request with name",
+			username:        "username1",
+			password:        "password1",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "failed org request for service belonging to other org with name",
-			username:       "username2",
-			password:       "password2",
-			nameOrID:       "org1-service1",
-			expectedStatus: http.StatusNotFound,
+			description:     "failed user request for service belonging to other org with ID",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusNotFound,
 		},
 		{
-			description:    "failed org request not assigned to org with ID",
-			username:       "username3-no-org",
-			password:       "password3",
-			nameOrID:       "00000003-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusNotFound,
+			description:     "failed org request for service belonging to other org with name",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNotFound,
 		},
 		{
-			description:    "failed org request not assigned to org with name",
-			username:       "username3-no-org",
-			password:       "password3",
-			nameOrID:       "org1-service1",
-			expectedStatus: http.StatusNotFound,
+			description:     "failed org request not assigned to org with ID",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "failed org request not assigned to org with name",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNotFound,
 		},
 	}
 
 	for _, test := range tests {
-		if test.nameOrID == "" {
+		if test.serviceNameOrID == "" {
 			t.Fatal("user needs service name or ID for service test")
 		}
 
-		ident, err := parseNameOrID(test.nameOrID)
+		ident, err := parseNameOrID(test.serviceNameOrID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1760,6 +1773,12 @@ func TestGetService(t *testing.T) {
 		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+ident.String(), nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 		}
 
 		req.SetBasicAuth(test.username, test.password)
