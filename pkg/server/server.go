@@ -1410,44 +1410,29 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad authData) ([]u
 	return users, nil
 }
 
-func selectUserByID(dbPool *pgxpool.Pool, logger *zerolog.Logger, inputID string, ad authData) (user, error) {
+func selectUser(dbPool *pgxpool.Pool, userNameOrID string, ad authData) (user, error) {
 	u := user{}
-	userIdent, err := parseNameOrID(inputID)
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(tx, userNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		if !ad.Superuser && ad.UserID != userIdent.id {
+			return cdnerrors.ErrNotFound
+		}
+
+		u.ID = userIdent.id
+		u.Name = userIdent.name
+		u.RoleID = userIdent.roleID
+		u.OrgID = userIdent.orgID
+
+		return nil
+	})
 	if err != nil {
-		return user{}, cdnerrors.ErrUnableToParseNameOrID
+		return user{}, fmt.Errorf("selectUser transaction failed: %w", err)
 	}
-
-	var roleID pgtype.UUID
-	var orgID *pgtype.UUID
-	if userIdent.isID() {
-		if !ad.Superuser && (ad.UserID != *userIdent.id) {
-			return user{}, cdnerrors.ErrNotFound
-		}
-
-		var userName string
-		err := dbPool.QueryRow(context.Background(), "SELECT name, org_id, role_id FROM users WHERE users.id=$1", *userIdent.id).Scan(&userName, &orgID, &roleID)
-		if err != nil {
-			return user{}, fmt.Errorf("unable to SELECT user by id: %w", err)
-		}
-		u.ID = *userIdent.id
-		u.Name = userName
-	} else {
-		if !ad.Superuser && (ad.Username != inputID) {
-			return user{}, cdnerrors.ErrNotFound
-		}
-
-		var userID pgtype.UUID
-		err := dbPool.QueryRow(context.Background(), "SELECT id, org_id, role_id FROM users WHERE name=$1", inputID).Scan(&userID, &orgID, &roleID)
-		if err != nil {
-			logger.Err(err).Str("id", inputID).Msg("unable to SELECT user by name")
-			return user{}, fmt.Errorf("unable to SELECT user by name")
-		}
-		u.ID = userID
-		u.Name = *userIdent.name
-	}
-
-	u.RoleID = roleID
-	u.OrgID = orgID
 
 	return u, nil
 }
@@ -2040,6 +2025,12 @@ type roleIdentifier struct {
 	resourceIdentifier
 }
 
+type userIdentifier struct {
+	resourceIdentifier
+	orgID  *pgtype.UUID
+	roleID pgtype.UUID
+}
+
 func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	if input == "" {
 		return orgIdentifier{}, errors.New("input identifier is empty")
@@ -2052,13 +2043,13 @@ func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE id = $1", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
 		if err != nil {
 			return orgIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE name = $1", input).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM orgs WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
 		if err != nil {
 			return orgIdentifier{}, err
 		}
@@ -2084,13 +2075,13 @@ func newServiceIdentifier(tx pgx.Tx, input string, orgID pgtype.UUID) (serviceId
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE id = $1", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
 		if err != nil {
 			return serviceIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE name = $1 and org_id = $2", input, orgID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, orgID).Scan(&id, &name)
 		if err != nil {
 			return serviceIdentifier{}, err
 		}
@@ -2116,13 +2107,13 @@ func newRoleIdentifier(tx pgx.Tx, input string) (roleIdentifier, error) {
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE id = $1", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
 		if err != nil {
 			return roleIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (role names are globally unique)
-		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE name = $1", input).Scan(&id, &name)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM roles WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
 		if err != nil {
 			return roleIdentifier{}, err
 		}
@@ -2133,6 +2124,42 @@ func newRoleIdentifier(tx pgx.Tx, input string) (roleIdentifier, error) {
 			name: name,
 			id:   id,
 		},
+	}, nil
+}
+
+func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
+	if input == "" {
+		return userIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id pgtype.UUID
+	var orgID *pgtype.UUID
+	var roleID pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id, role_id FROM users WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID, &roleID)
+		if err != nil {
+			return userIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id, role_id FROM users WHERE name = $1 FOR SHARE", input).Scan(&id, &name, &orgID, &roleID)
+		if err != nil {
+			return userIdentifier{}, err
+		}
+	}
+
+	return userIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+		orgID:  orgID,
+		roleID: roleID,
 	}, nil
 }
 
@@ -3010,7 +3037,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from user GET handler")
 			}
 
-			user, err := selectUserByID(dbPool, logger, input.User, ad)
+			user, err := selectUser(dbPool, input.User, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
