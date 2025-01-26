@@ -33,7 +33,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 	"github.com/gorilla/csrf"
 	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
@@ -2034,55 +2033,6 @@ func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
 		orgID:  orgID,
 		roleID: roleID,
 	}, nil
-}
-
-type identifier struct {
-	name *string
-	id   *pgtype.UUID
-}
-
-func parseNameOrID(inputID string) (identifier, error) {
-	if inputID == "" {
-		return identifier{}, errors.New("input id is empty")
-	}
-
-	id := new(pgtype.UUID)
-	err := id.Scan(inputID)
-	if err == nil {
-		// This is a UUID, treat it as an ID
-		return identifier{
-			id: id,
-		}, nil
-	}
-
-	// This is not a UUID, treat it as a name
-	return identifier{
-		name: &inputID,
-	}, nil
-}
-
-func (i identifier) isValid() bool {
-	return i.id != nil || i.name != nil
-}
-
-func (i identifier) String() string {
-	if i.name != nil {
-		return *i.name
-	}
-
-	if i.id != nil {
-		// We can drop the uuid module when
-		// https://github.com/jackc/pgx/commit/8723855d957fc7a076a0e6998a016d8c4b138dca
-		// is available in a release.
-		u, err := uuid.FromBytes(i.id.Bytes[:])
-		if err != nil {
-			// Should not happen as parseNameOrID() would have errored out if it was unable to parse the UUID
-			panic(err)
-		}
-		return u.String()
-	}
-
-	return ""
 }
 
 func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {

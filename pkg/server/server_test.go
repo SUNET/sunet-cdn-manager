@@ -751,16 +751,7 @@ func TestGetUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ident, err := parseNameOrID(test.nameOrID)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !ident.isValid() {
-			t.Fatal("service ID or name is not valid")
-		}
-
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+ident.String(), nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.nameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -778,7 +769,7 @@ func TestGetUser(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1348,16 +1339,7 @@ func TestGetOrg(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ident, err := parseNameOrID(test.nameOrID)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !ident.isValid() {
-			t.Fatal("service ID or name is not valid")
-		}
-
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+ident.String(), nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1375,7 +1357,7 @@ func TestGetOrg(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1456,16 +1438,7 @@ func TestGetOrgIPs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ident, err := parseNameOrID(test.nameOrID)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !ident.isValid() {
-			t.Fatal("service ID or name is not valid")
-		}
-
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+ident.String()+"/ips", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/ips", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1483,7 +1456,7 @@ func TestGetOrgIPs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s/ips unexpected status code: %d (%s)", test.description, ident.String(), resp.StatusCode, string(r))
+			t.Fatalf("%s: GET orgs/%s/ips unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -1761,16 +1734,7 @@ func TestGetService(t *testing.T) {
 			t.Fatal("user needs service name or ID for service test")
 		}
 
-		ident, err := parseNameOrID(test.serviceNameOrID)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !ident.isValid() {
-			t.Fatal("service name or ID is not valid")
-		}
-
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+ident.String(), nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
