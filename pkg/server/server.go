@@ -1949,6 +1949,9 @@ func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serv
 			return serviceIdentifier{}, err
 		}
 	} else {
+		if !inputOrgID.Valid {
+			return serviceIdentifier{}, errors.New("when looking up a service by name an orgID must be supplied")
+		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
 		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
