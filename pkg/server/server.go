@@ -1485,12 +1485,7 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 	return keyID, nil
 }
 
-func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, user string, oldPassword string, newPassword string) (pgtype.UUID, error) {
-	userIdent, err := parseNameOrID(user)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to parse user for local-password: %w", err)
-	}
-
+func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -1505,36 +1500,25 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 
 	var keyID pgtype.UUID
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		var userID pgtype.UUID
-		var userName string
-		if userIdent.isID() {
-			userID = *userIdent.id
-			userName, err = userIDToNameTx(tx, *userIdent.id)
-			if err != nil {
-				return fmt.Errorf("unable to resolve ID to username: %w", err)
-			}
-		} else {
-			userName = *userIdent.name
-			userID, err = userNameToIDTx(tx, *userIdent.name)
-			if err != nil {
-				return fmt.Errorf("unable to resolve username to ID: %w", err)
-			}
+		userIdent, err := newUserIdentifier(tx, userNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse user for local-password: %w", err)
 		}
 
 		// We only allow the setting of passwords for users using the "local" auth provider
 		var authProviderName string
-		err = tx.QueryRow(context.Background(), "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
+		err = tx.QueryRow(context.Background(), "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
 		if err != nil {
-			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userID, err)
+			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userIdent.id, err)
+		}
+
+		// A superuser can change any password and a normal user can only change their own password
+		if !ad.Superuser && ad.UserID != userIdent.id {
+			return cdnerrors.ErrForbidden
 		}
 
 		if authProviderName != "local" {
 			return fmt.Errorf("ignoring local-password request for non-local user")
-		}
-
-		// A superuser can change any password and a normal user can only change their own password
-		if !ad.Superuser && ad.UserID != userID {
-			return cdnerrors.ErrForbidden
 		}
 
 		// A normal user most supply the old password
@@ -1542,16 +1526,20 @@ func setLocalPassword(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool,
 			return errors.New("old password required for non-superusers")
 		}
 
-		// ... and finally, verify that the password supplied by a normal user actually is correct
+		// ... and finally, verify that the password supplied by a normal user actually is correct.
+		// This does result in running a relatively time consuming
+		// operation (argon2 hashing) inside a transaction which is not
+		// optimal but not sure about a better way since we want to do
+		// the following upsert operation in the transaction.
 		if !ad.Superuser {
-			_, err := dbUserLogin(tx, userName, oldPassword)
+			_, err := dbUserLogin(tx, userIdent.name, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword
 			}
 		}
 
-		keyID, err = upsertArgon2Tx(tx, userID, a2Data)
+		keyID, err = upsertArgon2Tx(tx, userIdent.id, a2Data)
 		if err != nil {
 			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 		}
@@ -1654,15 +1642,6 @@ func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
 		return pgtype.UUID{}, err
 	}
 	return authProviderID, nil
-}
-
-func serviceNameToIDTx(tx pgx.Tx, orgID pgtype.UUID, name string) (pgtype.UUID, error) {
-	var serviceID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM services WHERE name=$1 AND org_id=$2 FOR SHARE", name, orgID).Scan(&serviceID)
-	if err != nil {
-		return pgtype.UUID{}, err
-	}
-	return serviceID, nil
 }
 
 func userNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
@@ -2511,16 +2490,6 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	}
 
 	return res, nil
-}
-
-func getServiceOrgIDTx(tx pgx.Tx, serviceID pgtype.UUID) (pgtype.UUID, error) {
-	var orgID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT org_id FROM services WHERE id = $1", serviceID).Scan(&orgID)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to get org id for service: %w", err)
-	}
-
-	return orgID, nil
 }
 
 func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
