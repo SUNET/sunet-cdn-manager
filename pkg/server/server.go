@@ -1706,24 +1706,6 @@ func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
 	return orgs, nil
 }
 
-func isSuperuserOrOrgMember(ad authData, orgIdent identifier) bool {
-	if ad.Superuser {
-		return true
-	}
-
-	if orgIdent.isID() {
-		if ad.OrgID != nil && *ad.OrgID == *orgIdent.id {
-			return true
-		}
-	} else {
-		if ad.OrgName != nil && *ad.OrgName == *orgIdent.name {
-			return true
-		}
-	}
-
-	return false
-}
-
 func selectOrgIPs(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (orgAddresses, error) {
 	oAddrs := orgAddresses{}
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -1774,33 +1756,26 @@ func selectOrgIPs(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (orgAdd
 	return oAddrs, nil
 }
 
-func selectOrgByID(dbPool *pgxpool.Pool, inputID string, ad authData) (org, error) {
+func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (org, error) {
 	o := org{}
-	orgIdent, err := parseNameOrID(inputID)
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+			return cdnerrors.ErrNotFound
+		}
+
+		o.Name = orgIdent.name
+		o.ID = orgIdent.id
+
+		return nil
+	})
 	if err != nil {
-		return org{}, cdnerrors.ErrUnableToParseNameOrID
-	}
-
-	if !isSuperuserOrOrgMember(ad, orgIdent) {
-		return org{}, cdnerrors.ErrNotFound
-	}
-
-	if orgIdent.isID() {
-		var name string
-		err := dbPool.QueryRow(context.Background(), "SELECT name FROM orgs WHERE id=$1", *orgIdent.id).Scan(&name)
-		if err != nil {
-			return org{}, fmt.Errorf("unable to SELECT organization by id")
-		}
-		o.Name = name
-		o.ID = *orgIdent.id
-	} else {
-		var id pgtype.UUID
-		err := dbPool.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1", inputID).Scan(&id)
-		if err != nil {
-			return org{}, fmt.Errorf("unable to SELECT organization by name: %w", err)
-		}
-		o.Name = inputID
-		o.ID = id
+		return org{}, fmt.Errorf("selectOrg: transaction failed: %w", err)
 	}
 
 	return o, nil
@@ -3038,7 +3013,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
 
-			org, err := selectOrgByID(dbPool, input.Org, ad)
+			org, err := selectOrg(dbPool, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
