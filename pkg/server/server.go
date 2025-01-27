@@ -1743,12 +1743,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
@@ -1756,23 +1756,9 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	services := []types.Service{}
-	var serviceID, orgID pgtype.UUID
-	var serviceName, orgName string
-	_, err = pgx.ForEachRow(rows, []any{&serviceID, &orgID, &serviceName, &orgName}, func() error {
-		services = append(
-			services,
-			types.Service{
-				ID:      serviceID,
-				Name:    serviceName,
-				OrgID:   orgID,
-				OrgName: orgName,
-			},
-		)
-		return nil
-	})
+	services, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Service])
 	if err != nil {
-		return nil, fmt.Errorf("unable to ForEachRow over services in API GET: %w", err)
+		return nil, fmt.Errorf("unable to collect rows for services in API GET: %w", err)
 	}
 
 	return services, nil
