@@ -1298,22 +1298,15 @@ func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Reques
 	var err error
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		ad, err = dbUserLogin(tx, username, password)
-		if err != nil {
-			switch err {
-			case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-				// The user does not exist etc or the password was bad, try again
-				sendBasicAuth(w)
-				return nil
-			}
-
-			logger.Err(err).Msg("failed looking up username for authentication")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return nil
-		}
-
-		return nil
+		return err
 	})
 	if err != nil {
+		switch err {
+		case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+			// The user does not exist etc or the password was bad, try again
+			sendBasicAuth(w)
+			return nil
+		}
 		logger.Err(err).Msg("handleBasicAuth transaction failed")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil
