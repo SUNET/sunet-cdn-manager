@@ -15,4 +15,5 @@ var (
 	ErrBadOldPassword          = errors.New("old password is invalid")
 	ErrUnableToParseNameOrID   = errors.New("unable to parse name or ID")
 	ErrInvalidFormData         = errors.New("invalid form data")
+	ErrServiceByNameNeedsOrg   = errors.New("looking up service by name requires org")
 )

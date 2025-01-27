@@ -1927,36 +1927,77 @@ func TestGetServiceVersions(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		expectedStatus int
-		org            string
+		description     string
+		username        string
+		password        string
+		expectedStatus  int
+		org             string
+		serviceNameOrID string
+		orgNameOrID     string
 	}{
 		{
-			description:    "successful superuser request",
-			username:       "admin",
-			password:       "adminpass1",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser request with id",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 		},
 		{
-			description:    "successful org request",
-			username:       "username1",
-			password:       "password1",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 		},
 		{
-			description:    "failed org request not assigned to org",
-			username:       "username3-no-org",
-			password:       "password3",
-			expectedStatus: http.StatusForbidden,
+			description:     "successful user request with id",
+			username:        "username1",
+			password:        "password1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+		},
+		{
+			description:     "successful user request with name",
+			username:        "username1",
+			password:        "password1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+		},
+		{
+			description:     "failed user request not assigned to org",
+			username:        "username3-no-org",
+			password:        "password3",
+			expectedStatus:  http.StatusForbidden,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+		},
+		{
+			description:     "failed user request name without org",
+			username:        "username1",
+			password:        "password1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "org1-service1",
+		},
+		{
+			description:     "failed superuser request with name, missing org",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "org1-service1",
 		},
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/service-versions", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 		}
 
 		req.SetBasicAuth(test.username, test.password)

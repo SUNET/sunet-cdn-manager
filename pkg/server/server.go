@@ -264,7 +264,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		ad := adRef.(authData)
 
-		serviceVersions, err := selectServiceVersions(dbPool, ad)
+		serviceVersions, err := selectServiceVersions(dbPool, ad, serviceName, orgName)
 		if err != nil {
 			logger.Error().Msg("console: unable to select service versions")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1949,7 +1949,7 @@ func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serv
 		}
 	} else {
 		if !inputOrgID.Valid {
-			return serviceIdentifier{}, errors.New("when looking up a service by name an orgID must be supplied")
+			return serviceIdentifier{}, cdnerrors.ErrServiceByNameNeedsOrg
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
 		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
@@ -2080,45 +2080,67 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 	return serviceID, nil
 }
 
-func selectServiceVersions(dbPool *pgxpool.Pool, ad authData) ([]types.ServiceVersion, error) {
+func selectServiceVersions(dbPool *pgxpool.Pool, ad authData, serviceNameOrID string, orgNameOrID string) ([]types.ServiceVersion, error) {
 	var rows pgx.Rows
-	var err error
-	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.id, services.name, orgs.id, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs on services.org_id = orgs.id ORDER BY service_versions.version")
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for service versions as superuser: %w", err)
-		}
-	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT service_versions.id, service_versions.version, service_versions.active, services.id, services.name, orgs.id, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY service_versions.version", ad.OrgID)
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for service versions as org member: %w", err)
-		}
-	} else {
-		return nil, cdnerrors.ErrForbidden
-	}
 
+	var err error
 	serviceVersions := []types.ServiceVersion{}
-	var id, serviceID, orgID pgtype.UUID
-	var serviceName, orgName string
-	var version int64
-	var active bool
-	_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &serviceID, &serviceName, &orgID, &orgName}, func() error {
-		serviceVersions = append(
-			serviceVersions,
-			types.ServiceVersion{
-				ID:          id,
-				ServiceID:   serviceID,
-				ServiceName: serviceName,
-				Version:     version,
-				Active:      active,
-				OrgID:       orgID,
-				OrgName:     orgName,
-			},
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var serviceIdent serviceIdentifier
+		if orgNameOrID == "" {
+			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, pgtype.UUID{})
+			if err != nil {
+				return fmt.Errorf("looking up service identifier failed: %w", err)
+			}
+		} else {
+			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return fmt.Errorf("looking up org identifier failed: %w", err)
+			}
+
+			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+			if err != nil {
+				return fmt.Errorf("looking up service identifier failed: %w", err)
+			}
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
+			return cdnerrors.ErrForbidden
+		}
+
+		rows, err = tx.Query(
+			context.Background(),
+			"SELECT service_versions.id, service_versions.version, service_versions.active, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE service_id = $1 ORDER BY service_versions.version",
+			serviceIdent.id,
 		)
+		var id pgtype.UUID
+		var orgName string
+		var version int64
+		var active bool
+		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &orgName}, func() error {
+			serviceVersions = append(
+				serviceVersions,
+				types.ServiceVersion{
+					ID:          id,
+					ServiceID:   serviceIdent.id,
+					ServiceName: serviceIdent.name,
+					Version:     version,
+					Active:      active,
+					OrgID:       serviceIdent.orgID,
+					OrgName:     orgName,
+				},
+			)
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("unable to ForEachRow over service versions: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("unable to ForEachRow over services in API GET: %w", err)
+		return nil, fmt.Errorf("selectServiceVersions: transaction failed: %w", err)
 	}
 
 	return serviceVersions, nil
@@ -3126,7 +3148,10 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 		)
 
-		huma.Get(api, "/v1/service-versions", func(ctx context.Context, _ *struct{},
+		huma.Get(api, "/v1/services/{service}/service-versions", func(ctx context.Context, input *struct {
+			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+		},
 		) (*serviceVersionsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
@@ -3135,10 +3160,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
 
-			serviceVersions, err := selectServiceVersions(dbPool, ad)
+			serviceVersions, err := selectServiceVersions(dbPool, ad, input.Service, input.Org)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
 				}
 				logger.Err(err).Msg("unable to query service-versions")
 				return nil, err
