@@ -1181,10 +1181,12 @@ type authData struct {
 	RoleName  string
 }
 
-func sendBasicAuth(w http.ResponseWriter) {
-	realm := "SUNET CDN Manager"
-	w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
-	w.WriteHeader(http.StatusUnauthorized)
+func sendHumaBasicAuth(logger *zerolog.Logger, api huma.API, ctx huma.Context) {
+	ctx.SetHeader("WWW-Authenticate", `Basic realm="SUNET CDN Manager`)
+	err := huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
+	if err != nil {
+		logger.Err(err).Msg("failed writing Basic Auth response")
+	}
 }
 
 // Login page/form for browser based (not API) requests
@@ -1285,40 +1287,6 @@ func dbUserLogin(tx pgx.Tx, username string, password string) (authData, error) 
 	}, nil
 }
 
-// This handler writes any data to the client as well as logging errors etc. If everything went well *authData is not nil.
-func handleBasicAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request) *authData {
-	logger := hlog.FromRequest(r)
-	username, password, ok := r.BasicAuth()
-	if !ok {
-		sendBasicAuth(w)
-		return nil
-	}
-
-	var ad authData
-	var err error
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		ad, err = dbUserLogin(tx, username, password)
-		return err
-	})
-	if err != nil {
-		switch err {
-		case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-			// The user does not exist etc or the password was bad, try again
-			sendBasicAuth(w)
-			return nil
-		}
-		logger.Err(err).Msg("handleBasicAuth transaction failed")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil
-	}
-
-	return &ad
-}
-
-func apiAuth(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request) *authData {
-	return handleBasicAuth(dbPool, w, r)
-}
-
 const (
 	cookieName = "sunet-cdn-manager"
 )
@@ -1334,21 +1302,6 @@ func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, 
 	logger.Info().Msg("using authentication data from session")
 	ad := adInt.(authData)
 	return &ad
-}
-
-func apiAuthMiddleware(dbPool *pgxpool.Pool) func(next http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			adRef := apiAuth(dbPool, w, r)
-			if adRef == nil {
-				return
-			}
-
-			ctx := context.WithValue(r.Context(), authDataKey{}, *adRef)
-
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
 }
 
 func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
@@ -2788,16 +2741,86 @@ func (ds domainString) Schema(_ huma.Registry) *huma.Schema {
 	}
 }
 
+// Unfortunately we dont have access to net/http request.BasicAuth() in the
+// huma handler so include basic decode ourselves.
+func decodeBasicAuth(token string) (username, password string, ok bool) {
+	c, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return "", "", false
+	}
+	cs := string(c)
+	username, password, ok = strings.Cut(cs, ":")
+	if !ok {
+		return "", "", false
+	}
+	return username, password, true
+}
+
+// https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
+func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Context, next func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		logger := zlog.Ctx(ctx.Context())
+
+		token := strings.TrimPrefix(ctx.Header("Authorization"), "Basic ")
+		if len(token) == 0 {
+			sendHumaBasicAuth(logger, api, ctx)
+			return
+		}
+
+		username, password, ok := decodeBasicAuth(token)
+		if !ok {
+			sendHumaBasicAuth(logger, api, ctx)
+			return
+		}
+
+		var ad authData
+		var err error
+		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			ad, err = dbUserLogin(tx, username, password)
+			return err
+		})
+		if err != nil {
+			switch err {
+			case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+				// The user does not exist etc or the password was bad, try again
+				sendHumaBasicAuth(logger, api, ctx)
+				return
+			}
+			logger.Err(err).Msg("handleBasicAuth transaction failed")
+			err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+			if err != nil {
+				logger.Err(err).Msg("faled writing error about trasnaction")
+			}
+			return
+		}
+
+		ctx = huma.WithValue(ctx, authDataKey{}, ad)
+
+		next(ctx)
+	}
+}
+
 func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 	router.Route("/api", func(r chi.Router) {
-		r.Use(apiAuthMiddleware(dbPool))
-
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
 			{URL: "https://manager.cdn.example.se/api"},
 		}
 
+		config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+			"basicAuth": {
+				Type:   "http",
+				Scheme: "Basic",
+			},
+		}
+
+		config.Security = []map[string][]string{
+			{"basicAuth": {""}},
+		}
+
 		api := humachi.New(r, config)
+
+		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool))
 
 		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
 		) (*usersOutput, error) {
