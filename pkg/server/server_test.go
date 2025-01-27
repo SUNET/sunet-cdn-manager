@@ -2283,14 +2283,12 @@ func TestPostServiceVersion(t *testing.T) {
 	for _, test := range tests {
 		newServiceVersion := struct {
 			Org     string   `json:"org"`
-			Service string   `json:"service"`
 			Active  bool     `json:"active"`
 			Domains []string `json:"domains"`
 			Origins []origin `json:"origins"`
 			VclRecv string   `json:"vcl_recv"`
 		}{
 			Org:     test.orgNameOrID,
-			Service: test.serviceNameOrID,
 			Active:  test.active,
 			Domains: test.domains,
 			Origins: test.origins,
@@ -2306,7 +2304,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/service-versions", r)
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2444,7 +2442,7 @@ func TestActivateServiceVersion(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
 		if err != nil {
 			t.Fatal(err)
 		}

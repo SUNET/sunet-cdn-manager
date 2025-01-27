@@ -3178,7 +3178,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
-		postServiceVersionsPath := "/v1/service-versions"
+		postServiceVersionsPath := "/v1/services/{service}/service-versions"
 		huma.Register(
 			api,
 			huma.Operation{
@@ -3189,9 +3189,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				DefaultStatus: http.StatusCreated,
 			},
 			func(ctx context.Context, input *struct {
-				Body struct {
+				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+				Body    struct {
 					Org     string         `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-					Service string         `json:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 					Active  bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
@@ -3206,7 +3206,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Body.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -3229,9 +3229,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			},
 		)
 
-		huma.Put(api, "/v1/service-versions/{version}/active", func(ctx context.Context, input *struct {
+		huma.Put(api, "/v1/services/{service}/service-versions/{version}/active", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 			Org     string `query:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
-			Service string `query:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 			Version int64  `path:"version" example:"1" doc:"The service version to activate"`
 			Body    struct {
 				Active bool `json:"active" example:"true" doc:"If the version should be active (must be true)" minLength:"15" maxLength:"64"`
