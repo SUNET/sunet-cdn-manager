@@ -773,7 +773,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) te
 	})
 }
 
-func CreateServiceVersionContent(serviceName string, err error) templ.Component {
+func CreateServiceVersionContent(serviceName string, orgName string, err error) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -798,7 +798,7 @@ func CreateServiceVersionContent(serviceName string, err error) templ.Component 
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var39 templ.SafeURL = templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName))
+		var templ_7745c5c3_Var39 templ.SafeURL = templ.URL(fmt.Sprintf("/console/create-service-version/%s?org=%s", serviceName, orgName))
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(string(templ_7745c5c3_Var39)))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err

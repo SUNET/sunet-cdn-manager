@@ -163,8 +163,8 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
 	</table>
 }
 
-templ CreateServiceVersionContent(serviceName string, err error) {
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create-service-version/%s", serviceName)) }>
+templ CreateServiceVersionContent(serviceName string, orgName string, err error) {
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create-service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
 		<label for="domains">Domains:</label>
 		<input type="text" id="domains" name="domains"/>

@@ -345,7 +345,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
-		orgName := chi.URLParam(r, "org")
+		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
 			logger.Error().Msg("console: missing org parameter in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -354,7 +354,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service parameter in URL")
+			logger.Error().Msg("console: missing service path in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -374,7 +374,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -400,7 +400,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -447,7 +447,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			validatedRedirect(fmt.Sprintf("/console/services/%s", serviceName), w, r)
+			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
