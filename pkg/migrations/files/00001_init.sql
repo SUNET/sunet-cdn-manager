@@ -22,6 +22,34 @@ CREATE TABLE org_ip_addresses (
     address inet UNIQUE NOT NULL CONSTRAINT valid_address CHECK((family(address) = 4 AND masklen(address) = 32) OR (family(address) = 6 AND masklen(address) = 128))
 );
 
+-- Create trigger function for verifying an IP is contained in the network it
+-- links to. Extra goose annotation needed since the statement includes
+-- semicolons.
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION validate_ip_in_network()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check if the IPv4 or IPv6 address is contained within the referenced network
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ip_networks
+        WHERE id = NEW.network_id
+        AND NEW.address << network
+    ) THEN
+        RAISE EXCEPTION 'IP address % is not contained in ip_networks id % (or the id does not exist)', NEW.address, NEW.network_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+-- Create trigger
+CREATE TRIGGER check_ip_in_network
+BEFORE INSERT OR UPDATE ON org_ip_addresses
+FOR EACH ROW
+EXECUTE FUNCTION validate_ip_in_network();
+
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
