@@ -100,7 +100,7 @@ CREATE TABLE services (
     time_created timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES orgs(id),
     name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
-    version_counter BIGINT DEFAULT 0 NOT NULL,
+    version_counter bigint DEFAULT 0 NOT NULL,
     UNIQUE(org_id, name)
 );
 
