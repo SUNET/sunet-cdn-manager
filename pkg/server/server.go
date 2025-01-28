@@ -1970,12 +1970,14 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
+	if orgNameOrID == nil {
+		return pgtype.UUID{}, cdnerrors.ErrUnprocessable
+	}
+
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		if orgNameOrID != nil {
-			orgIdent, err = newOrgIdentifier(tx, *orgNameOrID)
-			if err != nil {
-				return cdnerrors.ErrUnprocessable
-			}
+		orgIdent, err = newOrgIdentifier(tx, *orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnprocessable
 		}
 
 		// A normal user must supply an org id for an org they are
