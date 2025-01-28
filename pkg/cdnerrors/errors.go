@@ -16,4 +16,5 @@ var (
 	ErrUnableToParseNameOrID   = errors.New("unable to parse name or ID")
 	ErrInvalidFormData         = errors.New("invalid form data")
 	ErrServiceByNameNeedsOrg   = errors.New("looking up service by name requires org")
+	ErrServiceQuotaHit         = errors.New("not allowed to create more services")
 )

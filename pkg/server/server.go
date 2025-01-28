@@ -1986,6 +1986,26 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 			return cdnerrors.ErrForbidden
 		}
 
+		var serviceQuota int64
+		// Verify we are not hitting the limit of how many services the
+		// org allows, do "FOR UPDATE" to lock out any concurrently
+		// running function until we are done with counting rows.
+		err = tx.QueryRow(context.Background(), "SELECT service_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&serviceQuota)
+		if err != nil {
+			return err
+		}
+
+		var numServices int64
+		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM services WHERE org_id=$1", orgIdent.id).Scan(&numServices)
+		if err != nil {
+			return err
+		}
+
+		if numServices >= serviceQuota {
+			logger.Error().Int64("num_services", numServices).Int64("service_quota", serviceQuota).Msg("unable to create additional service as quota has been reached")
+			return cdnerrors.ErrServiceQuotaHit
+		}
+
 		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, orgIdent.id).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
@@ -3092,12 +3112,15 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 
 				id, err := insertService(logger, dbPool, input.Body.Name, &input.Body.Org, ad)
 				if err != nil {
-					if errors.Is(err, cdnerrors.ErrUnprocessable) {
+					switch {
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
-					} else if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("service already exists")
-					} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this service")
+					case errors.Is(err, cdnerrors.ErrServiceQuotaHit):
+						return nil, huma.Error409Conflict("service quota hit, not allowed to create more services")
 					}
 					logger.Err(err).Msg("unable to add service")
 					return nil, err

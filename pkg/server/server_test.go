@@ -53,9 +53,10 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	// use static UUIDs to get known contents for testing
 	testData := []string{
 		// Organizations
-		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000001', 'org1')",
+		"INSERT INTO orgs (id, name, service_quota) VALUES ('00000002-0000-0000-0000-000000000001', 'org1', 100)",
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000002', 'org2')",
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000003', 'org3')",
+		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000004', 'org4')",
 
 		// Services
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1' FROM orgs WHERE name='org1'",
@@ -1864,6 +1865,22 @@ func TestPostServices(t *testing.T) {
 			password:       "password3",
 			newService:     "new-username3-service1",
 			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			description:    "successful admin request inside services_limit (first service)",
+			username:       "admin",
+			password:       "adminpass1",
+			newService:     "new-admin-org-4-service1",
+			expectedStatus: http.StatusCreated,
+			org:            "org4",
+		},
+		{
+			description:    "failed admin request outside services_limit (second service)",
+			username:       "admin",
+			password:       "adminpass1",
+			newService:     "new-admin-org-4-service2",
+			expectedStatus: http.StatusConflict,
+			org:            "org4",
 		},
 	}
 

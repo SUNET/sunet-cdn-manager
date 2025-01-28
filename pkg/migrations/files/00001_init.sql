@@ -2,7 +2,8 @@
 CREATE TABLE orgs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
+    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    service_quota bigint NOT NULL DEFAULT 1
 );
 
 -- https://stackoverflow.com/questions/55283779/prevent-overlapping-values-on-cidr-column-in-postgresql
