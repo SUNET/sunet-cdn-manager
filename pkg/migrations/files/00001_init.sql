@@ -6,6 +6,15 @@ CREATE TABLE orgs (
     service_quota bigint NOT NULL DEFAULT 1
 );
 
+CREATE TABLE services (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    time_created timestamptz NOT NULL DEFAULT now(),
+    org_id uuid NOT NULL REFERENCES orgs(id),
+    name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    version_counter bigint DEFAULT 0 NOT NULL,
+    UNIQUE(org_id, name)
+);
+
 -- https://stackoverflow.com/questions/55283779/prevent-overlapping-values-on-cidr-column-in-postgresql
 -- https://dba.stackexchange.com/questions/205773/how-to-find-out-what-operator-class-and-access-method-should-be-used-for-an-excl
 CREATE TABLE ip_networks (
@@ -15,11 +24,11 @@ CREATE TABLE ip_networks (
     EXCLUDE USING gist (network inet_ops with &&)
 );
 
-CREATE TABLE org_ip_addresses (
+CREATE TABLE service_ip_addresses (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ip_networks(id),
-    org_id uuid REFERENCES orgs(id),
+    service_id uuid REFERENCES services(id),
     address inet UNIQUE NOT NULL CONSTRAINT valid_address CHECK((family(address) = 4 AND masklen(address) = 32) OR (family(address) = 6 AND masklen(address) = 128))
 );
 
@@ -47,7 +56,7 @@ $$ LANGUAGE plpgsql;
 
 -- Create trigger
 CREATE TRIGGER check_ip_in_network
-BEFORE INSERT OR UPDATE ON org_ip_addresses
+BEFORE INSERT OR UPDATE ON service_ip_addresses
 FOR EACH ROW
 EXECUTE FUNCTION validate_ip_in_network();
 
@@ -107,15 +116,6 @@ CREATE TABLE user_argon2keys (
     memory bigint NOT NULL CONSTRAINT uint32_memory CHECK(memory >= 0 AND memory <= 4294967295),
     threads bigint NOT NULL CONSTRAINT uint8_threads CHECK(threads >= 0 AND threads <= 255),
     tag_size bigint NOT NULL CONSTRAINT uint32_tag_sizie CHECK(tag_size >= 0 AND tag_size <= 4294967295)
-);
-
-CREATE TABLE services (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    time_created timestamptz NOT NULL DEFAULT now(),
-    org_id uuid NOT NULL REFERENCES orgs(id),
-    name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
-    version_counter bigint DEFAULT 0 NOT NULL,
-    UNIQUE(org_id, name)
 );
 
 CREATE TABLE service_versions (

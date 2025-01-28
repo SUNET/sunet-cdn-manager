@@ -1656,42 +1656,51 @@ func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
 	return orgs, nil
 }
 
-func selectOrgIPs(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (orgAddresses, error) {
-	oAddrs := orgAddresses{}
+func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad authData) (serviceAddresses, error) {
+	sAddrs := serviceAddresses{}
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
-		if err != nil {
-			return fmt.Errorf("unable to parse org name or id")
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
+			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			orgID = orgIdent.id
 		}
 
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgID)
+		if err != nil {
+			return err
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
 			return cdnerrors.ErrNotFound
 		}
 
-		oAddrs = orgAddresses{
-			OrgID:              orgIdent.id,
-			AllocatedAddresses: []orgAddress{},
+		sAddrs = serviceAddresses{
+			ServiceID:          serviceIdent.id,
+			AllocatedAddresses: []serviceAddress{},
 		}
 
-		rows, err := tx.Query(context.Background(), "SELECT address FROM org_ip_addresses WHERE org_id=$1", orgIdent.id)
+		rows, err := tx.Query(context.Background(), "SELECT address FROM service_ip_addresses WHERE service_id=$1", serviceIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to SELECT IP addresses for organization by id: %w", err)
 		}
 
-		addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+		addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[serviceAddress])
 		if err != nil {
 			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
 		}
 
-		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, addrs...)
+		sAddrs.AllocatedAddresses = append(sAddrs.AllocatedAddresses, addrs...)
 
 		return nil
 	})
 	if err != nil {
-		return orgAddresses{}, fmt.Errorf("selectOrgIPs: transaction failed: %w", err)
+		return serviceAddresses{}, fmt.Errorf("selectServiceIPs: transaction failed: %w", err)
 	}
 
-	return oAddrs, nil
+	return sAddrs, nil
 }
 
 func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (org, error) {
@@ -2968,8 +2977,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/orgs/{org}/ips", func(ctx context.Context, input *struct {
-			Org string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		huma.Get(api, "/v1/services/{service}/ips", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*orgIPsOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -2979,7 +2989,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
 
-			oAddrs, err := selectOrgIPs(dbPool, input.Org, ad)
+			oAddrs, err := selectServiceIPs(dbPool, input.Service, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -3388,12 +3398,12 @@ type org struct {
 	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
 }
 
-type orgAddresses struct {
-	OrgID              pgtype.UUID  `json:"org_id" doc:"ID of organization, UUIDv4"`
-	AllocatedAddresses []orgAddress `json:"allocated_addresses" doc:"list of addresses allocated to the org"`
+type serviceAddresses struct {
+	ServiceID          pgtype.UUID      `json:"service_id" doc:"ID of service, UUIDv4"`
+	AllocatedAddresses []serviceAddress `json:"allocated_addresses" doc:"list of addresses allocated to the org"`
 }
 
-type orgAddress struct {
+type serviceAddress struct {
 	Address netip.Addr `json:"address" doc:"IP address (IPv4 or IPv6)"`
 }
 
@@ -3406,7 +3416,7 @@ type orgsOutput struct {
 }
 
 type orgIPsOutput struct {
-	Body orgAddresses
+	Body serviceAddresses
 }
 
 type serviceOutput struct {

@@ -124,10 +124,10 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO ip_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000001', '2001:db8:0::/48')",
 		"INSERT INTO ip_networks (id, network) VALUES ('00000012-0000-0000-0000-000000000002', '3fff::/20')",
 
-		// Allocate addresses from networks to orgs
-		// org1
-		"INSERT INTO org_ip_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000001', '00000011-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '192.0.2.1')",
-		"INSERT INTO org_ip_addresses (id, network_id, org_id, address) VALUES ('00000013-0000-0000-0000-000000000002', '00000012-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', '2001:db8:0::1')",
+		// Allocate addresses from networks to services
+		// org1, org1-service1
+		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000001', '00000011-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000001', '192.0.2.1')",
+		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000002', '00000012-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000001', '2001:db8:0::1')",
 
 		// Users
 		// No org, local user
@@ -1370,7 +1370,7 @@ func TestGetOrg(t *testing.T) {
 	}
 }
 
-func TestGetOrgIPs(t *testing.T) {
+func TestGetServiceIPs(t *testing.T) {
 	ts, dbPool, err := prepareServer(false)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -1381,67 +1381,70 @@ func TestGetOrgIPs(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		nameOrID       string
-		expectedStatus int
+		description     string
+		username        string
+		password        string
+		orgNameOrID     string
+		serviceNameOrID string
+		expectedStatus  int
 	}{
 		{
-			description:    "successful superuser org IPs request with ID",
-			username:       "admin",
-			password:       "adminpass1",
-			nameOrID:       "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser service IPs request with ID, no org",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful superuser org IPs request with name",
-			username:       "admin",
-			password:       "adminpass1",
-			nameOrID:       "org1",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser service IPs request with ID, with org id",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful org IPs request with ID",
-			username:       "username1",
-			password:       "password1",
-			nameOrID:       "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusOK,
+			description:     "successful superuser service IPs request with names",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusOK,
 		},
 		{
-			description:    "successful org IPs request with name",
-			username:       "username1",
-			password:       "password1",
-			nameOrID:       "org1",
-			expectedStatus: http.StatusOK,
+			description:     "failed service IPs request, bad password",
+			username:        "username1",
+			password:        "badpassword1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusUnauthorized,
 		},
 		{
-			description:    "failed org IPs request, bad password",
-			username:       "username1",
-			password:       "badpassword1",
-			nameOrID:       "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusUnauthorized,
+			description:     "failed lookup of service IPs for org you do not belong to with ID",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusNotFound,
 		},
 		{
-			description:    "failed lookup of org IPs for org you do not belong to with ID",
-			username:       "username2",
-			password:       "password2",
-			nameOrID:       "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusNotFound,
-		},
-		{
-			description:    "failed lookup of org IPs for org you do not belong to with name",
-			username:       "username2",
-			password:       "password2",
-			nameOrID:       "org1",
-			expectedStatus: http.StatusNotFound,
+			description:     "failed lookup of service IPs for org you do not belong to with name",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNotFound,
 		},
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/ips", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 		}
 
 		req.SetBasicAuth(test.username, test.password)
@@ -1457,7 +1460,7 @@ func TestGetOrgIPs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s/ips unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+			t.Fatalf("%s: unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
