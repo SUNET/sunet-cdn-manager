@@ -7,34 +7,19 @@ CREATE TABLE orgs (
 
 -- https://stackoverflow.com/questions/55283779/prevent-overlapping-values-on-cidr-column-in-postgresql
 -- https://dba.stackexchange.com/questions/205773/how-to-find-out-what-operator-class-and-access-method-should-be-used-for-an-excl
-CREATE TABLE ipv4_networks (
+CREATE TABLE ip_networks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    network cidr UNIQUE NOT NULL CONSTRAINT v4 CHECK(family(network) = 4),
+    network cidr UNIQUE NOT NULL,
     EXCLUDE USING gist (network inet_ops with &&)
 );
 
-CREATE TABLE ipv6_networks (
+CREATE TABLE org_ip_addresses (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    network cidr UNIQUE NOT NULL CONSTRAINT v6 CHECK(family(network) = 6),
-    EXCLUDE USING gist (network inet_ops with &&)
-);
-
-CREATE TABLE org_ipv4_addresses (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    time_created timestamptz NOT NULL DEFAULT now(),
-    network_id uuid NOT NULL REFERENCES ipv4_networks(id),
+    network_id uuid NOT NULL REFERENCES ip_networks(id),
     org_id uuid REFERENCES orgs(id),
-    address inet UNIQUE NOT NULL CONSTRAINT valid_v4 CHECK(family(address) = 4 AND masklen(address) = 32)
-);
-
-CREATE TABLE org_ipv6_addresses (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    time_created timestamptz NOT NULL DEFAULT now(),
-    network_id uuid NOT NULL REFERENCES ipv6_networks(id),
-    org_id uuid REFERENCES orgs(id),
-    address inet UNIQUE NOT NULL CONSTRAINT valid_v6 CHECK(family(address) = 6 AND masklen(address) = 128)
+    address inet UNIQUE NOT NULL CONSTRAINT valid_address CHECK((family(address) = 4 AND masklen(address) = 32) OR (family(address) = 6 AND masklen(address) = 128))
 );
 
 CREATE TABLE roles (

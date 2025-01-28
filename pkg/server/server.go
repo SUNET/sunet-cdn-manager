@@ -77,6 +77,11 @@ var (
 	validate = validator.New(validator.WithRequiredStructEnabled())
 
 	returnToKey = "return_to"
+
+	validNetworkFamilies = map[int]struct{}{
+		4: {},
+		6: {},
+	}
 )
 
 // Small struct that implements io.Writer so we can pass it to net/http server
@@ -1668,29 +1673,17 @@ func selectOrgIPs(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (orgAdd
 			AllocatedAddresses: []orgAddress{},
 		}
 
-		rows, err := tx.Query(context.Background(), "SELECT address FROM org_ipv4_addresses WHERE org_id=$1", orgIdent.id)
+		rows, err := tx.Query(context.Background(), "SELECT address FROM org_ip_addresses WHERE org_id=$1", orgIdent.id)
 		if err != nil {
-			return fmt.Errorf("unable to SELECT IPv4 addresses for organization by id: %w", err)
+			return fmt.Errorf("unable to SELECT IP addresses for organization by id: %w", err)
 		}
 
-		ipv4Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
-		if err != nil {
-			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
-		}
-
-		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv4Addrs...)
-
-		rows, err = tx.Query(context.Background(), "SELECT address FROM org_ipv6_addresses WHERE org_id=$1", orgIdent.id)
-		if err != nil {
-			return fmt.Errorf("unable to SELECT IPv6 addresses for organization by id: %w", err)
-		}
-
-		ipv6Addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
+		addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[orgAddress])
 		if err != nil {
 			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
 		}
 
-		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, ipv6Addrs...)
+		oAddrs.AllocatedAddresses = append(oAddrs.AllocatedAddresses, addrs...)
 
 		return nil
 	})
@@ -2550,95 +2543,59 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 	return completeVcls, nil
 }
 
-func selectIPv4Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv4Network, error) {
-	var rows pgx.Rows
-	var err error
-	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv4_networks ORDER BY time_created")
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for ipv4_networks: %w", err)
-		}
-	} else {
+func selectNetworks(dbPool *pgxpool.Pool, ad authData, family int) ([]ipNetwork, error) {
+	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	ipv4Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv4Network])
-	if err != nil {
-		return nil, fmt.Errorf("unable to CollectRows for ipv4 networks: %w", err)
+	var rows pgx.Rows
+	var err error
+
+	if family == 0 {
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ip_networks ORDER BY network")
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for all networks: %w", err)
+		}
+	} else {
+		if _, ok := validNetworkFamilies[family]; !ok {
+			return nil, errors.New("invalid network family")
+		}
+		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ip_networks WHERE family(network) = $1 ORDER BY network", family)
+		if err != nil {
+			return nil, fmt.Errorf("unable to query for networks: %w", err)
+		}
 	}
 
-	return ipv4Networks, nil
+	ipNetworks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipNetwork])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for networks: %w", err)
+	}
+
+	return ipNetworks, nil
 }
 
-func insertIPv4Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv4Network, error) {
+func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipNetwork, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
-		return ipv4Network{}, cdnerrors.ErrForbidden
+		return ipNetwork{}, cdnerrors.ErrForbidden
 	}
-	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv4_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
+	err := dbPool.QueryRow(context.Background(), "INSERT INTO ip_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
 			case pgUniqueViolation:
-				return ipv4Network{}, cdnerrors.ErrAlreadyExists
+				return ipNetwork{}, cdnerrors.ErrAlreadyExists
 			case pgCheckViolation:
-				return ipv4Network{}, cdnerrors.ErrCheckViolation
+				return ipNetwork{}, cdnerrors.ErrCheckViolation
 			case pgExclusionViolation:
-				return ipv4Network{}, cdnerrors.ErrExclutionViolation
+				return ipNetwork{}, cdnerrors.ErrExclutionViolation
 			}
 		}
-		return ipv4Network{}, fmt.Errorf("unable to INSERT ipv4 network '%s': %w", network, err)
+		return ipNetwork{}, fmt.Errorf("unable to INSERT network '%s': %w", network, err)
 	}
 
-	return ipv4Network{
-		ID:      id,
-		Network: network,
-	}, nil
-}
-
-func selectIPv6Networks(dbPool *pgxpool.Pool, ad authData) ([]ipv6Network, error) {
-	var rows pgx.Rows
-	var err error
-	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT id, network FROM ipv6_networks ORDER BY time_created")
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for ipv6_networks: %w", err)
-		}
-	} else {
-		return nil, cdnerrors.ErrForbidden
-	}
-
-	ipv6Networks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipv6Network])
-	if err != nil {
-		return nil, fmt.Errorf("unable to CollectRows for ipv6 networks: %w", err)
-	}
-
-	return ipv6Networks, nil
-}
-
-func insertIPv6Network(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipv6Network, error) {
-	var id pgtype.UUID
-	if !ad.Superuser {
-		return ipv6Network{}, cdnerrors.ErrForbidden
-	}
-	err := dbPool.QueryRow(context.Background(), "INSERT INTO ipv6_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case pgUniqueViolation:
-				return ipv6Network{}, cdnerrors.ErrAlreadyExists
-			case pgCheckViolation:
-				return ipv6Network{}, cdnerrors.ErrCheckViolation
-			case pgExclusionViolation:
-				return ipv6Network{}, cdnerrors.ErrExclutionViolation
-			}
-		}
-		return ipv6Network{}, fmt.Errorf("unable to INSERT ipv6 network '%s': %w", network, err)
-	}
-
-	return ipv6Network{
+	return ipNetwork{
 		ID:      id,
 		Network: network,
 	}, nil
@@ -3288,16 +3245,28 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/ipv4_networks", func(ctx context.Context, _ *struct{},
-		) (*ipv4NetworksOutput, error) {
+		huma.Get(api, "/v1/ip-networks", func(ctx context.Context, input *struct {
+			Family string `query:"family" example:"4" doc:"Network IP family to limit query to" enum:"4,6"` // is string instead of int to make enum work
+		},
+		) (*ipNetworksOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(authData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from ipv4 networks GET handler")
+				return nil, errors.New("unable to read auth data from networks GET handler")
 			}
 
-			networks, err := selectIPv4Networks(dbPool, ad)
+			family := 0
+
+			if input.Family != "" {
+				var err error
+				family, err = strconv.Atoi(input.Family)
+				if err != nil {
+					return nil, huma.Error422UnprocessableEntity("unable to parse family string to int")
+				}
+			}
+
+			networks, err := selectNetworks(dbPool, ad, family)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -3306,36 +3275,36 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				return nil, err
 			}
 
-			resp := &ipv4NetworksOutput{
+			resp := &ipNetworksOutput{
 				Body: networks,
 			}
 			return resp, nil
 		})
 
-		postIPv4NetworksPath := "/v1/ipv4_networks"
+		postNetworksPath := "/v1/ip-networks"
 		huma.Register(
 			api,
 			huma.Operation{
-				OperationID:   huma.GenerateOperationID(http.MethodPost, postIPv4NetworksPath, &ipv4NetworkOutput{}),
-				Summary:       huma.GenerateSummary(http.MethodPost, postIPv4NetworksPath, &ipv4NetworkOutput{}),
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postNetworksPath, &ipNetworkOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postNetworksPath, &ipNetworkOutput{}),
 				Method:        http.MethodPost,
-				Path:          postIPv4NetworksPath,
+				Path:          postNetworksPath,
 				DefaultStatus: http.StatusCreated,
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Network netip.Prefix `json:"network" doc:"A IPv4 network prefix"`
+					Network netip.Prefix `json:"network" doc:"A IPv4 or IPv6 network prefix"`
 				}
 			},
-			) (*ipv4NetworkOutput, error) {
+			) (*ipNetworkOutput, error) {
 				logger := zlog.Ctx(ctx)
 
 				ad, ok := ctx.Value(authDataKey{}).(authData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from IPv4 POST handler")
+					return nil, errors.New("unable to read auth data from networks POST handler")
 				}
 
-				ipv4Net, err := insertIPv4Network(dbPool, input.Body.Network, ad)
+				ipNet, err := insertNetwork(dbPool, input.Body.Network, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
@@ -3350,74 +3319,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					logger.Err(err).Msg("unable to add IPv4 network")
 					return nil, err
 				}
-				resp := &ipv4NetworkOutput{Body: ipv4Net}
-				return resp, nil
-			},
-		)
-
-		huma.Get(api, "/v1/ipv6_networks", func(ctx context.Context, _ *struct{},
-		) (*ipv6NetworksOutput, error) {
-			logger := zlog.Ctx(ctx)
-
-			ad, ok := ctx.Value(authDataKey{}).(authData)
-			if !ok {
-				return nil, errors.New("unable to read auth data from ipv6 networks GET handler")
-			}
-
-			networks, err := selectIPv6Networks(dbPool, ad)
-			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden(api403String)
-				}
-				logger.Err(err).Msg("unable to query ipv6 networks")
-				return nil, err
-			}
-
-			resp := &ipv6NetworksOutput{
-				Body: networks,
-			}
-			return resp, nil
-		})
-
-		postIPv6NetworksPath := "/v1/ipv6_networks"
-		huma.Register(
-			api,
-			huma.Operation{
-				OperationID:   huma.GenerateOperationID(http.MethodPost, postIPv6NetworksPath, &ipv6NetworkOutput{}),
-				Summary:       huma.GenerateSummary(http.MethodPost, postIPv6NetworksPath, &ipv6NetworkOutput{}),
-				Method:        http.MethodPost,
-				Path:          postIPv6NetworksPath,
-				DefaultStatus: http.StatusCreated,
-			},
-			func(ctx context.Context, input *struct {
-				Body struct {
-					Network netip.Prefix `json:"network" doc:"A IPv6 network prefix"`
-				}
-			},
-			) (*ipv6NetworkOutput, error) {
-				logger := zlog.Ctx(ctx)
-
-				ad, ok := ctx.Value(authDataKey{}).(authData)
-				if !ok {
-					return nil, errors.New("unable to read auth data from IPv6 POST handler")
-				}
-
-				ipv6Net, err := insertIPv6Network(dbPool, input.Body.Network, ad)
-				if err != nil {
-					switch {
-					case errors.Is(err, cdnerrors.ErrAlreadyExists):
-						return nil, huma.Error409Conflict("IPv6 network already exists")
-					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden("not allowed to create this IPv6 network")
-					case errors.Is(err, cdnerrors.ErrCheckViolation):
-						return nil, huma.Error400BadRequest("invalid data for IPv6 network")
-					case errors.Is(err, cdnerrors.ErrExclutionViolation):
-						return nil, huma.Error409Conflict("IPv6 network is already covered by existing networks")
-					}
-					logger.Err(err).Str("network", input.Body.Network.String()).Msg("unable to add IPv6 network")
-					return nil, err
-				}
-				resp := &ipv6NetworkOutput{Body: ipv6Net}
+				resp := &ipNetworkOutput{Body: ipNet}
 				return resp, nil
 			},
 		)
@@ -3514,30 +3416,17 @@ type selectVcl struct {
 	VclRecvContent string      `json:"vcl_recv_content" doc:"The vcl_recv content for the service"`
 }
 
-type ipv4Network struct {
-	ID      pgtype.UUID  `json:"id" doc:"ID of IPv4 network, UUIDv4"`
-	Network netip.Prefix `json:"network" example:"198.51.100.0/24" doc:"a IPv4 network"`
+type ipNetwork struct {
+	ID      pgtype.UUID  `json:"id" doc:"ID of IPv4 or IPv6 network, UUIDv4"`
+	Network netip.Prefix `json:"network" example:"198.51.100.0/24" doc:"a IPv4 or IPv6 network"`
 }
 
-type ipv4NetworksOutput struct {
-	Body []ipv4Network
+type ipNetworksOutput struct {
+	Body []ipNetwork
 }
 
-type ipv4NetworkOutput struct {
-	Body ipv4Network
-}
-
-type ipv6Network struct {
-	ID      pgtype.UUID  `json:"id" doc:"ID of IPv6 network, UUIDv4"`
-	Network netip.Prefix `json:"network" example:"2001:db8::/32" doc:"a IPv6 network"`
-}
-
-type ipv6NetworksOutput struct {
-	Body []ipv6Network
-}
-
-type ipv6NetworkOutput struct {
-	Body ipv6Network
+type ipNetworkOutput struct {
+	Body ipNetwork
 }
 
 type completeVcl struct {
