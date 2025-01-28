@@ -94,7 +94,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	validatedRedirect(consolePath, w, r)
 }
 
-func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -109,7 +109,7 @@ func consoleHomeHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 
 		ad := adRef.(authData)
 
-		err := renderConsolePage(w, r, ad, "SUNET CDN manager", components.Home(ad.Username))
+		err := renderConsolePage(w, r, ad, "SUNET CDN manager", components.Dashboard(ad.Username))
 		if err != nil {
 			logger.Err(err).Msg("unable to render console home page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2671,7 +2671,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Group(func(r chi.Router) {
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get(consolePath, consoleHomeHandler(cookieStore))
+		r.Get(consolePath, consoleDashboardHandler(cookieStore))
 		r.Get(consolePath+"/services", consoleServicesHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/services/{service}", consoleServiceHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))

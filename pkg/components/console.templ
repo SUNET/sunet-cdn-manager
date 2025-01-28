@@ -27,7 +27,7 @@ templ headerComponent(title string) {
 	<head><title>{ title }</title></head>
 }
 
-templ Home(username string) {
+templ Dashboard(username string) {
 	<div>Hello { username }!</div>
 }
 
@@ -58,7 +58,7 @@ templ NavBar() {
 	<div>
 		<nav>
 			<ul>
-				<li><a href={ templ.URL("/console") }>Home</a></li>
+				<li><a href={ templ.URL("/console") }>Dashboard</a></li>
 				<li><a href={ templ.URL("/console/services") }>Services</a></li>
 			</ul>
 		</nav>
