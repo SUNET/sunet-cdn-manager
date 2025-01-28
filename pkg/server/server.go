@@ -1771,25 +1771,22 @@ func selectService(dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID str
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
-		var orgIdent orgIdentifier
 		var err error
+
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
+			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			orgID = orgIdent.id
+		}
+
 		// Looking up a service by ID works without supplying an org,
 		// for looking up service by name an org must be included
-		if orgNameOrID == "" {
-			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, pgtype.UUID{})
-			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-		} else {
-			orgIdent, err = newOrgIdentifier(tx, orgNameOrID)
-			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-
-			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
-			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
+		serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
 		}
 
 		// Normal users are only allowed to see services belonging to the same org as they are
@@ -2043,21 +2040,21 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad authData, serviceNameOrID st
 	serviceVersions := []types.ServiceVersion{}
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
-		if orgNameOrID == "" {
-			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, pgtype.UUID{})
-			if err != nil {
-				return fmt.Errorf("looking up service identifier failed: %w", err)
-			}
-		} else {
+
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
 			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
 			if err != nil {
-				return fmt.Errorf("looking up org identifier failed: %w", err)
+				return cdnerrors.ErrUnableToParseNameOrID
 			}
+			orgID = orgIdent.id
+		}
 
-			serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
-			if err != nil {
-				return fmt.Errorf("looking up service identifier failed: %w", err)
-			}
+		// Looking up a service by ID works without supplying an org,
+		// for looking up service by name an org must be included
+		serviceIdent, err = newServiceIdentifier(tx, serviceNameOrID, orgID)
+		if err != nil {
+			return fmt.Errorf("looking up service identifier failed: %w", err)
 		}
 
 		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
