@@ -43,6 +43,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	zlog "github.com/rs/zerolog/log"
+	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
 )
@@ -1966,6 +1967,116 @@ func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
 	}, nil
 }
 
+type serviceIPAddr struct {
+	networkID pgtype.UUID
+	Address   netip.Addr
+}
+
+func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, requestedV6 int) ([]serviceIPAddr, error) {
+	if requestedV4 == 0 && requestedV6 == 0 {
+		return nil, errors.New("must allocate at least one address")
+	}
+
+	// Get available networks, order by network, FOR UPDATE to lock out
+	// any concurrently runnnig allocateServiceIPs() from allocating addresses at
+	// the same time.
+	rows, err := tx.Query(context.Background(), "SELECT id, network FROM ip_networks ORDER BY network FOR UPDATE")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for networks: %w", err)
+	}
+
+	ipNetworks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipNetwork])
+	if err != nil {
+		return nil, fmt.Errorf("unable to collect rows for networks: %w", err)
+	}
+
+	// Collect all currently used addresses, FOR SHARE since we probably
+	// dont want anyone changing these during allocation as well.
+	rows, err = tx.Query(context.Background(), "SELECT address FROM service_ip_addresses ORDER BY address FOR SHARE")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for service addresses: %w", err)
+	}
+
+	usedAddrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[serviceIPAddr])
+	if err != nil {
+		return nil, fmt.Errorf("unable to collect rows for addresses: %w", err)
+	}
+
+	var usedAddrBuilder netipx.IPSetBuilder
+
+	for _, used := range usedAddrs {
+		usedAddrBuilder.Add(used.Address)
+	}
+
+	usedAddrSet, err := usedAddrBuilder.IPSet()
+	if err != nil {
+		log.Fatalf("failed creating IPset of used addresses")
+	}
+
+	allocatedV4 := []serviceIPAddr{}
+	allocatedV6 := []serviceIPAddr{}
+
+	for _, ipNet := range ipNetworks {
+		r := netipx.RangeOfPrefix(ipNet.Network)
+		if !r.IsValid() {
+			return nil, errors.New("range is not valid")
+		}
+
+		// Iterate over all addresses of the network, skipping network
+		// and broadcast address.
+		if ipNet.Network.Addr().Is4() && len(allocatedV4) < requestedV4 {
+			for a := r.From().Next(); a.Less(r.To()); a = a.Next() {
+				if !usedAddrSet.Contains(a) {
+					allocatedV4 = append(allocatedV4, serviceIPAddr{networkID: ipNet.ID, Address: a})
+				}
+
+				if len(allocatedV4) == requestedV4 {
+					break
+				}
+			}
+		}
+
+		if ipNet.Network.Addr().Is6() && len(allocatedV6) < requestedV6 {
+			for a := r.From().Next(); a.Less(r.To()); a = a.Next() {
+				if !usedAddrSet.Contains(a) {
+					allocatedV6 = append(allocatedV6, serviceIPAddr{networkID: ipNet.ID, Address: a})
+				}
+
+				if len(allocatedV6) == requestedV6 {
+					break
+				}
+			}
+		}
+
+		if len(allocatedV4) == requestedV4 && len(allocatedV6) == requestedV6 {
+			break
+		}
+	}
+
+	if len(allocatedV4) != requestedV4 {
+		return nil, fmt.Errorf("unable to allocated requested number of IPv4 addresses (%d)", requestedV4)
+	}
+
+	if len(allocatedV6) != requestedV6 {
+		return nil, fmt.Errorf("unable to allocated requested number of IPv6 addresses (%d)", requestedV6)
+	}
+
+	allocatedIPs := []serviceIPAddr{}
+
+	allocatedIPs = append(allocatedIPs, allocatedV4...)
+	allocatedIPs = append(allocatedIPs, allocatedV6...)
+
+	for _, allocIP := range allocatedIPs {
+		var serviceIPID pgtype.UUID
+		err = tx.QueryRow(context.Background(), "INSERT INTO service_ip_addresses (service_id, network_id, address) VALUES ($1, $2, $3) returning id", serviceID, allocIP.networkID, allocIP.Address).Scan(&serviceIPID)
+		if err != nil {
+			return nil, fmt.Errorf("unable to insert ip %s into service_ip_addresses: %w", allocIP.Address, err)
+		}
+	}
+
+	return allocatedIPs, nil
+}
+
 func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
@@ -2014,7 +2125,13 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 
 		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, orgIdent.id).Scan(&serviceID)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT service for superuser with organizaiton id: %w", err)
+			return fmt.Errorf("unable to INSERT service: %w", err)
+		}
+
+		// Allocate 1 IPv4 and 1 IPv6 address for the service
+		_, err := allocateServiceIPs(tx, serviceID, 1, 1)
+		if err != nil {
+			return fmt.Errorf("unable to allocate service IPs: %w", err)
 		}
 
 		return nil
