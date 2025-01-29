@@ -62,6 +62,9 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1' FROM orgs WHERE name='org1'",
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2' FROM orgs WHERE name='org1'",
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000010', id, 'org1-service4' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000011', id, 'org1-service5' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000012', id, 'org1-service6' FROM orgs WHERE name='org1'",
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1' FROM orgs WHERE name='org2'",
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2' FROM orgs WHERE name='org2'",
 		"INSERT INTO services (id, org_id, name) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3' FROM orgs WHERE name='org2'",
@@ -1739,6 +1742,135 @@ func TestGetService(t *testing.T) {
 		}
 
 		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestDeleteService(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description     string
+		username        string
+		password        string
+		serviceNameOrID string
+		orgNameOrID     string
+		expectedStatus  int
+	}{
+		{
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusNoContent,
+		},
+		{
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service2",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNoContent,
+		},
+		{
+			description:     "successful superuser request with name and org by id",
+			username:        "admin",
+			password:        "adminpass1",
+			serviceNameOrID: "org1-service3",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			expectedStatus:  http.StatusNoContent,
+		},
+		{
+			description:     "successful user request with ID",
+			username:        "username1",
+			password:        "password1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
+			expectedStatus:  http.StatusNoContent,
+		},
+		{
+			description:     "successful user request with name",
+			username:        "username1",
+			password:        "password1",
+			serviceNameOrID: "org1-service5",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNoContent,
+		},
+		{
+			description:     "failed user request for service belonging to other org with ID",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000012",
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "failed user request for service belonging to other org with name",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "org1-service6",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "failed user request not assigned to org with ID",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000012",
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "failed user request not assigned to org with name",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "org1-service6",
+			orgNameOrID:     "org1",
+			expectedStatus:  http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		if test.serviceNameOrID == "" {
+			t.Fatal("user needs service name or ID for service test")
+		}
+
+		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

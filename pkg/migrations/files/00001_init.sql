@@ -28,7 +28,7 @@ CREATE TABLE service_ip_addresses (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     network_id uuid NOT NULL REFERENCES ip_networks(id),
-    service_id uuid REFERENCES services(id),
+    service_id uuid REFERENCES services(id) ON DELETE CASCADE,
     address inet UNIQUE NOT NULL CONSTRAINT valid_address CHECK((family(address) = 4 AND masklen(address) = 32) OR (family(address) = 6 AND masklen(address) = 128))
 );
 
@@ -121,7 +121,7 @@ CREATE TABLE user_argon2keys (
 CREATE TABLE service_versions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    service_id uuid NOT NULL REFERENCES services(id),
+    service_id uuid NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     version bigint NOT NULL,
     active boolean DEFAULT false NOT NULL,
     UNIQUE(service_id, version)
@@ -132,7 +132,7 @@ CREATE UNIQUE INDEX service_versions_active_only_1_true ON service_versions (ser
 CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    service_version_id uuid NOT NULL REFERENCES service_versions(id),
+    service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
     domain text NOT NULL CONSTRAINT non_empty CHECK(length(domain)>=1 AND length(domain)<=253),
     UNIQUE(service_version_id, domain)
 );
@@ -140,7 +140,7 @@ CREATE TABLE service_domains (
 CREATE TABLE service_origins (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    service_version_id uuid NOT NULL REFERENCES service_versions(id),
+    service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
     host text NOT NULL CONSTRAINT non_empty CHECK(length(host)>=1 AND length(host)<=253),
     port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
@@ -150,7 +150,7 @@ CREATE TABLE service_origins (
 CREATE TABLE service_vcl_recv (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    service_version_id uuid NOT NULL REFERENCES service_versions(id),
+    service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
     content text NOT NULL CONSTRAINT non_empty CHECK(length(content)>0),
     UNIQUE(service_version_id, content)
 );

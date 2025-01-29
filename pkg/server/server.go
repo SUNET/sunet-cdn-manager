@@ -2150,6 +2150,50 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 	return serviceID, nil
 }
 
+func deleteService(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad authData) (pgtype.UUID, error) {
+	if !ad.Superuser && ad.OrgID == nil {
+		return pgtype.UUID{}, cdnerrors.ErrNotFound
+	}
+
+	var serviceID pgtype.UUID
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
+			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				logger.Err(err).Msg("unable to look up org identifier")
+				return cdnerrors.ErrUnprocessable
+			}
+			orgID = orgIdent.id
+		}
+
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgID)
+		if err != nil {
+			logger.Err(err).Msg("unable to look up service identifier")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// A normal user can only delete a service belonging to the
+		// same org they are a member of
+		if !ad.Superuser && *ad.OrgID != serviceIdent.orgID {
+			return cdnerrors.ErrNotFound
+		}
+
+		err = tx.QueryRow(context.Background(), "DELETE FROM services WHERE id = $1 RETURNING id", serviceIdent.id).Scan(&serviceID)
+		if err != nil {
+			return fmt.Errorf("unable to DELETE service: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("deleteService transaction failed")
+		return pgtype.UUID{}, fmt.Errorf("deleteService transaction failed: %w", err)
+	}
+
+	return serviceID, nil
+}
+
 func selectServiceVersions(dbPool *pgxpool.Pool, ad authData, serviceNameOrID string, orgNameOrID string) ([]types.ServiceVersion, error) {
 	var rows pgx.Rows
 
@@ -3208,6 +3252,32 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				Body: services,
 			}
 			return resp, nil
+		})
+
+		huma.Delete(api, "/v1/services/{service}", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"my-org" doc:"Organization ID or name, required if service is supplied by name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service GET handler")
+			}
+
+			_, err := deleteService(logger, dbPool, input.Org, input.Service, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("service not found")
+				} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("access to this service is not allowed")
+				}
+				logger.Err(err).Msg("unable to delete service")
+				return nil, err
+			}
+
+			return nil, nil
 		})
 
 		postServicesPath := "/v1/services"
