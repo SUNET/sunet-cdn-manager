@@ -466,6 +466,13 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
+		serviceName := chi.URLParam(r, "service")
+		if serviceName == "" {
+			logger.Error().Msg("console: missing service path in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
 		versionStr := chi.URLParam(r, "version")
 		if versionStr == "" {
 			logger.Error().Msg("console: missing version path in URL")
@@ -483,13 +490,6 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
 			logger.Error().Msg("console: missing org parameter in URL")
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
-		}
-
-		serviceName := r.URL.Query().Get("service")
-		if serviceName == "" {
-			logger.Error().Msg("console: missing service parameter in URL")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -2820,13 +2820,13 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get(consolePath, consoleDashboardHandler(cookieStore))
 		r.Get(consolePath+"/services", consoleServicesHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/services/{service}", consoleServiceHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/create-service", consoleCreateServiceHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
+		r.Post(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/create-service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/activate-service-version/{version}", consoleActivateServiceVersionHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/activate-service-version/{version}", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
+		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Post(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes

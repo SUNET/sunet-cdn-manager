@@ -76,7 +76,7 @@ templ ServicesContent(services []types.Service) {
 			}
 		</ul>
 	}
-	<a href={ templ.URL("/console/create-service") }>Create service</a>
+	<a href={ templ.URL("/console/create/service") }>Create service</a>
 }
 
 templ ServiceContent(orgName string, serviceName string, serviceVersions []types.ServiceVersion) {
@@ -98,17 +98,17 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 						{ strconv.FormatBool(sv.Active) }
 					</td>
 					<td>
-						<a href={ templ.URL(fmt.Sprintf("/console/activate-service-version/%d?org=%s&service=%s", sv.Version, sv.OrgName, sv.ServiceName)) }>Activate version</a>
+						<a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName)) }>Activate version</a>
 					</td>
 				</tr>
 			}
 		</table>
 	}
-	<a href={ templ.URL(fmt.Sprintf("/console/create-service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
+	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 }
 
 templ CreateServiceContent(err error) {
-	<form method="post" action={ templ.URL("/console/create-service") }>
+	<form method="post" action={ templ.URL("/console/create/service") }>
 		@CSRF()
 		<label for="name">Name:</label>
 		<input type="text" id="name" name="name"/>
@@ -164,7 +164,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
 }
 
 templ CreateServiceVersionContent(serviceName string, orgName string, err error) {
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create-service-version/%s?org=%s", serviceName, orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
 		<label for="domains">Domains:</label>
 		<input type="text" id="domains" name="domains"/>
@@ -191,7 +191,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, err error)
 
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/activate-service-version/%d?org=%s&service=%s", version, orgName, serviceName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", serviceName, version, orgName)) }>
 		@CSRF()
 		<label for="confirmation">Confirmation:</label>
 		<input type="checkbox" id="confirmation" name="confirmation"/>
