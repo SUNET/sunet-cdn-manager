@@ -150,7 +150,6 @@ CREATE TABLE service_origins (
 CREATE TABLE service_vcl_recv (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
-    content text NOT NULL CONSTRAINT non_empty CHECK(length(content)>0),
-    UNIQUE(service_version_id, content)
+    service_version_id uuid UNIQUE NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
+    content text NOT NULL CONSTRAINT non_empty CHECK(length(content)>0)
 );
