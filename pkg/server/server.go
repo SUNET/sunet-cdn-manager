@@ -437,7 +437,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				})
 			}
 
-			_, err = insertServiceVersion(logger, ad, dbPool, orgName, serviceName, formData.Domains, origins, false, formData.VclRecv)
+			_, err = insertServiceVersion(logger, ad, dbPool, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
@@ -619,10 +619,10 @@ type createServiceForm struct {
 }
 
 type createServiceVersionForm struct {
+	VclSteps
 	Domains   []domainString `schema:"domains" validate:"dive,min=1,max=63"`
 	Origins   []string       `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
 	OriginTLS []bool         `schema:"origins-tls" validate:"eqfield=Origins"`
-	VclRecv   string         `schema:"vcl_recv" validate:"min=1,max=63"`
 }
 
 type activateServiceVersionForm struct {
@@ -2299,7 +2299,18 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 				service_versions.id,
 				service_versions.version,
 				service_versions.active,
-				service_vcl_recv.content AS vcl_recv_content,
+				service_vcls.vcl_recv,
+				service_vcls.vcl_pipe,
+				service_vcls.vcl_pass,
+				service_vcls.vcl_hash,
+				service_vcls.vcl_purge,
+				service_vcls.vcl_miss,
+				service_vcls.vcl_hit,
+				service_vcls.vcl_deliver,
+				service_vcls.vcl_synth,
+				service_vcls.vcl_backend_fetch,
+				service_vcls.vcl_backend_response,
+				service_vcls.vcl_backend_error,
 				(SELECT
 					array_agg(domain ORDER BY domain)
 					FROM service_domains
@@ -2314,7 +2325,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 				orgs
 				JOIN services ON orgs.id = services.org_id
 				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
 			WHERE services.id=$1 AND service_versions.version=$2`,
 			serviceIdent.id,
 			version,
@@ -2344,7 +2355,7 @@ type serviceVersionInsertResult struct {
 	domainIDs     []pgtype.UUID
 	originIDs     []pgtype.UUID
 	deactivatedID *pgtype.UUID
-	vclRecvID     pgtype.UUID
+	vclID         pgtype.UUID
 }
 
 func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier) (*pgtype.UUID, error) {
@@ -2377,7 +2388,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vcls VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -2442,15 +2453,54 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 		serviceOriginIDs = append(serviceOriginIDs, serviceOriginID)
 	}
 
-	var serviceVclRecvID pgtype.UUID
+	var serviceVclID pgtype.UUID
 	err = tx.QueryRow(
 		context.Background(),
-		"INSERT INTO service_vcl_recv (service_version_id, content) VALUES ($1, $2) RETURNING id",
+		`INSERT INTO service_vcls (
+			service_version_id,
+			vcl_recv,
+			vcl_pipe,
+			vcl_pass,
+			vcl_hash,
+			vcl_purge,
+			vcl_miss,
+			vcl_hit,
+			vcl_deliver,
+			vcl_synth,
+			vcl_backend_fetch,
+			vcl_backend_response,
+			vcl_backend_error
+		) VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			$10,
+			$11,
+			$12,
+			$13
+		) RETURNING id`,
 		serviceVersionID,
-		vclRecv,
-	).Scan(&serviceVclRecvID)
+		vcls.VclRecv,
+		vcls.VclPipe,
+		vcls.VclPass,
+		vcls.VclHash,
+		vcls.VclPurge,
+		vcls.VclMiss,
+		vcls.VclHit,
+		vcls.VclDeliver,
+		vcls.VclSynth,
+		vcls.VclBackendFetch,
+		vcls.VclBackendResponse,
+		vcls.VclBackendError,
+	).Scan(&serviceVclID)
 	if err != nil {
-		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service vcl recv: %w", err)
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service vcl: %w", err)
 	}
 
 	res := serviceVersionInsertResult{
@@ -2459,14 +2509,14 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 		domainIDs:     serviceDomainIDs,
 		originIDs:     serviceOriginIDs,
 		deactivatedID: deactivatedServiceVersionID,
-		vclRecvID:     serviceVclRecvID,
+		vclID:         serviceVclID,
 		active:        active,
 	}
 
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vclRecv string) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vcls VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2498,7 +2548,7 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, serviceIdent, domains, origins, active, vclRecv)
+		serviceVersionResult, err = insertServiceVersionTx(tx, serviceIdent, domains, origins, active, vcls)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -2574,6 +2624,59 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 	return activatedServiceVersionID, nil
 }
 
+func writeVclRecv(b *strings.Builder, domains []string, vclRecv *string) error {
+	b.WriteString("sub vcl_recv {\n")
+	if len(domains) > 0 {
+		b.WriteString("  if ")
+		for i, domain := range domains {
+			if i > 0 {
+				b.WriteString(" && ")
+			}
+			b.WriteString(fmt.Sprintf("req.http.host != \"%s\"", domain))
+		}
+		b.WriteString(" {\n")
+		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
+		b.WriteString("  }\n")
+	}
+
+	if vclRecv != nil {
+		b.WriteString("  # vcl_recv content from database\n")
+		scanner := bufio.NewScanner(strings.NewReader(*vclRecv))
+		for scanner.Scan() {
+			if scanner.Text() != "" {
+				b.WriteString("  " + scanner.Text() + "\n")
+			} else {
+				b.WriteString("\n")
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("scanning vcl_recv failed: %w", err)
+		}
+	}
+	b.WriteString("}\n")
+	return nil
+}
+
+func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) error {
+	if vclContent != nil {
+		b.WriteString(fmt.Sprintf("sub %s {\n", subName))
+		b.WriteString(fmt.Sprintf("  # %s content from database\n", subName))
+		scanner := bufio.NewScanner(strings.NewReader(*vclContent))
+		for scanner.Scan() {
+			if scanner.Text() != "" {
+				b.WriteString("  " + scanner.Text() + "\n")
+			} else {
+				b.WriteString("\n")
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("scanning %s failed: %w", subName, err)
+		}
+		b.WriteString("}\n")
+	}
+	return nil
+}
+
 func generateCompleteVcl(sv selectVcl) (string, error) {
 	var b strings.Builder
 
@@ -2604,35 +2707,54 @@ func generateCompleteVcl(sv selectVcl) (string, error) {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("sub vcl_recv {\n")
-	if len(sv.Domains) > 0 {
-		b.WriteString("  if ")
-		for i, domain := range sv.Domains {
-			if i > 0 {
-				b.WriteString(" && ")
-			}
-			b.WriteString(fmt.Sprintf("req.http.host != \"%s\"", domain))
-		}
-		b.WriteString(" {\n")
-		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
-		b.WriteString("  }\n")
+	err := writeVclRecv(&b, sv.Domains, sv.VclRecv)
+	if err != nil {
+		return "", err
 	}
-
-	if sv.VclRecvContent != "" {
-		b.WriteString("  # vcl_recv content from database\n")
-		scanner := bufio.NewScanner(strings.NewReader(sv.VclRecvContent))
-		for scanner.Scan() {
-			if scanner.Text() != "" {
-				b.WriteString("  " + scanner.Text() + "\n")
-			} else {
-				b.WriteString("\n")
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return "", fmt.Errorf("scanning VclRecvContent failed: %w", err)
-		}
+	err = writeGenericVclSub(&b, "vcl_pipe", sv.VclPipe)
+	if err != nil {
+		return "", err
 	}
-	b.WriteString("}\n")
+	err = writeGenericVclSub(&b, "vcl_pass", sv.VclPass)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_hash", sv.VclHash)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_purge", sv.VclPurge)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_miss", sv.VclMiss)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_hit", sv.VclHit)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_deliver", sv.VclDeliver)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_synth", sv.VclSynth)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_fetch", sv.VclBackendFetch)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_response", sv.VclBackendResponse)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_error", sv.VclBackendError)
+	if err != nil {
+		return "", err
+	}
 
 	return b.String(), nil
 }
@@ -2651,14 +2773,25 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 				services.id AS service_id,
 				service_versions.version,
 				service_versions.active,
-				service_vcl_recv.content AS vcl_recv_content,
+				service_vcls.vcl_recv,
+				service_vcls.vcl_pipe,
+				service_vcls.vcl_pass,
+				service_vcls.vcl_hash,
+				service_vcls.vcl_purge,
+				service_vcls.vcl_miss,
+				service_vcls.vcl_hit,
+				service_vcls.vcl_deliver,
+				service_vcls.vcl_synth,
+				service_vcls.vcl_backend_fetch,
+				service_vcls.vcl_backend_response,
+				service_vcls.vcl_backend_error,
 				agg_domains.domains,
 				agg_origins.origins
 			FROM
 				orgs
 				JOIN services ON orgs.id = services.org_id
 				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
 				JOIN (
 					SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
 					FROM service_domains
@@ -2682,7 +2815,18 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 				services.id AS service_id,
 				service_versions.version,
 				service_versions.active,
-				service_vcl_recv.content AS vcl_recv_content,
+				service_vcls.vcl_recv,
+				service_vcls.vcl_pipe,
+				service_vcls.vcl_pass,
+				service_vcls.vcl_hash,
+				service_vcls.vcl_purge,
+				service_vcls.vcl_miss,
+				service_vcls.vcl_hit,
+				service_vcls.vcl_deliver,
+				service_vcls.vcl_synth,
+				service_vcls.vcl_backend_fetch,
+				service_vcls.vcl_backend_response,
+				service_vcls.vcl_backend_error,
 				(SELECT
 					array_agg(domain ORDER BY domain)
 					FROM service_domains
@@ -2697,7 +2841,7 @@ func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
 				orgs
 				JOIN services ON orgs.id = services.org_id
 				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcl_recv ON service_versions.id = service_vcl_recv.service_version_id
+				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
 			WHERE orgs.id=$1
 			ORDER BY orgs.name`,
 			*ad.OrgID,
@@ -2930,6 +3074,24 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 
 		next(ctx)
 	}
+}
+
+// The "Client" and "Backend" steps from
+// https://varnish-cache.org/docs/trunk/reference/vcl-step.html
+// Fields are pointers to strings since they can all potentially be NULL in the database.
+type VclSteps struct {
+	VclRecv            *string `json:"vcl_recv,omitempty" doc:"The vcl_recv content" schema:"vcl_recv" validate:"min=1,max=63"`
+	VclPipe            *string `json:"vcl_pipe,omitempty" doc:"The vcl_pipe content" schema:"vcl_pipe" validate:"min=1,max=63"`
+	VclPass            *string `json:"vcl_pass,omitempty" doc:"The vcl_pass content" schema:"vcl_pass" validate:"min=1,max=63"`
+	VclHash            *string `json:"vcl_hash,omitempty" doc:"The vcl_hash content" schema:"vcl_hash" validate:"min=1,max=63"`
+	VclPurge           *string `json:"vcl_purge,omitempty" doc:"The vcl_purge content" schema:"vcl_purge" validate:"min=1,max=63"`
+	VclMiss            *string `json:"vcl_miss,omitempty" doc:"The vcl_miss content" schema:"vcl_miss" validate:"min=1,max=63"`
+	VclHit             *string `json:"vcl_hit,omitempty" doc:"The vcl_hit content" schema:"vcl_hit" validate:"min=1,max=63"`
+	VclDeliver         *string `json:"vcl_deliver,omitempty" doc:"The vcl_deliver content" schema:"vcl_deliver" validate:"min=1,max=63"`
+	VclSynth           *string `json:"vcl_synth,omitempty" doc:"The vcl_synth content" schema:"vcl_synth" validate:"min=1,max=63"`
+	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"min=1,max=63"`
+	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"min=1,max=63"`
+	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"min=1,max=63"`
 }
 
 func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
@@ -3369,11 +3531,11 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			func(ctx context.Context, input *struct {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
+					VclSteps
 					Org     string         `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 					Active  bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
-					VclRecv string         `json:"vcl_recv" doc:"The VCL recv content"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -3384,7 +3546,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclRecv)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -3626,13 +3788,13 @@ type origin struct {
 }
 
 type selectVcl struct {
-	OrgID          pgtype.UUID `json:"org_id" doc:"ID of organization"`
-	ServiceID      pgtype.UUID `json:"service_id" doc:"ID of service"`
-	Active         bool        `json:"active" example:"true" doc:"If the VCL is active"`
-	Version        int64       `json:"version" example:"1" doc:"Version of the service"`
-	Domains        []string    `json:"domains" doc:"The domains used by the VCL"`
-	Origins        []origin    `json:"origins" doc:"The origins used by the VCL"`
-	VclRecvContent string      `json:"vcl_recv_content" doc:"The vcl_recv content for the service"`
+	VclSteps
+	OrgID     pgtype.UUID `json:"org_id" doc:"ID of organization"`
+	ServiceID pgtype.UUID `json:"service_id" doc:"ID of service"`
+	Active    bool        `json:"active" example:"true" doc:"If the VCL is active"`
+	Version   int64       `json:"version" example:"1" doc:"Version of the service"`
+	Domains   []string    `json:"domains" doc:"The domains used by the VCL"`
+	Origins   []origin    `json:"origins" doc:"The origins used by the VCL"`
 }
 
 type ipNetwork struct {

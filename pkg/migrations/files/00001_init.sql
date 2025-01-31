@@ -147,9 +147,22 @@ CREATE TABLE service_origins (
     UNIQUE(service_version_id, host, port)
 );
 
-CREATE TABLE service_vcl_recv (
+-- The available service_vcl_* columns are based on steps for "Client side" and "Backend Side":
+-- https://varnish-cache.org/docs/trunk/reference/vcl-step.html
+CREATE TABLE service_vcls (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid UNIQUE NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
-    content text NOT NULL CONSTRAINT non_empty CHECK(length(content)>0)
+    vcl_recv text CONSTRAINT vcl_recv_non_empty_if_not_null CHECK(length(vcl_recv)>0),
+    vcl_pipe text CONSTRAINT vcl_pipe_non_empty_if_not_null CHECK(length(vcl_pipe)>0),
+    vcl_pass text CONSTRAINT vcl_pass_non_empty_if_not_null CHECK(length(vcl_pass)>0),
+    vcl_hash text CONSTRAINT vcl_hash_non_empty_if_not_null CHECK(length(vcl_hash)>0),
+    vcl_purge text CONSTRAINT vcl_purge_non_empty_if_not_null CHECK(length(vcl_purge)>0),
+    vcl_miss text CONSTRAINT vcl_miss_non_empty_if_not_null CHECK(length(vcl_miss)>0),
+    vcl_hit text CONSTRAINT vcl_hit_non_empty_if_not_null CHECK(length(vcl_hit)>0),
+    vcl_deliver text CONSTRAINT vcl_deliver_non_empty_if_not_null CHECK(length(vcl_deliver)>0),
+    vcl_synth text CONSTRAINT vcl_synth_non_empty_if_not_null CHECK(length(vcl_synth)>0),
+    vcl_backend_fetch text CONSTRAINT vcl_backend_fetch_non_empty_if_not_null CHECK(length(vcl_backend_fetch)>0),
+    vcl_backend_response text CONSTRAINT vcl_backend_response_non_empty_if_not_null CHECK(length(vcl_backend_response)>0),
+    vcl_backend_error text CONSTRAINT vcl_backend_error_non_empty_if_not_null CHECK(length(vcl_backend_error)>0)
 );

@@ -259,36 +259,39 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 		}
 
-		vclRcvs := []struct {
+		vcls := []struct {
 			id               string
-			file             string
+			vclRecvFile      string
 			serviceVersionID string
 		}{
 			{
 				id:               "00000007-0000-0000-0000-000000000001",
 				serviceVersionID: "00000004-0000-0000-0000-000000000003",
-				file:             "testdata/vcl/vcl_recv/content1.vcl",
+				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
 			},
 		}
 
-		for _, vclRcv := range vclRcvs {
+		for _, vcl := range vcls {
 			var vclID, serviceVersionID pgtype.UUID
-			err := vclID.Scan(vclRcv.id)
+			err := vclID.Scan(vcl.id)
 			if err != nil {
 				return err
 			}
 
-			err = serviceVersionID.Scan(vclRcv.serviceVersionID)
+			err = serviceVersionID.Scan(vcl.serviceVersionID)
 			if err != nil {
 				return err
 			}
 
-			contentBytes, err := os.ReadFile(vclRcv.file)
-			if err != nil {
-				return err
+			var vclRecvContentBytes []byte
+			if vcl.vclRecvFile != "" {
+				vclRecvContentBytes, err = os.ReadFile(vcl.vclRecvFile)
+				if err != nil {
+					return err
+				}
 			}
 
-			_, err = tx.Exec(context.Background(), "INSERT INTO service_vcl_recv (id, service_version_id, content) VALUES($1, $2, $3)", vclID, serviceVersionID, contentBytes)
+			_, err = tx.Exec(context.Background(), "INSERT INTO service_vcls (id, service_version_id, vcl_recv) VALUES($1, $2, $3)", vclID, serviceVersionID, vclRecvContentBytes)
 			if err != nil {
 				return err
 			}
