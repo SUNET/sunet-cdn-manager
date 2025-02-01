@@ -17,10 +17,12 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
@@ -347,6 +349,23 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 	}
 }
 
+// Used to turn e.g. "VclRecv" into "vcl_recv"
+func camelCaseToSnakeCase(s string) string {
+	var b strings.Builder
+	for i, c := range s {
+		if unicode.IsUpper(c) {
+			if i > 0 {
+				b.WriteString("_")
+			}
+			b.WriteRune(unicode.ToLower(c))
+		} else {
+			b.WriteRune(c)
+		}
+	}
+
+	return b.String()
+}
+
 func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -378,9 +397,18 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		ad := adRef.(authData)
 
+		// Dynamically look up the names of VCL steps we know about
+		// based on struct fields.
+		vclStepNames := []string{}
+		vclStepNamesMap := map[string]struct{}{}
+		for _, field := range reflect.VisibleFields(reflect.TypeOf(types.VclSteps{})) {
+			vclStepNames = append(vclStepNames, camelCaseToSnakeCase(field.Name))
+			vclStepNamesMap[field.Name] = struct{}{}
+		}
+
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclStepNames, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -403,10 +431,32 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
+			// Deal with the fact that submitting an empty
+			// text field from an HTML form will cause
+			// schemaDecoder to set a *string field to a pointer to
+			// an empty string instead of leaving the pointer nil.
+			// We do not allow empty strings for VCL columns in the
+			// database (they should be NULL) so reset any Vcl
+			// string pointer fields back to nil if they are
+			// pointing to empty strings.
+			// https://github.com/gorilla/schema/issues/161
+			val := reflect.ValueOf(&formData)
+			structVal := val.Elem()
+			for _, field := range reflect.VisibleFields(structVal.Type()) {
+				if _, ok := vclStepNamesMap[field.Name]; ok {
+					fieldVal := structVal.FieldByIndex(field.Index)
+					if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
+						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
+							fieldVal.Set(reflect.Zero(field.Type))
+						}
+					}
+				}
+			}
+
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclStepNames, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -619,7 +669,7 @@ type createServiceForm struct {
 }
 
 type createServiceVersionForm struct {
-	VclSteps
+	types.VclSteps
 	Domains   []domainString `schema:"domains" validate:"dive,min=1,max=63"`
 	Origins   []string       `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
 	OriginTLS []bool         `schema:"origins-tls" validate:"eqfield=Origins"`
@@ -2054,11 +2104,11 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	}
 
 	if len(allocatedV4) != requestedV4 {
-		return nil, fmt.Errorf("unable to allocated requested number of IPv4 addresses (%d)", requestedV4)
+		return nil, fmt.Errorf("unable to allocate requested number of IPv4 addresses (%d)", requestedV4)
 	}
 
 	if len(allocatedV6) != requestedV6 {
-		return nil, fmt.Errorf("unable to allocated requested number of IPv6 addresses (%d)", requestedV6)
+		return nil, fmt.Errorf("unable to allocate requested number of IPv6 addresses (%d)", requestedV6)
 	}
 
 	allocatedIPs := []serviceIPAddr{}
@@ -2388,7 +2438,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vcls VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -2516,7 +2566,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vcls VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -3076,24 +3126,6 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-// The "Client" and "Backend" steps from
-// https://varnish-cache.org/docs/trunk/reference/vcl-step.html
-// Fields are pointers to strings since they can all potentially be NULL in the database.
-type VclSteps struct {
-	VclRecv            *string `json:"vcl_recv,omitempty" doc:"The vcl_recv content" schema:"vcl_recv" validate:"min=1,max=63"`
-	VclPipe            *string `json:"vcl_pipe,omitempty" doc:"The vcl_pipe content" schema:"vcl_pipe" validate:"min=1,max=63"`
-	VclPass            *string `json:"vcl_pass,omitempty" doc:"The vcl_pass content" schema:"vcl_pass" validate:"min=1,max=63"`
-	VclHash            *string `json:"vcl_hash,omitempty" doc:"The vcl_hash content" schema:"vcl_hash" validate:"min=1,max=63"`
-	VclPurge           *string `json:"vcl_purge,omitempty" doc:"The vcl_purge content" schema:"vcl_purge" validate:"min=1,max=63"`
-	VclMiss            *string `json:"vcl_miss,omitempty" doc:"The vcl_miss content" schema:"vcl_miss" validate:"min=1,max=63"`
-	VclHit             *string `json:"vcl_hit,omitempty" doc:"The vcl_hit content" schema:"vcl_hit" validate:"min=1,max=63"`
-	VclDeliver         *string `json:"vcl_deliver,omitempty" doc:"The vcl_deliver content" schema:"vcl_deliver" validate:"min=1,max=63"`
-	VclSynth           *string `json:"vcl_synth,omitempty" doc:"The vcl_synth content" schema:"vcl_synth" validate:"min=1,max=63"`
-	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"min=1,max=63"`
-	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"min=1,max=63"`
-	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"min=1,max=63"`
-}
-
 func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
@@ -3531,7 +3563,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			func(ctx context.Context, input *struct {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
-					VclSteps
+					types.VclSteps
 					Org     string         `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
@@ -3788,7 +3820,7 @@ type origin struct {
 }
 
 type selectVcl struct {
-	VclSteps
+	types.VclSteps
 	OrgID     pgtype.UUID `json:"org_id" doc:"ID of organization"`
 	ServiceID pgtype.UUID `json:"service_id" doc:"ID of service"`
 	Active    bool        `json:"active" example:"true" doc:"If the VCL is active"`

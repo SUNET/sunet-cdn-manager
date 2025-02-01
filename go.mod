@@ -7,6 +7,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/danielgtaylor/huma/v2 v2.27.0
 	github.com/go-chi/chi/v5 v5.2.0
+	github.com/go-playground/form/v4 v4.2.1
 	github.com/go-playground/validator/v10 v10.23.0
 	github.com/gorilla/csrf v1.7.2
 	github.com/gorilla/schema v1.4.1
