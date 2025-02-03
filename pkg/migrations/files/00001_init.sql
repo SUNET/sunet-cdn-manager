@@ -12,6 +12,7 @@ CREATE TABLE services (
     org_id uuid NOT NULL REFERENCES orgs(id),
     name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
     version_counter bigint DEFAULT 0 NOT NULL,
+    uid bigint UNIQUE NOT NULL CHECK(uid>=1000000000),
     UNIQUE(org_id, name)
 );
 

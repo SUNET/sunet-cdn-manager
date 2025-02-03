@@ -2202,7 +2202,17 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 			return cdnerrors.ErrServiceQuotaHit
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id) VALUES ($1, $2) RETURNING id", name, orgIdent.id).Scan(&serviceID)
+		// Figure out the next available uid (or default to 1000000000
+		// for the first created service). This SELECT is protected by the FOR
+		// UPDATE select above, so is safe from concurrent service
+		// creation.
+		var nextUID int64
+		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT uid+1 FROM services ORDER BY uid DESC LIMIT 1), 1000000000)").Scan(&nextUID)
+		if err != nil {
+			return err
+		}
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id, uid) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, nextUID).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service: %w", err)
 		}
