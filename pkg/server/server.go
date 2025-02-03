@@ -288,6 +288,40 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 	}
 }
 
+func newVclStepKeys() types.VclStepKeys {
+	vclSK := types.VclStepKeys{
+		FieldToKey: map[string]string{},
+	}
+	for _, field := range reflect.VisibleFields(reflect.TypeOf(types.VclSteps{})) {
+		vclSK.FieldOrder = append(vclSK.FieldOrder, field.Name)
+		vclSK.FieldToKey[field.Name] = camelCaseToSnakeCase(field.Name)
+	}
+
+	return vclSK
+}
+
+func svcToMap(svc types.ServiceVersionConfig) map[string]string {
+	vclSK := newVclStepKeys()
+
+	vclKeyToConf := map[string]string{}
+
+	// Loop over all VCL step fields, and if they are non-nil and not empty string add them to map
+	val := reflect.ValueOf(&svc)
+	structVal := val.Elem()
+	for _, field := range reflect.VisibleFields(structVal.Type()) {
+		if _, ok := vclSK.FieldToKey[field.Name]; ok {
+			fieldVal := structVal.FieldByIndex(field.Index)
+			if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
+				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
+					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
+				}
+			}
+		}
+	}
+
+	return vclKeyToConf
+}
+
 func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -340,7 +374,9 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc))
+		vclKeyToConf := svcToMap(svc)
+
+		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -397,18 +433,11 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		ad := adRef.(authData)
 
-		// Dynamically look up the names of VCL steps we know about
-		// based on struct fields.
-		vclStepNames := []string{}
-		vclStepNamesMap := map[string]struct{}{}
-		for _, field := range reflect.VisibleFields(reflect.TypeOf(types.VclSteps{})) {
-			vclStepNames = append(vclStepNames, camelCaseToSnakeCase(field.Name))
-			vclStepNamesMap[field.Name] = struct{}{}
-		}
+		vclSK := newVclStepKeys()
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclStepNames, nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -436,14 +465,14 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			// schemaDecoder to set a *string field to a pointer to
 			// an empty string instead of leaving the pointer nil.
 			// We do not allow empty strings for VCL columns in the
-			// database (they should be NULL) so reset any Vcl
+			// database (they should be NULL) so reset any VCL
 			// string pointer fields back to nil if they are
 			// pointing to empty strings.
 			// https://github.com/gorilla/schema/issues/161
 			val := reflect.ValueOf(&formData)
 			structVal := val.Elem()
 			for _, field := range reflect.VisibleFields(structVal.Type()) {
-				if _, ok := vclStepNamesMap[field.Name]; ok {
+				if _, ok := vclSK.FieldToKey[field.Name]; ok {
 					fieldVal := structVal.FieldByIndex(field.Index)
 					if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
 						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
@@ -456,7 +485,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclStepNames, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

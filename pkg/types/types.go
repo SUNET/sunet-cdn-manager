@@ -54,3 +54,8 @@ type VclSteps struct {
 	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=63"`
 	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=63"`
 }
+
+type VclStepKeys struct {
+	FieldOrder []string
+	FieldToKey map[string]string
+}

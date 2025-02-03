@@ -126,14 +126,16 @@ templ CreateServiceContent(err error) {
 	}
 }
 
-templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
+templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vclKeyToConf map[string]string) {
 	<table>
 		<tr>
 			<th>ID</th>
 			<th>Service ID</th>
 			<th>Version</th>
 			<th>Active</th>
-			<th>VCL Recv</th>
+			for k := range vclKeyToConf {
+				<th>{ k }</th>
+			}
 			<th>Origins</th>
 			<th>Domains</th>
 		</tr>
@@ -142,7 +144,9 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
 			<td>{ sv.ServiceID.String() }</td>
 			<td>{ strconv.FormatInt(sv.Version, 10) }</td>
 			<td>{ strconv.FormatBool(sv.Active) }</td>
-			<td>{ *sv.VclRecv }</td>
+			for _, conf := range vclKeyToConf {
+				<td>{ conf }</td>
+			}
 			<td>
 				for _, origin := range sv.Origins {
 					<ul>
@@ -163,7 +167,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig) {
 	</table>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclStepNames []string, err error) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, err error) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
 		<label for="domains">Domains:</label>
@@ -175,10 +179,10 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclStepNam
 			<label for="origins-tls">TLS:</label>
 			<input type="checkbox" id="origins-tls" name="origins-tls"/>
 		</fieldset>
-		for _, vclStep := range vclStepNames {
+		for _, vclStep := range vclSK.FieldOrder {
 			<div>
-				<label for={ vclStep }>{ vclStep }:</label>
-				<textarea id={ vclStep } name={ vclStep } placeholder="Enter your VLC here..."></textarea>
+				<label for={ vclSK.FieldToKey[vclStep] }>{ vclSK.FieldToKey[vclStep] }:</label>
+				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VLC here..."></textarea>
 			</div>
 		}
 		<input type="submit"/>
