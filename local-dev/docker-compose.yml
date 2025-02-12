@@ -22,5 +22,9 @@ services:
     depends_on:
       - db
     command: "start-dev"
+  sunet-vcl-validator:
+    image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator:15e7af41fb56b4f19e1b6312cdd3fc697f1c0fc8"
+    ports:
+      - "8888:8888"
 volumes:
   postgres_data:
