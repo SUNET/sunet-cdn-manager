@@ -2748,8 +2748,8 @@ func writeVclRecv(b *strings.Builder, domains []string, vclRecv *string) error {
 
 func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) error {
 	if vclContent != nil {
-		b.WriteString(fmt.Sprintf("sub %s {\n", subName))
-		b.WriteString(fmt.Sprintf("  # %s content from database\n", subName))
+		fmt.Fprintf(b, "sub %s {\n", subName)
+		fmt.Fprintf(b, "  # %s content from database\n", subName)
 		scanner := bufio.NewScanner(strings.NewReader(*vclContent))
 		for scanner.Scan() {
 			if scanner.Text() != "" {
