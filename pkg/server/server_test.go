@@ -266,6 +266,16 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		}{
 			{
 				id:               "00000007-0000-0000-0000-000000000001",
+				serviceVersionID: "00000004-0000-0000-0000-000000000001",
+				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
+			},
+			{
+				id:               "00000007-0000-0000-0000-000000000002",
+				serviceVersionID: "00000004-0000-0000-0000-000000000002",
+				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
+			},
+			{
+				id:               "00000007-0000-0000-0000-000000000003",
 				serviceVersionID: "00000004-0000-0000-0000-000000000003",
 				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
 			},
@@ -2605,6 +2615,107 @@ func TestActivateServiceVersion(t *testing.T) {
 		values := req.URL.Query()
 		values.Add("org", test.orgNameOrID)
 		values.Add("service", test.serviceNameOrID)
+		req.URL.RawQuery = values.Encode()
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetServiceVersionVCL(t *testing.T) {
+	ts, dbPool, err := prepareServer(false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description     string
+		username        string
+		password        string
+		expectedStatus  int
+		serviceNameOrID string
+		orgNameOrID     string
+		version         int64
+	}{
+		{
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			version:         2,
+		},
+		{
+			description:     "successful superuser request with name",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusOK,
+			serviceNameOrID: "org1-service1",
+			orgNameOrID:     "org1",
+			version:         1,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant version",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusNotFound,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			version:         9999,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant service ID",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			version:         1,
+		},
+		{
+			description:     "failed superuser request with ID, non-existant org",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
+			version:         1,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		values := req.URL.Query()
+		values.Add("org", test.orgNameOrID)
 		req.URL.RawQuery = values.Encode()
 
 		req.SetBasicAuth(test.username, test.password)

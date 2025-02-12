@@ -2766,6 +2766,88 @@ func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) 
 	return nil
 }
 
+func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) {
+	var b strings.Builder
+
+	b.WriteString("vcl 4.1;\n")
+	b.WriteString("import std;\n")
+	b.WriteString("import proxy;\n")
+	b.WriteString("\n")
+	b.WriteString("backend haproxy_https {\n")
+	b.WriteString("  .path = \"/shared/haproxy_https\"\n")
+	b.WriteString("}\n")
+	b.WriteString("backend haproxy_http {\n")
+	b.WriteString("  .path = \"/shared/haproxy_http\"\n")
+	b.WriteString("}\n")
+	b.WriteString("\n")
+
+	for i, origin := range svc.Origins {
+		b.WriteString(fmt.Sprintf("backend backend_%d {\n", i))
+		b.WriteString(fmt.Sprintf("  .host = \"%s\";\n", origin.Host))
+		b.WriteString(fmt.Sprintf("  .port = \"%d\";\n", origin.Port))
+		if origin.TLS {
+			b.WriteString("  .via = haproxy_https;\n")
+		} else {
+			b.WriteString("  .via = haproxy_http;\n")
+		}
+		b.WriteString("}\n")
+	}
+	if len(svc.Origins) > 0 {
+		b.WriteString("\n")
+	}
+
+	err := writeVclRecv(&b, svc.Domains, svc.VclRecv)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_pipe", svc.VclPipe)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_pass", svc.VclPass)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_hash", svc.VclHash)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_purge", svc.VclPurge)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_miss", svc.VclMiss)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_hit", svc.VclHit)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_deliver", svc.VclDeliver)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_synth", svc.VclSynth)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_fetch", svc.VclBackendFetch)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_response", svc.VclBackendResponse)
+	if err != nil {
+		return "", err
+	}
+	err = writeGenericVclSub(&b, "vcl_backend_error", svc.VclBackendError)
+	if err != nil {
+		return "", err
+	}
+
+	return b.String(), nil
+}
+
 func generateCompleteVcl(sv selectVcl) (string, error) {
 	var b strings.Builder
 
@@ -3672,6 +3754,56 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return nil, nil
 		})
 
+		huma.Get(api, "/v1/services/{service}/service-versions/{version}/vcl", func(ctx context.Context, input *struct {
+			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+			Version int64  `path:"version" example:"1" doc:"The service version to get VCL for"`
+		},
+		) (*serviceVersionVCLOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service-versions GET handler")
+			}
+
+			svc, err := getServiceVersionConfig(dbPool, ad, input.Org, input.Service, input.Version)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrUnprocessable):
+					return nil, huma.Error422UnprocessableEntity("unprocessable request")
+				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
+				case errors.Is(err, pgx.ErrNoRows):
+					return nil, huma.Error404NotFound("service version not found")
+				}
+				logger.Err(err).Msg("unable to query service-versions/{version}/vcl")
+				return nil, err
+			}
+
+			vcl, err := generateCompleteServiceVcl(svc)
+			if err != nil {
+				logger.Err(err).Msg("unable to convert service version config to VCL")
+				return nil, err
+			}
+
+			rBody := types.ServiceVersionVCL{
+				ServiceID:   svc.ServiceID,
+				ServiceName: svc.ServiceName,
+				OrgID:       svc.OrgID,
+				OrgName:     svc.OrgName,
+				Version:     svc.Version,
+				VCL:         vcl,
+			}
+
+			resp := &serviceVersionVCLOutput{
+				Body: rBody,
+			}
+			return resp, nil
+		})
+
 		huma.Get(api, "/v1/vcls", func(ctx context.Context, _ *struct{},
 		) (*completeVclsOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -3846,6 +3978,10 @@ type servicesOutput struct {
 
 type serviceVersionOutput struct {
 	Body types.ServiceVersion
+}
+
+type serviceVersionVCLOutput struct {
+	Body types.ServiceVersionVCL
 }
 
 type serviceVersionsOutput struct {
