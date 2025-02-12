@@ -2614,7 +2614,6 @@ func TestActivateServiceVersion(t *testing.T) {
 
 		values := req.URL.Query()
 		values.Add("org", test.orgNameOrID)
-		values.Add("service", test.serviceNameOrID)
 		req.URL.RawQuery = values.Encode()
 
 		req.SetBasicAuth(test.username, test.password)
