@@ -2850,205 +2850,6 @@ func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) 
 	return b.String(), nil
 }
 
-func generateCompleteVcl(sv selectVcl) (string, error) {
-	var b strings.Builder
-
-	b.WriteString("vcl 4.1;\n")
-	b.WriteString("import std;\n")
-	b.WriteString("import proxy;\n")
-	b.WriteString("\n")
-	b.WriteString("backend haproxy_https {\n")
-	b.WriteString("  .path = \"/shared/haproxy_https\"\n")
-	b.WriteString("}\n")
-	b.WriteString("backend haproxy_http {\n")
-	b.WriteString("  .path = \"/shared/haproxy_http\"\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
-
-	for i, origin := range sv.Origins {
-		b.WriteString(fmt.Sprintf("backend backend_%d {\n", i))
-		b.WriteString(fmt.Sprintf("  .host = \"%s\";\n", origin.Host))
-		b.WriteString(fmt.Sprintf("  .port = \"%d\";\n", origin.Port))
-		if origin.TLS {
-			b.WriteString("  .via = haproxy_https;\n")
-		} else {
-			b.WriteString("  .via = haproxy_http;\n")
-		}
-		b.WriteString("}\n")
-	}
-	if len(sv.Origins) > 0 {
-		b.WriteString("\n")
-	}
-
-	err := writeVclRecv(&b, sv.Domains, sv.VclRecv)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_pipe", sv.VclPipe)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_pass", sv.VclPass)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_hash", sv.VclHash)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_purge", sv.VclPurge)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_miss", sv.VclMiss)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_hit", sv.VclHit)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_deliver", sv.VclDeliver)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_synth", sv.VclSynth)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_fetch", sv.VclBackendFetch)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_response", sv.VclBackendResponse)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_error", sv.VclBackendError)
-	if err != nil {
-		return "", err
-	}
-
-	return b.String(), nil
-}
-
-func selectVcls(dbPool *pgxpool.Pool, ad authData) ([]completeVcl, error) {
-	var rows pgx.Rows
-	var err error
-	if ad.Superuser {
-		// Usage of JOIN with subqueries based on
-		// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
-		// (including separate version when having WHERE statement based on org).
-		rows, err = dbPool.Query(
-			context.Background(),
-			`SELECT
-				orgs.id AS org_id,
-				services.id AS service_id,
-				service_versions.version,
-				service_versions.active,
-				service_vcls.vcl_recv,
-				service_vcls.vcl_pipe,
-				service_vcls.vcl_pass,
-				service_vcls.vcl_hash,
-				service_vcls.vcl_purge,
-				service_vcls.vcl_miss,
-				service_vcls.vcl_hit,
-				service_vcls.vcl_deliver,
-				service_vcls.vcl_synth,
-				service_vcls.vcl_backend_fetch,
-				service_vcls.vcl_backend_response,
-				service_vcls.vcl_backend_error,
-				agg_domains.domains,
-				agg_origins.origins
-			FROM
-				orgs
-				JOIN services ON orgs.id = services.org_id
-				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
-				JOIN (
-					SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
-					FROM service_domains
-					GROUP BY service_version_id
-				) AS agg_domains ON agg_domains.service_version_id = service_versions.id
-				JOIN (
-					SELECT service_version_id, array_agg((host, port, tls) ORDER BY host, port) AS origins
-					FROM service_origins
-					GROUP BY service_version_id
-				) AS agg_origins ON agg_origins.service_version_id = service_versions.id
-			ORDER BY orgs.name`,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for vcls as superuser: %w", err)
-		}
-	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(
-			context.Background(),
-			`SELECT
-				orgs.id AS org_id,
-				services.id AS service_id,
-				service_versions.version,
-				service_versions.active,
-				service_vcls.vcl_recv,
-				service_vcls.vcl_pipe,
-				service_vcls.vcl_pass,
-				service_vcls.vcl_hash,
-				service_vcls.vcl_purge,
-				service_vcls.vcl_miss,
-				service_vcls.vcl_hit,
-				service_vcls.vcl_deliver,
-				service_vcls.vcl_synth,
-				service_vcls.vcl_backend_fetch,
-				service_vcls.vcl_backend_response,
-				service_vcls.vcl_backend_error,
-				(SELECT
-					array_agg(domain ORDER BY domain)
-					FROM service_domains
-					WHERE service_version_id = service_versions.id
-				) AS domains,
-				(SELECT
-					array_agg((host, port, tls) ORDER BY host, port)
-					FROM service_origins
-					WHERE service_version_id = service_versions.id
-				) AS origins
-			FROM
-				orgs
-				JOIN services ON orgs.id = services.org_id
-				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
-			WHERE orgs.id=$1
-			ORDER BY orgs.name`,
-			*ad.OrgID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for vcls as normal user: %w", err)
-		}
-	} else {
-		return nil, cdnerrors.ErrForbidden
-	}
-
-	selectedVcls, err := pgx.CollectRows(rows, pgx.RowToStructByName[selectVcl])
-	if err != nil {
-		return nil, fmt.Errorf("unable to get rows for vcls: %w", err)
-	}
-
-	var completeVcls []completeVcl
-	for _, sv := range selectedVcls {
-		vclContent, err := generateCompleteVcl(sv)
-		if err != nil {
-			return nil, fmt.Errorf("unable to generate complete vcl for selected vcl: %w", err)
-		}
-		completeVcls = append(completeVcls, completeVcl{
-			OrgID:     sv.OrgID,
-			ServiceID: sv.ServiceID,
-			Active:    sv.Active,
-			Version:   sv.Version,
-			Content:   vclContent,
-		})
-	}
-
-	return completeVcls, nil
-}
-
 func selectNetworks(dbPool *pgxpool.Pool, ad authData, family int) ([]ipNetwork, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
@@ -3806,31 +3607,6 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/vcls", func(ctx context.Context, _ *struct{},
-		) (*completeVclsOutput, error) {
-			logger := zlog.Ctx(ctx)
-
-			ad, ok := ctx.Value(authDataKey{}).(authData)
-			if !ok {
-				logger.Error().Msg("unable to read auth data from vcls handler")
-				return nil, errors.New("unable to read auth data from vcls handler")
-			}
-
-			vcls, err := selectVcls(dbPool, ad)
-			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden(api403String)
-				}
-				logger.Err(err).Msg("unable to query vcls")
-				return nil, err
-			}
-
-			resp := &completeVclsOutput{
-				Body: vcls,
-			}
-			return resp, nil
-		})
-
 		huma.Get(api, "/v1/ip-networks", func(ctx context.Context, input *struct {
 			Family string `query:"family" example:"4" doc:"Network IP family to limit query to" enum:"4,6"` // is string instead of int to make enum work
 		},
@@ -3996,16 +3772,6 @@ type origin struct {
 	TLS  bool   `json:"tls"`
 }
 
-type selectVcl struct {
-	types.VclSteps
-	OrgID     pgtype.UUID `json:"org_id" doc:"ID of organization"`
-	ServiceID pgtype.UUID `json:"service_id" doc:"ID of service"`
-	Active    bool        `json:"active" example:"true" doc:"If the VCL is active"`
-	Version   int64       `json:"version" example:"1" doc:"Version of the service"`
-	Domains   []string    `json:"domains" doc:"The domains used by the VCL"`
-	Origins   []origin    `json:"origins" doc:"The origins used by the VCL"`
-}
-
 type ipNetwork struct {
 	ID      pgtype.UUID  `json:"id" doc:"ID of IPv4 or IPv6 network, UUIDv4"`
 	Network netip.Prefix `json:"network" example:"198.51.100.0/24" doc:"a IPv4 or IPv6 network"`
@@ -4017,18 +3783,6 @@ type ipNetworksOutput struct {
 
 type ipNetworkOutput struct {
 	Body ipNetwork
-}
-
-type completeVcl struct {
-	OrgID     pgtype.UUID `json:"org_id" doc:"ID of organization"`
-	ServiceID pgtype.UUID `json:"service_id" doc:"ID of service"`
-	Active    bool        `json:"active" example:"true" doc:"If the VCL is active"`
-	Version   int64       `json:"version" example:"1" doc:"Version of the service"`
-	Content   string      `json:"content" doc:"The complete VCL loaded by varnish"`
-}
-
-type completeVclsOutput struct {
-	Body []completeVcl
 }
 
 // Generate a random password containing A-Z, a-z and 0-9
