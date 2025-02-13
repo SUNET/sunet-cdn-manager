@@ -1,5 +1,6 @@
 [server]
 addr = "127.0.0.1:8081"
+vcl_validation_url = "http://localhost:8888/validate-vcl"
 
 [db]
 dbname = "cdn"

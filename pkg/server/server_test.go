@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stapelberg/postgrestest"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -112,8 +115,8 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO service_domains (id, service_version_id, domain) VALUES ('00000008-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', 'www.example.com')",
 
 		// Origins
-		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', 'srv2.example.com', 80, false)",
-		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', 'srv1.example.se', 443, true)",
+		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '198.51.100.10', 80, false)",
+		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '198.51.100.11', 443, true)",
 
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
@@ -345,7 +348,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	return nil
 }
 
-func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, error) {
+func prepareServer(encryptedSessionKey bool, vclValidationURL *url.URL) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -388,9 +391,9 @@ func prepareServer(encryptedSessionKey bool) (*httptest.Server, *pgxpool.Pool, e
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil)
+	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidationURL)
 
-	err = setupHumaAPI(router, dbPool)
+	err = setupHumaAPI(router, dbPool, vclValidationURL)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -431,7 +434,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestGorillaCSRFKey(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -479,7 +482,7 @@ func TestGorillaCSRFKey(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -544,7 +547,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(true)
+	ts, dbPool, err := prepareServer(true, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -614,7 +617,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -693,7 +696,7 @@ func TestGetUsers(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -799,7 +802,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestPostUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -933,7 +936,7 @@ func TestPostUsers(t *testing.T) {
 }
 
 func TestPutUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1047,7 +1050,7 @@ func TestPutUser(t *testing.T) {
 }
 
 func TestPutPassword(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1215,7 +1218,7 @@ func testAuth(ts *httptest.Server, username string, password string) (int, error
 }
 
 func TestGetOrgs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1288,7 +1291,7 @@ func TestGetOrgs(t *testing.T) {
 }
 
 func TestGetOrg(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1387,7 +1390,7 @@ func TestGetOrg(t *testing.T) {
 }
 
 func TestGetServiceIPs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1489,7 +1492,7 @@ func TestGetServiceIPs(t *testing.T) {
 }
 
 func TestPostOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1589,7 +1592,7 @@ func TestPostOrganizations(t *testing.T) {
 }
 
 func TestGetServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1662,7 +1665,7 @@ func TestGetServices(t *testing.T) {
 }
 
 func TestGetService(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1791,7 +1794,7 @@ func TestGetService(t *testing.T) {
 }
 
 func TestDeleteService(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1920,7 +1923,7 @@ func TestDeleteService(t *testing.T) {
 }
 
 func TestPostServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2082,7 +2085,7 @@ func TestPostServices(t *testing.T) {
 }
 
 func TestGetServiceVersions(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2191,7 +2194,40 @@ func TestGetServiceVersions(t *testing.T) {
 }
 
 func TestPostServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	req := testcontainers.ContainerRequest{
+		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:15e7af41fb56b4f19e1b6312cdd3fc697f1c0fc8",
+		ExposedPorts: []string{"8888/tcp"},
+		WaitingFor:   wait.ForLog("staring server"),
+	}
+
+	ctx := context.Background()
+	validatorC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	defer testcontainers.CleanupContainer(t, validatorC)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We need to use PortEndpoint() rather than the simpler Endpoint()
+	// because the varnish container used as a baseline for the validator
+	// container includes "EXPOSE 80 8443" so we end up trying to use
+	// 80/tcp in that case (which is not used at all for the validator
+	// container). Also it is not possible to simply add our own EXPOSE in
+	// the validator Dockerfile with port 8888, it is just appended to the
+	// existing list rather than overriding the existing set.
+	endpoint, err := validatorC.PortEndpoint(ctx, "8888/tcp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := url.Parse("http://" + endpoint + "/validate-vcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, dbPool, err := prepareServer(false, u)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2211,7 +2247,7 @@ func TestPostServiceVersion(t *testing.T) {
 		domains         []string
 		origins         []origin
 		active          bool
-		vclRecv         string
+		vclRecvFile     string
 	}{
 		{
 			description:     "successful superuser request with ID",
@@ -2222,19 +2258,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "198.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusCreated,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "successful superuser request with name",
@@ -2245,19 +2281,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusCreated,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request with name (name does not exist)",
@@ -2268,19 +2304,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request with too many domains",
@@ -2291,19 +2327,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request, too long Host in origin list",
@@ -2319,14 +2355,14 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request, too long domain in domains list",
@@ -2337,19 +2373,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{strings.Repeat("a", 254), "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request with invalid service name (too long)",
@@ -2360,19 +2396,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed superuser request with invalid uuid (too short)",
@@ -2383,19 +2419,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "successful user request",
@@ -2406,19 +2442,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusCreated,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
 			description:     "failed user request not assigned to org",
@@ -2429,19 +2465,19 @@ func TestPostServiceVersion(t *testing.T) {
 			domains:         []string{"example.com", "example.se"},
 			origins: []origin{
 				{
-					Host: "srv1.example.com",
+					Host: "192.51.100.20",
 					Port: 443,
 					TLS:  true,
 				},
 				{
-					Host: "srv2.example.com",
+					Host: "192.51.100.21",
 					Port: 80,
 					TLS:  false,
 				},
 			},
 			expectedStatus: http.StatusForbidden,
 			active:         true,
-			vclRecv:        "vcl_recv content",
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 	}
 
@@ -2457,7 +2493,15 @@ func TestPostServiceVersion(t *testing.T) {
 			Active:  test.active,
 			Domains: test.domains,
 			Origins: test.origins,
-			VclRecv: test.vclRecv,
+		}
+
+		var vclRecvContentBytes []byte
+		if test.vclRecvFile != "" {
+			vclRecvContentBytes, err = os.ReadFile(test.vclRecvFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newServiceVersion.VclRecv = string(vclRecvContentBytes)
 		}
 
 		b, err := json.Marshal(newServiceVersion)
@@ -2500,7 +2544,7 @@ func TestPostServiceVersion(t *testing.T) {
 }
 
 func TestActivateServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2642,7 +2686,7 @@ func TestActivateServiceVersion(t *testing.T) {
 }
 
 func TestGetServiceVersionVCL(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2761,7 +2805,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 }
 
 func TestGetIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2862,7 +2906,7 @@ func TestGetIPNetworks(t *testing.T) {
 }
 
 func TestPostIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(false)
+	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}

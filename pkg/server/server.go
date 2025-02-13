@@ -404,7 +404,7 @@ func camelCaseToSnakeCase(s string) string {
 	return b.String()
 }
 
-func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidationURL *url.URL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -496,7 +496,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			origins := []origin{}
+			origins := []types.Origin{}
 			for i, formOrigin := range formData.Origins {
 				host, port, err := net.SplitHostPort(formOrigin)
 				if err != nil {
@@ -511,14 +511,14 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 					return
 				}
-				origins = append(origins, origin{
+				origins = append(origins, types.Origin{
 					Host: host,
 					Port: portInt,
 					TLS:  formData.OriginTLS[i],
 				})
 			}
 
-			_, err = insertServiceVersion(logger, ad, dbPool, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
+			_, err = insertServiceVersion(logger, ad, dbPool, vclValidationURL, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
@@ -701,9 +701,9 @@ type createServiceForm struct {
 
 type createServiceVersionForm struct {
 	types.VclSteps
-	Domains   []domainString `schema:"domains" validate:"dive,min=1,max=63"`
-	Origins   []string       `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
-	OriginTLS []bool         `schema:"origins-tls" validate:"eqfield=Origins"`
+	Domains   []types.DomainString `schema:"domains" validate:"dive,min=1,max=63"`
+	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
+	OriginTLS []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
 }
 
 type activateServiceVersionForm struct {
@@ -2439,6 +2439,26 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 	return svc, nil
 }
 
+func validateServiceVersionConfig(svc types.ServiceVersionConfig, url *url.URL) error {
+	vcl, err := generateCompleteServiceVcl(svc)
+	if err != nil {
+		return fmt.Errorf("unable to validate svc: %w", err)
+	}
+
+	r := strings.NewReader(vcl)
+
+	resp, err := http.Post(url.String(), "text/plain; charset=utf-8", r)
+	if err != nil {
+		return fmt.Errorf("svc validation request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code for validation: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 type serviceVersionInsertResult struct {
 	versionID     pgtype.UUID
 	version       int64
@@ -2479,7 +2499,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []domainString, origins []origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -2607,7 +2627,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, domains []domainString, origins []origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, vclValidationURL *url.URL, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2616,9 +2636,18 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 		}
 	}
 
+	err := validateServiceVersionConfig(types.ServiceVersionConfig{
+		VclSteps: vcls,
+		Origins:  origins,
+		Domains:  domains,
+	}, vclValidationURL)
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
+	}
+
 	var serviceVersionResult serviceVersionInsertResult
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
@@ -2715,16 +2744,17 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 	return activatedServiceVersionID, nil
 }
 
-func writeVclRecv(b *strings.Builder, domains []string, vclRecv *string) error {
+func writeVclRecv(b *strings.Builder, domains []types.DomainString, vclRecv *string) error {
 	b.WriteString("sub vcl_recv {\n")
 	if len(domains) > 0 {
-		b.WriteString("  if ")
+		b.WriteString("  if (")
 		for i, domain := range domains {
 			if i > 0 {
 				b.WriteString(" && ")
 			}
-			b.WriteString(fmt.Sprintf("req.http.host != \"%s\"", domain))
+			fmt.Fprintf(b, "req.http.host != \"%s\"", domain)
 		}
+		b.WriteString(")")
 		b.WriteString(" {\n")
 		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
 		b.WriteString("  }\n")
@@ -2776,10 +2806,10 @@ func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) 
 	b.WriteString("import proxy;\n")
 	b.WriteString("\n")
 	b.WriteString("backend haproxy_https {\n")
-	b.WriteString("  .path = \"/shared/haproxy_https\"\n")
+	b.WriteString("  .path = \"/shared/haproxy_https\";\n")
 	b.WriteString("}\n")
 	b.WriteString("backend haproxy_http {\n")
-	b.WriteString("  .path = \"/shared/haproxy_http\"\n")
+	b.WriteString("  .path = \"/shared/haproxy_http\";\n")
 	b.WriteString("}\n")
 	b.WriteString("\n")
 
@@ -2908,7 +2938,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipN
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidationURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -2941,8 +2971,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore))
+		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidationURL))
+		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidationURL))
 		r.Get(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
@@ -2975,20 +3005,6 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	})
 
 	return router
-}
-
-func Ptr[T any](v T) *T {
-	return &v
-}
-
-type domainString string
-
-func (ds domainString) Schema(_ huma.Registry) *huma.Schema {
-	return &huma.Schema{
-		Type:      "string",
-		MinLength: Ptr(1),
-		MaxLength: Ptr(253),
-	}
 }
 
 // Unfortunately we dont have access to net/http request.BasicAuth() in the
@@ -3050,7 +3066,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidationURL *url.URL) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -3488,10 +3504,10 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
 					types.VclSteps
-					Org     string         `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-					Domains []domainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins []origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active  bool           `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					Org     string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Domains []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active  bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -3502,7 +3518,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool) error {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, vclValidationURL, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -4146,9 +4162,14 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 		logger.Fatal().Err(err).Msg("setting up OIDC provider failed")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider)
+	vclValidationURL, err := url.Parse(conf.Server.VCLValidationURL)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("parsing VCL validation URL failed")
+	}
 
-	err = setupHumaAPI(router, dbPool)
+	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidationURL)
+
+	err = setupHumaAPI(router, dbPool, vclValidationURL)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}

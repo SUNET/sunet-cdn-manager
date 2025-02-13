@@ -18,7 +18,8 @@ type Config struct {
 }
 
 type serverSettings struct {
-	Addr string
+	Addr             string `validate:"required"`
+	VCLValidationURL string `mapstructure:"vcl_validation_url" validate:"required"`
 }
 
 type dbSettings struct {

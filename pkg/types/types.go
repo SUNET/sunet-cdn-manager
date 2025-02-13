@@ -1,6 +1,7 @@
 package types
 
 import (
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -36,8 +37,8 @@ type ServiceVersionVCL struct {
 type ServiceVersionConfig struct {
 	ServiceVersion
 	VclSteps
-	Domains []string `json:"domains" doc:"The domains used by the VCL"`
-	Origins []Origin `json:"origins" doc:"The origins used by the VCL"`
+	Domains []DomainString `json:"domains" doc:"The domains used by the VCL"`
+	Origins []Origin       `json:"origins" doc:"The origins used by the VCL"`
 }
 
 type Origin struct {
@@ -67,4 +68,22 @@ type VclSteps struct {
 type VclStepKeys struct {
 	FieldOrder []string
 	FieldToKey map[string]string
+}
+
+func Ptr[T any](v T) *T {
+	return &v
+}
+
+type DomainString string
+
+func (ds DomainString) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type:      "string",
+		MinLength: Ptr(1),
+		MaxLength: Ptr(253),
+	}
+}
+
+func (ds DomainString) String() string {
+	return string(ds)
 }

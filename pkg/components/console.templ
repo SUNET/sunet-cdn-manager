@@ -159,7 +159,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 			<td>
 				for _, domain := range sv.Domains {
 					<ul>
-						<li>Domain: { domain }</li>
+						<li>Domain: { domain.String() }</li>
 					</ul>
 				}
 			</td>
