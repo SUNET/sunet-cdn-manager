@@ -3051,3 +3051,59 @@ func TestPostIPNetworks(t *testing.T) {
 		fmt.Printf("%s\n", jsonData)
 	}
 }
+
+func TestCamelCaseToSnakeCase(t *testing.T) {
+	tests := []struct {
+		description string
+		input       string
+		expected    string
+	}{
+		{
+			description: "basic unexported",
+			input:       "vclRecv",
+			expected:    "vcl_recv",
+		},
+		{
+			description: "basic exported",
+			input:       "VclRecv",
+			expected:    "vcl_recv",
+		},
+		{
+			description: "all caps exported",
+			input:       "VCLRecv",
+			expected:    "vcl_recv",
+		},
+		{
+			description: "all caps exported twice",
+			input:       "VCLVCLRecv",
+			expected:    "vcl_vcl_recv",
+		},
+		{
+			description: "unexported backwards",
+			input:       "recvVcl",
+			expected:    "recv_vcl",
+		},
+		{
+			description: "unexported backwards, all caps",
+			input:       "recvVCL",
+			expected:    "recv_vcl",
+		},
+		{
+			description: "exported backwards",
+			input:       "RecvVcl",
+			expected:    "recv_vcl",
+		},
+		{
+			description: "exported backwards, all caps",
+			input:       "RecvVCL",
+			expected:    "recv_vcl",
+		},
+	}
+
+	for _, test := range tests {
+		result := camelCaseToSnakeCase(test.input)
+		if result != test.expected {
+			t.Fatalf("%s: input '%s' resulted in '%s', expected: '%s'", test.description, test.input, result, test.expected)
+		}
+	}
+}

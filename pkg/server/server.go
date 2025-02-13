@@ -385,8 +385,10 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 	}
 }
 
-// Used to turn e.g. "VclRecv" into "vcl_recv"
+// Used to turn e.g. "VclRecv" or VCLRecv into "vcl_recv"
 func camelCaseToSnakeCase(s string) string {
+	// Handle capitalized VCL
+	s = strings.ReplaceAll(s, "VCL", "Vcl")
 	var b strings.Builder
 	for i, c := range s {
 		if unicode.IsUpper(c) {
