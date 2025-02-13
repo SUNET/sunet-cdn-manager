@@ -15,6 +15,11 @@ brew install postgresql@17
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
 ```
 
+Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
+(specifically for running
+[sunet-vcl-validator](https://github.com/SUNET/sunet-vcl-validator)). This
+means you also need to be able to run containers for these tests to work.
+
 ### Setting up a local dev enviroment
 Start database and keycloak:
 ```
