@@ -103,6 +103,27 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(svc types.ServiceVersionConfig) error {
+	vcl, err := generateCompleteServiceVcl(svc)
+	if err != nil {
+		return fmt.Errorf("unable to validate svc: %w", err)
+	}
+
+	r := strings.NewReader(vcl)
+
+	resp, err := vclValidator.client.Post(vclValidator.url.String(), "text/plain; charset=utf-8", r)
+	if err != nil {
+		return fmt.Errorf("svc validation request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code for validation: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
 type zerologErrorWriter struct {
@@ -2454,27 +2475,6 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 	return svc, nil
 }
 
-func validateServiceVersionConfig(svc types.ServiceVersionConfig, vclValidator *vclValidatorClient) error {
-	vcl, err := generateCompleteServiceVcl(svc)
-	if err != nil {
-		return fmt.Errorf("unable to validate svc: %w", err)
-	}
-
-	r := strings.NewReader(vcl)
-
-	resp, err := vclValidator.client.Post(vclValidator.url.String(), "text/plain; charset=utf-8", r)
-	if err != nil {
-		return fmt.Errorf("svc validation request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code for validation: %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
 type serviceVersionInsertResult struct {
 	versionID     pgtype.UUID
 	version       int64
@@ -2652,11 +2652,11 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 		}
 	}
 
-	err := validateServiceVersionConfig(types.ServiceVersionConfig{
+	err := vclValidator.validateServiceVersionConfig(types.ServiceVersionConfig{
 		VclSteps: vcls,
 		Origins:  origins,
 		Domains:  domains,
-	}, vclValidator)
+	})
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
 	}
