@@ -348,7 +348,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	return nil
 }
 
-func prepareServer(encryptedSessionKey bool, vclValidationURL *url.URL) (*httptest.Server, *pgxpool.Pool, error) {
+func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -391,9 +391,9 @@ func prepareServer(encryptedSessionKey bool, vclValidationURL *url.URL) (*httpte
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidationURL)
+	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator)
 
-	err = setupHumaAPI(router, dbPool, vclValidationURL)
+	err = setupHumaAPI(router, dbPool, vclValidator)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -2227,7 +2227,9 @@ func TestPostServiceVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ts, dbPool, err := prepareServer(false, u)
+	vclValidator := newVclValidator(u)
+
+	ts, dbPool, err := prepareServer(false, vclValidator)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}

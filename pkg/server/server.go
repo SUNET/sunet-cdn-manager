@@ -87,6 +87,22 @@ var (
 	}
 )
 
+type vclValidatorClient struct {
+	url    *url.URL
+	client *http.Client
+}
+
+func newVclValidator(u *url.URL) *vclValidatorClient {
+	c := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	return &vclValidatorClient{
+		url:    u,
+		client: c,
+	}
+}
+
 // Small struct that implements io.Writer so we can pass it to net/http server
 // for error logging
 type zerologErrorWriter struct {
@@ -404,7 +420,7 @@ func camelCaseToSnakeCase(s string) string {
 	return b.String()
 }
 
-func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidationURL *url.URL) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -518,7 +534,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				})
 			}
 
-			_, err = insertServiceVersion(logger, ad, dbPool, vclValidationURL, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
+			_, err = insertServiceVersion(logger, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
@@ -2438,7 +2454,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 	return svc, nil
 }
 
-func validateServiceVersionConfig(svc types.ServiceVersionConfig, url *url.URL) error {
+func validateServiceVersionConfig(svc types.ServiceVersionConfig, vclValidator *vclValidatorClient) error {
 	vcl, err := generateCompleteServiceVcl(svc)
 	if err != nil {
 		return fmt.Errorf("unable to validate svc: %w", err)
@@ -2446,7 +2462,7 @@ func validateServiceVersionConfig(svc types.ServiceVersionConfig, url *url.URL) 
 
 	r := strings.NewReader(vcl)
 
-	resp, err := http.Post(url.String(), "text/plain; charset=utf-8", r)
+	resp, err := vclValidator.client.Post(vclValidator.url.String(), "text/plain; charset=utf-8", r)
 	if err != nil {
 		return fmt.Errorf("svc validation request failed: %w", err)
 	}
@@ -2626,7 +2642,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, vclValidationURL *url.URL, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2639,7 +2655,7 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 		VclSteps: vcls,
 		Origins:  origins,
 		Domains:  domains,
-	}, vclValidationURL)
+	}, vclValidator)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
 	}
@@ -2937,7 +2953,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipN
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidationURL *url.URL) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -2970,8 +2986,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidationURL))
-		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidationURL))
+		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
+		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
 		r.Get(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
@@ -3065,7 +3081,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidationURL *url.URL) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -3517,7 +3533,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidationURL *url
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, vclValidationURL, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -4166,9 +4182,11 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 		logger.Fatal().Err(err).Msg("parsing VCL validation URL failed")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidationURL)
+	vclValidator := newVclValidator(vclValidationURL)
 
-	err = setupHumaAPI(router, dbPool, vclValidationURL)
+	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator)
+
+	err = setupHumaAPI(router, dbPool, vclValidator)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}
