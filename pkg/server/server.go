@@ -2466,6 +2466,7 @@ func validateServiceVersionConfig(svc types.ServiceVersionConfig, vclValidator *
 	if err != nil {
 		return fmt.Errorf("svc validation request failed: %w", err)
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code for validation: %d", resp.StatusCode)
