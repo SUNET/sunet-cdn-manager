@@ -21,7 +21,7 @@ Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
 means you also need to be able to run containers for these tests to work.
 
 ### Setting up a local dev enviroment
-Start database and keycloak:
+Start database, keycloak and sunet-vcl-validator:
 ```
 docker compose -p sunet-cdn-manager -f local-dev/docker-compose.yml up
 ```
