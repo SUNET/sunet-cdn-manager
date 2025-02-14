@@ -823,11 +823,10 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form")
 				validatedRedirect(u.String(), w, r)
 				return
-			} else {
-				logger.Info().Msg("no return_to in POST data, redirecting logged in user to consolePath")
-				validatedRedirect(consolePath, w, r)
-				return
 			}
+			logger.Info().Msg("no return_to in POST data, redirecting logged in user to consolePath")
+			validatedRedirect(consolePath, w, r)
+			return
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for login handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
