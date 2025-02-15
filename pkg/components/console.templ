@@ -182,7 +182,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		for _, vclStep := range vclSK.FieldOrder {
 			<div>
 				<label for={ vclSK.FieldToKey[vclStep] }>{ vclSK.FieldToKey[vclStep] }:</label>
-				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VLC here..."></textarea>
+				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here..."></textarea>
 			</div>
 		}
 		<input type="submit"/>

@@ -901,7 +901,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, "\" placeholder=\"Enter your VLC here...\"></textarea></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 75, "\" placeholder=\"Enter your VCL here...\"></textarea></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
