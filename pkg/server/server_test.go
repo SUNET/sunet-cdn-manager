@@ -2275,6 +2275,29 @@ func TestPostServiceVersion(t *testing.T) {
 			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},
 		{
+			description:     "failed superuser request with ID, broken vcl_recv",
+			username:        "admin",
+			password:        "adminpass1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "198.51.100.20",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "192.51.100.21",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+			vclRecvFile:    "testdata/vcl/vcl_recv/broken1.vcl",
+		},
+		{
 			description:     "successful superuser request with name",
 			username:        "admin",
 			password:        "adminpass1",
