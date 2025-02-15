@@ -9,6 +9,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -117,8 +118,18 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(svc types.S
 	}
 	defer resp.Body.Close()
 
+	// sunet-vcl-validator returns 422 if varnishd did not like the VCL content
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return errors.New("unable to ready response body for invalid VCL")
+		}
+
+		return cdnerrors.NewValidationError(string(body))
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code for validation: %d", resp.StatusCode)
+		return fmt.Errorf("unknown validation error: %d", resp.StatusCode)
 	}
 
 	return nil
@@ -476,7 +487,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -524,7 +535,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -557,8 +568,14 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			_, err = insertServiceVersion(logger, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
+				switch {
+				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
+					errDetails := ""
+					var ve *cdnerrors.VCLValidationError
+					if errors.As(err, &ve) {
+						errDetails = ve.Details
+					}
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -3545,6 +3562,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 						return nil, huma.Error403Forbidden("not allowed to create this service version")
 					case errors.Is(err, cdnerrors.ErrNotFound):
 						return nil, huma.Error422UnprocessableEntity("service name not found")
+					case errors.Is(err, cdnerrors.ErrInvalidVCL):
+						var ve *cdnerrors.VCLValidationError
+						if errors.As(err, &ve) {
+							fmt.Println(ve.Details)
+							return nil, huma.Error422UnprocessableEntity(ve.Details)
+						}
+						return nil, huma.Error422UnprocessableEntity("VCL validation failed without details")
 					}
 					logger.Err(err).Msg("unable to add service version")
 					return nil, err
