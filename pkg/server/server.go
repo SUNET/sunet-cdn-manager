@@ -2995,19 +2995,19 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Get("/", rootHandler)
 
 	// Authenticated console releated routes
-	router.Group(func(r chi.Router) {
+	router.Route(consolePath, func(r chi.Router) {
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get(consolePath, consoleDashboardHandler(cookieStore))
-		r.Get(consolePath+"/services", consoleServicesHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/services/{service}", consoleServiceHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
-		r.Post(consolePath+"/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
-		r.Get(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
-		r.Post(consolePath+"/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Get("/", consoleDashboardHandler(cookieStore))
+		r.Get("/services", consoleServicesHandler(dbPool, cookieStore))
+		r.Get("/services/{service}", consoleServiceHandler(dbPool, cookieStore))
+		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
+		r.Post("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
+		r.Get("/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
+		r.Get("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
+		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
+		r.Get("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Post("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
 
 	// Console login related routes
