@@ -19,7 +19,7 @@ require (
 	github.com/stapelberg/postgrestest v0.0.0-20241116183525-c42666fa9681
 	github.com/testcontainers/testcontainers-go v0.35.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.31.0
+	golang.org/x/crypto v0.32.0
 	golang.org/x/oauth2 v0.21.0
 )
 
@@ -40,7 +40,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect
-	github.com/go-jose/go-jose/v4 v4.0.2 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -98,7 +98,7 @@ require (
 	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
