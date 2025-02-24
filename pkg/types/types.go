@@ -12,6 +12,7 @@ type Service struct {
 	Name    string      `json:"name" example:"service 1" doc:"name of service"`
 	OrgID   pgtype.UUID `json:"org_id" doc:"ID of related organization"`
 	OrgName string      `json:"org_name" doc:"Name of related organization"`
+	UID     int64       `json:"uid" doc:"Process UID allocated to this service"`
 }
 
 type ServiceVersion struct {

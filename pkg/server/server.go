@@ -1880,12 +1880,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, services.uid, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, services.uid, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
