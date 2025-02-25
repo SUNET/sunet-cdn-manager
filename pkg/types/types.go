@@ -38,8 +38,8 @@ type ServiceVersionVCL struct {
 type ServiceVersionConfig struct {
 	ServiceVersion
 	VclSteps
-	Domains []DomainString `json:"domains" doc:"The domains used by the VCL"`
-	Origins []Origin       `json:"origins" doc:"The origins used by the VCL"`
+	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 type Origin struct {
@@ -52,18 +52,18 @@ type Origin struct {
 // https://varnish-cache.org/docs/trunk/reference/vcl-step.html
 // Fields are pointers to strings since they can all potentially be NULL in the database.
 type VclSteps struct {
-	VclRecv            *string `json:"vcl_recv,omitempty" doc:"The vcl_recv content" schema:"vcl_recv" validate:"omitnil,min=1,max=63"`
-	VclPipe            *string `json:"vcl_pipe,omitempty" doc:"The vcl_pipe content" schema:"vcl_pipe" validate:"omitnil,min=1,max=63"`
-	VclPass            *string `json:"vcl_pass,omitempty" doc:"The vcl_pass content" schema:"vcl_pass" validate:"omitnil,min=1,max=63"`
-	VclHash            *string `json:"vcl_hash,omitempty" doc:"The vcl_hash content" schema:"vcl_hash" validate:"omitnil,min=1,max=63"`
-	VclPurge           *string `json:"vcl_purge,omitempty" doc:"The vcl_purge content" schema:"vcl_purge" validate:"omitnil,min=1,max=63"`
-	VclMiss            *string `json:"vcl_miss,omitempty" doc:"The vcl_miss content" schema:"vcl_miss" validate:"omitnil,min=1,max=63"`
-	VclHit             *string `json:"vcl_hit,omitempty" doc:"The vcl_hit content" schema:"vcl_hit" validate:"omitnil,min=1,max=63"`
-	VclDeliver         *string `json:"vcl_deliver,omitempty" doc:"The vcl_deliver content" schema:"vcl_deliver" validate:"omitnil,min=1,max=63"`
-	VclSynth           *string `json:"vcl_synth,omitempty" doc:"The vcl_synth content" schema:"vcl_synth" validate:"omitnil,min=1,max=63"`
-	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"omitnil,min=1,max=63"`
-	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=63"`
-	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=63"`
+	VclRecv            *string `json:"vcl_recv,omitempty" doc:"The vcl_recv content" schema:"vcl_recv" validate:"omitnil,min=1,max=2048"`
+	VclPipe            *string `json:"vcl_pipe,omitempty" doc:"The vcl_pipe content" schema:"vcl_pipe" validate:"omitnil,min=1,max=2048"`
+	VclPass            *string `json:"vcl_pass,omitempty" doc:"The vcl_pass content" schema:"vcl_pass" validate:"omitnil,min=1,max=2048"`
+	VclHash            *string `json:"vcl_hash,omitempty" doc:"The vcl_hash content" schema:"vcl_hash" validate:"omitnil,min=1,max=2048"`
+	VclPurge           *string `json:"vcl_purge,omitempty" doc:"The vcl_purge content" schema:"vcl_purge" validate:"omitnil,min=1,max=2048"`
+	VclMiss            *string `json:"vcl_miss,omitempty" doc:"The vcl_miss content" schema:"vcl_miss" validate:"omitnil,min=1,max=2048"`
+	VclHit             *string `json:"vcl_hit,omitempty" doc:"The vcl_hit content" schema:"vcl_hit" validate:"omitnil,min=1,max=2048"`
+	VclDeliver         *string `json:"vcl_deliver,omitempty" doc:"The vcl_deliver content" schema:"vcl_deliver" validate:"omitnil,min=1,max=2048"`
+	VclSynth           *string `json:"vcl_synth,omitempty" doc:"The vcl_synth content" schema:"vcl_synth" validate:"omitnil,min=1,max=2048"`
+	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"omitnil,min=1,max=2048"`
+	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=2048"`
+	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=2048"`
 }
 
 type VclStepKeys struct {

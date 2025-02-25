@@ -70,6 +70,10 @@ const (
 
 	consolePath  = "/console"
 	api403String = "not allowed to access resource"
+
+	// The backend names used by varnish to communicate with haproxy
+	varnishBackendHTTP  = "haproxy_http"
+	varnishBackendHTTPS = "haproxy_https"
 )
 
 var (
@@ -105,9 +109,14 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 }
 
 func (vclValidator *vclValidatorClient) validateServiceVersionConfig(svc types.ServiceVersionConfig) error {
+	err := validate.Struct(svc)
+	if err != nil {
+		return fmt.Errorf("unable to validate svc struct: %w", err)
+	}
+
 	vcl, err := generateCompleteServiceVcl(svc)
 	if err != nil {
-		return fmt.Errorf("unable to validate svc: %w", err)
+		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
 
 	r := strings.NewReader(vcl)
@@ -2777,7 +2786,7 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 	return activatedServiceVersionID, nil
 }
 
-func writeVclRecv(b *strings.Builder, domains []types.DomainString, vclRecv *string) error {
+func writeVclRecv(b *strings.Builder, domains []types.DomainString, vclRecv *string, haProxyHTTP bool, haProxyHTTPS bool) error {
 	b.WriteString("sub vcl_recv {\n")
 	if len(domains) > 0 {
 		b.WriteString("  if (")
@@ -2791,6 +2800,22 @@ func writeVclRecv(b *strings.Builder, domains []types.DomainString, vclRecv *str
 		b.WriteString(" {\n")
 		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
 		b.WriteString("  }\n")
+
+		b.WriteString("if (proxy.is_ssl()) {\n")
+		if haProxyHTTPS {
+			b.WriteString("  set req.http.X-Forwarded-Proto = \"https\";\n")
+			fmt.Fprintf(b, "  set req.backend_hint = %s;\n", varnishBackendHTTPS)
+		} else {
+			b.WriteString("  return(synth(400,\"HTTPS request but no HTTPS origin available.\"));\n")
+		}
+		b.WriteString("} else {\n")
+		if haProxyHTTP {
+			b.WriteString("  set req.http.X-Forwarded-Proto = \"http\";\n")
+			fmt.Fprintf(b, "  set req.backend_hint = %s;\n", varnishBackendHTTP)
+		} else {
+			b.WriteString("  return(synth(400,\"HTTP request but no HTTP origin available.\"));\n")
+		}
+		b.WriteString("}\n")
 	}
 
 	if vclRecv != nil {
@@ -2834,34 +2859,48 @@ func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) 
 func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) {
 	var b strings.Builder
 
+	// Detect what haproxy backends should be present
+	haProxyHTTP := false
+	haProxyHTTPS := false
+	for _, origin := range svc.Origins {
+		// If both have been found we do not need to look at more
+		// backends
+		if haProxyHTTP && haProxyHTTPS {
+			break
+		}
+
+		if origin.TLS {
+			haProxyHTTPS = true
+		} else {
+			haProxyHTTP = true
+		}
+	}
+
+	if !haProxyHTTP && !haProxyHTTPS {
+		return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
+	}
+
 	b.WriteString("vcl 4.1;\n")
 	b.WriteString("import std;\n")
 	b.WriteString("import proxy;\n")
-	b.WriteString("\n")
-	b.WriteString("backend haproxy_https {\n")
-	b.WriteString("  .path = \"/shared/haproxy_https\";\n")
-	b.WriteString("}\n")
-	b.WriteString("backend haproxy_http {\n")
-	b.WriteString("  .path = \"/shared/haproxy_http\";\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
 
-	for i, origin := range svc.Origins {
-		b.WriteString(fmt.Sprintf("backend backend_%d {\n", i))
-		b.WriteString(fmt.Sprintf("  .host = \"%s\";\n", origin.Host))
-		b.WriteString(fmt.Sprintf("  .port = \"%d\";\n", origin.Port))
-		if origin.TLS {
-			b.WriteString("  .via = haproxy_https;\n")
-		} else {
-			b.WriteString("  .via = haproxy_http;\n")
-		}
+	if haProxyHTTPS {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "backend %s {\n", varnishBackendHTTPS)
+		b.WriteString("  .path = \"/shared/haproxy_https\";\n")
 		b.WriteString("}\n")
 	}
-	if len(svc.Origins) > 0 {
+
+	if haProxyHTTP {
 		b.WriteString("\n")
+		fmt.Fprintf(&b, "backend %s {\n", varnishBackendHTTP)
+		b.WriteString("  .path = \"/shared/haproxy_http\";\n")
+		b.WriteString("}\n")
 	}
 
-	err := writeVclRecv(&b, svc.Domains, svc.VclRecv)
+	b.WriteString("\n")
+
+	err := writeVclRecv(&b, svc.Domains, svc.VclRecv, haProxyHTTP, haProxyHTTPS)
 	if err != nil {
 		return "", err
 	}

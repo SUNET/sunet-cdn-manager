@@ -115,8 +115,13 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO service_domains (id, service_version_id, domain) VALUES ('00000008-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', 'www.example.com')",
 
 		// Origins
+		// org1-service3
 		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '198.51.100.10', 80, false)",
 		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '198.51.100.11', 443, true)",
+		// org1-service2
+		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000002', '198.51.100.10', 80, false)",
+		// org1-service1
+		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000004', '00000004-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
 
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
