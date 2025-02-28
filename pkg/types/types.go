@@ -30,12 +30,8 @@ type ServiceVersion struct {
 }
 
 type ServiceVersionVCL struct {
-	ServiceID   pgtype.UUID `json:"service_id" doc:"ID of related service"`
-	ServiceName string      `json:"service_name" doc:"Name of related service"`
-	OrgID       pgtype.UUID `json:"org_id" doc:"ID of related organization"`
-	OrgName     string      `json:"org_name" doc:"Name of related organization"`
-	Version     int64       `json:"version" example:"1" doc:"Version of the service"`
-	VCL         string      `json:"vcl" example:"varnish vcl" doc:"VCL content"`
+	ServiceVersion
+	VCL string `json:"vcl" example:"varnish vcl" doc:"VCL content"`
 }
 
 // A combined type of all related data for a service version

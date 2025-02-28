@@ -3688,12 +3688,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			}
 
 			rBody := types.ServiceVersionVCL{
-				ServiceID:   svc.ServiceID,
-				ServiceName: svc.ServiceName,
-				OrgID:       svc.OrgID,
-				OrgName:     svc.OrgName,
-				Version:     svc.Version,
-				VCL:         vcl,
+				ServiceVersion: svc.ServiceVersion,
+				VCL:            vcl,
 			}
 
 			resp := &serviceVersionVCLOutput{
