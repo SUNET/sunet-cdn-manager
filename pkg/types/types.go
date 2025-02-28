@@ -6,6 +6,10 @@ import (
 )
 
 // Types that can be shared across the other packages
+type Org struct {
+	ID   pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
+	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
+}
 
 type Service struct {
 	ID      pgtype.UUID `json:"id" doc:"ID of service"`

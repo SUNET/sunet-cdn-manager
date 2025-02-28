@@ -1775,7 +1775,7 @@ func updateUser(dbPool *pgxpool.Pool, ad authData, nameOrID string, org *string,
 	return u, nil
 }
 
-func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
+func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]types.Org, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -1792,7 +1792,7 @@ func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]org, error) {
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByName[org])
+	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Org])
 	if err != nil {
 		return nil, fmt.Errorf("unable to CollectRows for orgs: %w", err)
 	}
@@ -1847,8 +1847,8 @@ func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID 
 	return sAddrs, nil
 }
 
-func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (org, error) {
-	o := org{}
+func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (types.Org, error) {
+	o := types.Org{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
@@ -1866,7 +1866,7 @@ func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) (org, erro
 		return nil
 	})
 	if err != nil {
-		return org{}, fmt.Errorf("selectOrg: transaction failed: %w", err)
+		return types.Org{}, fmt.Errorf("selectOrg: transaction failed: %w", err)
 	}
 
 	return o, nil
@@ -3815,11 +3815,6 @@ type usersOutput struct {
 	Body []user
 }
 
-type org struct {
-	ID   pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
-	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
-}
-
 type serviceAddresses struct {
 	ServiceID          pgtype.UUID      `json:"service_id" doc:"ID of service, UUIDv4"`
 	AllocatedAddresses []serviceAddress `json:"allocated_addresses" doc:"list of addresses allocated to the org"`
@@ -3830,11 +3825,11 @@ type serviceAddress struct {
 }
 
 type orgOutput struct {
-	Body org
+	Body types.Org
 }
 
 type orgsOutput struct {
-	Body []org
+	Body []types.Org
 }
 
 type orgIPsOutput struct {
