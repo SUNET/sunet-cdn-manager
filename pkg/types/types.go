@@ -20,13 +20,13 @@ type Service struct {
 }
 
 type ServiceVersion struct {
-	ID          pgtype.UUID `json:"id"`
+	ID          pgtype.UUID `json:"id" doc:"ID of the service version"`
 	ServiceID   pgtype.UUID `json:"service_id" doc:"ID of related service"`
 	ServiceName string      `json:"service_name" doc:"Name of related service"`
 	OrgID       pgtype.UUID `json:"org_id" doc:"ID of related organization"`
 	OrgName     string      `json:"org_name" doc:"Name of related organization"`
 	Version     int64       `json:"version" example:"1" doc:"Version of the service"`
-	Active      bool        `json:"active" example:"true" doc:"If the VCL is active"`
+	Active      bool        `json:"active" example:"true" doc:"If the version is active"`
 }
 
 type ServiceVersionVCL struct {
@@ -64,6 +64,38 @@ type VclSteps struct {
 	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"omitnil,min=1,max=2048"`
 	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=2048"`
 	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=2048"`
+}
+
+// Nested struct containing complete config for a cache node optimized for easy
+// iteration over the contents and minimal duplication of fields.
+//
+// Map key is string rather than pgtype.UUID to support JSON marshalling.
+// Trying to use pgtype.UUID directly as a map key leads to
+// "json: unsupported type: map[pgtype.UUID]string"
+// because pgtype.UUID does not implement encoding.TextMarshaler as expected by
+// encoding/json.
+type CacheNodeConfig struct {
+	Orgs map[string]OrgWithServices `json:"orgs"`
+}
+
+type OrgWithServices struct {
+	ID       pgtype.UUID                    `json:"id"`
+	Name     string                         `json:"name"`
+	Services map[string]ServiceWithVersions `json:"services"`
+}
+
+type ServiceWithVersions struct {
+	ID              pgtype.UUID                        `json:"id"`
+	Name            string                             `json:"name"`
+	UID             int64                              `json:"uid"`
+	ServiceVersions map[int64]ServiceVersionWithConfig `json:"service_versions"`
+}
+
+type ServiceVersionWithConfig struct {
+	ID      pgtype.UUID `json:"id"`
+	Version int64       `json:"version" example:"1" doc:"Version of the service"`
+	Active  bool        `json:"active" example:"true" doc:"If the version is active"`
+	VCL     string      `json:"vcl"`
 }
 
 type VclStepKeys struct {

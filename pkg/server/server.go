@@ -114,7 +114,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(svc types.S
 		return fmt.Errorf("unable to validate svc struct: %w", err)
 	}
 
-	vcl, err := generateCompleteServiceVcl(svc)
+	vcl, err := generateCompleteServiceVcl(svc.Origins, svc.Domains, svc.VclSteps)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -2347,6 +2347,157 @@ func deleteService(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID str
 	return serviceID, nil
 }
 
+func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeConfig, error) {
+	if !ad.Superuser {
+		return types.CacheNodeConfig{}, cdnerrors.ErrForbidden
+	}
+
+	// Usage of JOIN with subqueries based on
+	// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
+	rows, err := dbPool.Query(
+		context.Background(),
+		`SELECT
+                               orgs.id AS org_id,
+			       orgs.name AS org_name,
+                               services.id AS service_id,
+                               services.name AS service_name,
+                               services.uid AS service_uid,
+                               service_versions.id AS service_version_id,
+                               service_versions.version,
+                               service_versions.active,
+                               service_vcls.vcl_recv,
+                               service_vcls.vcl_pipe,
+                               service_vcls.vcl_pass,
+                               service_vcls.vcl_hash,
+                               service_vcls.vcl_purge,
+                               service_vcls.vcl_miss,
+                               service_vcls.vcl_hit,
+                               service_vcls.vcl_deliver,
+                               service_vcls.vcl_synth,
+                               service_vcls.vcl_backend_fetch,
+                               service_vcls.vcl_backend_response,
+                               service_vcls.vcl_backend_error,
+                               agg_domains.domains,
+                               agg_origins.origins
+                       FROM
+                               orgs
+                               JOIN services ON orgs.id = services.org_id
+                               JOIN service_versions ON services.id = service_versions.service_id
+                               JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
+                               JOIN (
+                                       SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
+                                       FROM service_domains
+                                       GROUP BY service_version_id
+                               ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
+                               JOIN (
+                                       SELECT service_version_id, array_agg((host, port, tls) ORDER BY host, port) AS origins
+                                       FROM service_origins
+                                       GROUP BY service_version_id
+                               ) AS agg_origins ON agg_origins.service_version_id = service_versions.id
+                       ORDER BY orgs.name`,
+	)
+	if err != nil {
+		return types.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config as superuser: %w", err)
+	}
+
+	cnc := types.CacheNodeConfig{
+		Orgs: map[string]types.OrgWithServices{},
+	}
+
+	var orgID, serviceID, serviceVersionID pgtype.UUID
+	var orgName, serviceName string
+	var serviceUID, serviceVersion int64
+	var serviceVersionActive bool
+	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
+	var domains []types.DomainString
+	var origins []types.Origin
+	_, err = pgx.ForEachRow(
+		rows,
+		[]any{
+			&orgID,
+			&orgName,
+			&serviceID,
+			&serviceName,
+			&serviceUID,
+			&serviceVersionID,
+			&serviceVersion,
+			&serviceVersionActive,
+			&vclRecv,
+			&vclPipe,
+			&vclPass,
+			&vclHash,
+			&vclPurge,
+			&vclMiss,
+			&vclHit,
+			&vclDeliver,
+			&vclSynth,
+			&vclBackendFetch,
+			&vclBackendResponse,
+			&vclBackendError,
+			&domains,
+			&origins,
+		},
+		func() error {
+			if _, orgExists := cnc.Orgs[orgID.String()]; !orgExists {
+				cnc.Orgs[orgID.String()] = types.OrgWithServices{
+					ID:       orgID,
+					Name:     orgName,
+					Services: map[string]types.ServiceWithVersions{},
+				}
+			}
+
+			if _, serviceExists := cnc.Orgs[orgID.String()].Services[serviceID.String()]; !serviceExists {
+				cnc.Orgs[orgID.String()].Services[serviceID.String()] = types.ServiceWithVersions{
+					ID:              serviceID,
+					Name:            serviceName,
+					UID:             serviceUID,
+					ServiceVersions: map[int64]types.ServiceVersionWithConfig{},
+				}
+			}
+
+			// We only expect to see a given service version once for a given service
+			if _, serviceVersionExists := cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion]; serviceVersionExists {
+				return fmt.Errorf("%s, %s: saw service version %d a second time, this is unpexpected", orgName, serviceName, serviceVersion)
+			}
+
+			vcl, err := generateCompleteServiceVcl(
+				origins,
+				domains,
+				types.VclSteps{
+					VclRecv:            vclRecv,
+					VclPipe:            vclPipe,
+					VclPass:            vclPass,
+					VclHash:            vclHash,
+					VclPurge:           vclPurge,
+					VclMiss:            vclMiss,
+					VclHit:             vclHit,
+					VclDeliver:         vclDeliver,
+					VclSynth:           vclSynth,
+					VclBackendFetch:    vclBackendFetch,
+					VclBackendResponse: vclBackendResponse,
+					VclBackendError:    vclBackendError,
+				})
+			if err != nil {
+				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
+			}
+
+			cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion] = types.ServiceVersionWithConfig{
+				ID:      serviceVersionID,
+				Version: serviceVersion,
+				Active:  serviceVersionActive,
+				VCL:     vcl,
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return types.CacheNodeConfig{}, fmt.Errorf("ForEachRow of cache node config failed: %w", err)
+	}
+
+	return cnc, nil
+}
+
 func selectServiceVersions(dbPool *pgxpool.Pool, ad authData, serviceNameOrID string, orgNameOrID string) ([]types.ServiceVersion, error) {
 	var rows pgx.Rows
 
@@ -2856,13 +3007,13 @@ func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) 
 	return nil
 }
 
-func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) {
+func generateCompleteServiceVcl(origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
 	var b strings.Builder
 
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
-	for _, origin := range svc.Origins {
+	for _, origin := range origins {
 		// If both have been found we do not need to look at more
 		// backends
 		if haProxyHTTP && haProxyHTTPS {
@@ -2900,51 +3051,51 @@ func generateCompleteServiceVcl(svc types.ServiceVersionConfig) (string, error) 
 
 	b.WriteString("\n")
 
-	err := writeVclRecv(&b, svc.Domains, svc.VclRecv, haProxyHTTP, haProxyHTTPS)
+	err := writeVclRecv(&b, domains, vclSteps.VclRecv, haProxyHTTP, haProxyHTTPS)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_pipe", svc.VclPipe)
+	err = writeGenericVclSub(&b, "vcl_pipe", vclSteps.VclPipe)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_pass", svc.VclPass)
+	err = writeGenericVclSub(&b, "vcl_pass", vclSteps.VclPass)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_hash", svc.VclHash)
+	err = writeGenericVclSub(&b, "vcl_hash", vclSteps.VclHash)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_purge", svc.VclPurge)
+	err = writeGenericVclSub(&b, "vcl_purge", vclSteps.VclPurge)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_miss", svc.VclMiss)
+	err = writeGenericVclSub(&b, "vcl_miss", vclSteps.VclMiss)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_hit", svc.VclHit)
+	err = writeGenericVclSub(&b, "vcl_hit", vclSteps.VclHit)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_deliver", svc.VclDeliver)
+	err = writeGenericVclSub(&b, "vcl_deliver", vclSteps.VclDeliver)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_synth", svc.VclSynth)
+	err = writeGenericVclSub(&b, "vcl_synth", vclSteps.VclSynth)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_backend_fetch", svc.VclBackendFetch)
+	err = writeGenericVclSub(&b, "vcl_backend_fetch", vclSteps.VclBackendFetch)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_backend_response", svc.VclBackendResponse)
+	err = writeGenericVclSub(&b, "vcl_backend_response", vclSteps.VclBackendResponse)
 	if err != nil {
 		return "", err
 	}
-	err = writeGenericVclSub(&b, "vcl_backend_error", svc.VclBackendError)
+	err = writeGenericVclSub(&b, "vcl_backend_error", vclSteps.VclBackendError)
 	if err != nil {
 		return "", err
 	}
@@ -3681,7 +3832,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, err
 			}
 
-			vcl, err := generateCompleteServiceVcl(svc)
+			vcl, err := generateCompleteServiceVcl(svc.Origins, svc.Domains, svc.VclSteps)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
@@ -3695,6 +3846,32 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			resp := &serviceVersionVCLOutput{
 				Body: rBody,
 			}
+			return resp, nil
+		})
+
+		huma.Get(api, "/v1/cache-node-configs", func(ctx context.Context, _ *struct{},
+		) (*cacheNodeConfigOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
+			}
+
+			cnc, err := selectCacheNodeConfig(dbPool, ad)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				}
+				logger.Err(err).Msg("unable to query cache-version-configs")
+				return nil, err
+			}
+
+			resp := &cacheNodeConfigOutput{
+				Body: cnc,
+			}
+
 			return resp, nil
 		})
 
@@ -3846,6 +4023,10 @@ type serviceVersionOutput struct {
 
 type serviceVersionVCLOutput struct {
 	Body types.ServiceVersionVCL
+}
+
+type cacheNodeConfigOutput struct {
+	Body types.CacheNodeConfig
 }
 
 type serviceVersionsOutput struct {
