@@ -2,7 +2,7 @@
 CREATE TABLE orgs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     service_quota bigint NOT NULL DEFAULT 1
 );
 
@@ -10,7 +10,7 @@ CREATE TABLE services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES orgs(id),
-    name text NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    name text NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     version_counter bigint DEFAULT 0 NOT NULL,
     uid bigint UNIQUE NOT NULL CHECK(uid>=1000000000),
     UNIQUE(org_id, name)
@@ -64,14 +64,14 @@ EXECUTE FUNCTION validate_ip_in_network();
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     superuser boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE auth_providers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$')
 );
 
 CREATE TABLE users (

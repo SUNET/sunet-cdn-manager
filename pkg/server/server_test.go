@@ -1528,6 +1528,13 @@ func TestPostOrganizations(t *testing.T) {
 			addedOrganization: strings.Repeat("a", 63),
 		},
 		{
+			description:       "failed superuser request with invalid DNS label name",
+			username:          "admin",
+			password:          "adminpass1",
+			expectedStatus:    http.StatusUnprocessableEntity,
+			addedOrganization: "admin org",
+		},
+		{
 			description:       "failed superuser request with too short name",
 			username:          "admin",
 			password:          "adminpass1",
@@ -1959,6 +1966,22 @@ func TestPostServices(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			newService:     strings.Repeat("a", 63),
+			org:            "org1",
+		},
+		{
+			description:    "failed superuser request with org as invalid DNS label",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newService:     "new-admin-service",
+			org:            "org 1",
+		},
+		{
+			description:    "failed superuser request with service as invalid DNS label",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newService:     "new admin-service",
 			org:            "org1",
 		},
 		{

@@ -757,15 +757,15 @@ type loginForm struct {
 }
 
 type createServiceForm struct {
-	// Username length validation needs to be kept in sync with the CHECK
+	// Service name length validation needs to be kept in sync with the CHECK
 	// constraints in the service table, see the migrations module.
-	Name string `schema:"name" validate:"min=1,max=63"`
+	Name string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
 }
 
 type createServiceVersionForm struct {
 	types.VclSteps
-	Domains   []types.DomainString `schema:"domains" validate:"dive,min=1,max=63"`
-	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=63"`
+	Domains   []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=63,hostname_rfc1123"`
 	OriginTLS []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
 }
 
@@ -3532,7 +3532,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63"`
+					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 				}
 			},
 			) (*orgOutput, error) {
@@ -3649,8 +3649,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63"`
-					Org  string `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Name string `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Org  string `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 				}
 			},
 			) (*orgOutput, error) {
