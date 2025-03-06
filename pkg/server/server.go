@@ -765,7 +765,7 @@ type createServiceForm struct {
 type createServiceVersionForm struct {
 	types.VclSteps
 	Domains   []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=63,hostname_rfc1123"`
+	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
 	OriginTLS []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
 }
 
