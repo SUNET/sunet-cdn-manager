@@ -46,6 +46,22 @@ Start the server in development mode (disables cookie requirements for HTTPS):
 go run . --config sunet-cdn-manager-dev.toml server --dev
 ```
 
+Add some networks for allocating service addresses from:
+```
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-ipv4-network.json -H "content-type: application/json" http://localhost:8081/api/v1/ip-networks
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-ipv6-network.json -H "content-type: application/json" http://localhost:8081/api/v1/ip-networks
+```
+
+Create an organisation:
+```
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/create-org.json -H "content-type: application/json" http://localhost:8081/api/v1/orgs
+```
+
+Given that a user called `testuser` exists (either a local user created via API or automatically created via keycloak login), assign it to the the org:
+```
+curl -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" http://localhost:8081/api/v1/users/testuser
+```
+
 ### Formatting and linting
 When working with this code at least the following tools are expected to be
 run at the top level directory prior to commiting:
