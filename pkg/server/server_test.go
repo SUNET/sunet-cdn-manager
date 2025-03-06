@@ -62,18 +62,18 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000004', 'org4')",
 
 		// Services
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1', 1000000000 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2', 1000000001 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3', 1000000002 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000010', id, 'org1-service4', 1000000003 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000011', id, 'org1-service5', 1000000004 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000012', id, 'org1-service6', 1000000005 FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1', 1000000006 FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2', 1000000007 FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3', 1000000008 FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1', 1000000009 FROM orgs WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2', 1000000010 FROM orgs WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name, uid) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3', 1000000011 FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1', '(1000010000, 1000019999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2', '(1000020000, 1000029999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3', '(1000030000, 1000039999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000010', id, 'org1-service4', '(1000040000, 1000049999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000011', id, 'org1-service5', '(1000050000, 1000059999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000012', id, 'org1-service6', '(1000060000, 1000069999)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1', '(1000070000, 1000079999)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2', '(1000080000, 1000089999)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3', '(1000090000, 1000099999)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1', '(1000100000, 1000109999)' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2', '(1000110000, 1000119999)' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3', '(1000120000, 1000129999)' FROM orgs WHERE name='org3'",
 
 		// Service versions
 		// org1, last version is active

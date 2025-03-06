@@ -12,8 +12,9 @@ CREATE TABLE services (
     org_id uuid NOT NULL REFERENCES orgs(id),
     name text NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     version_counter bigint DEFAULT 0 NOT NULL,
-    uid bigint UNIQUE NOT NULL CHECK(uid>=1000000000),
-    UNIQUE(org_id, name)
+    uid_range int8range NOT NULL CHECK(uid_range <@ int8range(1000010000, NULL)),
+    UNIQUE(org_id, name),
+    EXCLUDE USING GIST (uid_range WITH &&)
 );
 
 -- https://stackoverflow.com/questions/55283779/prevent-overlapping-values-on-cidr-column-in-postgresql

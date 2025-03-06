@@ -1889,12 +1889,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, services.uid, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range) AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, services.uid, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range) AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
@@ -2266,17 +2266,17 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 			return cdnerrors.ErrServiceQuotaHit
 		}
 
-		// Figure out the next available uid (or default to 1000000000
-		// for the first created service). This SELECT is protected by the FOR
-		// UPDATE select above, so is safe from concurrent service
-		// creation.
-		var nextUID int64
-		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT uid+1 FROM services ORDER BY uid DESC LIMIT 1), 1000000000)").Scan(&nextUID)
+		// Figure out the next available uid range (or default to
+		// 1000010000-1000019999 for the first created service). This
+		// SELECT is protected by the FOR UPDATE select above, so is
+		// safe from concurrent service creation.
+		var uidRange pgtype.Range[pgtype.Int8]
+		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT int8range(upper(uid_range)+1, upper(uid_range)+10000, '[]') FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000019999, '[]'))").Scan(&uidRange)
 		if err != nil {
 			return err
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id, uid) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, nextUID).Scan(&serviceID)
+		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id, uid_range) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, uidRange).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service: %w", err)
 		}
@@ -2361,7 +2361,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 			       orgs.name AS org_name,
                                services.id AS service_id,
                                services.name AS service_name,
-                               services.uid AS service_uid,
+                               services.uid_range,
                                service_versions.id AS service_version_id,
                                service_versions.version,
                                service_versions.active,
@@ -2406,7 +2406,8 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 
 	var orgID, serviceID, serviceVersionID pgtype.UUID
 	var orgName, serviceName string
-	var serviceUID, serviceVersion int64
+	var serviceUIDRange pgtype.Range[pgtype.Int8]
+	var serviceVersion int64
 	var serviceVersionActive bool
 	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
 	var domains []types.DomainString
@@ -2418,7 +2419,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 			&orgName,
 			&serviceID,
 			&serviceName,
-			&serviceUID,
+			&serviceUIDRange,
 			&serviceVersionID,
 			&serviceVersion,
 			&serviceVersionActive,
@@ -2450,7 +2451,8 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 				cnc.Orgs[orgID.String()].Services[serviceID.String()] = types.ServiceWithVersions{
 					ID:              serviceID,
 					Name:            serviceName,
-					UID:             serviceUID,
+					UIDRangeFirst:   serviceUIDRange.Lower.Int64,
+					UIDRangeLast:    serviceUIDRange.Upper.Int64,
 					ServiceVersions: map[int64]types.ServiceVersionWithConfig{},
 				}
 			}

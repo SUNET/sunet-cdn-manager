@@ -12,11 +12,12 @@ type Org struct {
 }
 
 type Service struct {
-	ID      pgtype.UUID `json:"id" doc:"ID of service"`
-	Name    string      `json:"name" example:"service 1" doc:"name of service"`
-	OrgID   pgtype.UUID `json:"org_id" doc:"ID of related organization"`
-	OrgName string      `json:"org_name" doc:"Name of related organization"`
-	UID     int64       `json:"uid" doc:"Process UID allocated to this service"`
+	ID            pgtype.UUID `json:"id" doc:"ID of service"`
+	Name          string      `json:"name" example:"service 1" doc:"name of service"`
+	OrgID         pgtype.UUID `json:"org_id" doc:"ID of related organization"`
+	OrgName       string      `json:"org_name" doc:"Name of related organization"`
+	UIDRangeFirst int64       `json:"uid_range_first" doc:"First process UID allocated to this service" db:"uid_range_first"`
+	UIDRangeEnd   int64       `json:"uid_range_last" doc:"Last UID allocated to this service" db:"uid_range_last"`
 }
 
 type ServiceVersion struct {
@@ -87,7 +88,8 @@ type OrgWithServices struct {
 type ServiceWithVersions struct {
 	ID              pgtype.UUID                        `json:"id"`
 	Name            string                             `json:"name"`
-	UID             int64                              `json:"uid"`
+	UIDRangeFirst   int64                              `json:"uid_range_first"`
+	UIDRangeLast    int64                              `json:"uid_range_last"`
 	ServiceVersions map[int64]ServiceVersionWithConfig `json:"service_versions"`
 }
 
