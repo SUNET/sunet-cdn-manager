@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
@@ -396,9 +397,14 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator)
+	vclTmpl, err := template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("varnish template parsing failed")
+	}
 
-	err = setupHumaAPI(router, dbPool, vclValidator)
+	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator, vclTmpl)
+
+	err = setupHumaAPI(router, dbPool, vclValidator, vclTmpl)
 	if err != nil {
 		return nil, dbPool, err
 	}

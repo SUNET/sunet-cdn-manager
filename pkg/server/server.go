@@ -1,10 +1,10 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"embed"
 	"encoding/base64"
 	"encoding/gob"
 	"errors"
@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 	"time"
 	"unicode"
 
@@ -59,6 +60,9 @@ func init() {
 	schemaDecoder.IgnoreUnknownKeys(true)
 }
 
+//go:embed templates/default.vcl
+var defaultVCLTemplateFS embed.FS
+
 const (
 	// https://www.postgresql.org/docs/current/errcodes-appendix.html
 	// unique_violation: 23505
@@ -70,10 +74,6 @@ const (
 
 	consolePath  = "/console"
 	api403String = "not allowed to access resource"
-
-	// The backend names used by varnish to communicate with haproxy
-	varnishBackendHTTP  = "haproxy_http"
-	varnishBackendHTTPS = "haproxy_https"
 )
 
 var (
@@ -108,13 +108,48 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(svc types.ServiceVersionConfig) error {
-	err := validate.Struct(svc)
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, vclTempl *template.Template, orgNameOrID string, serviceNameOrID string, iSvc types.InputServiceVersion) error {
+	err := validate.Struct(iSvc)
 	if err != nil {
-		return fmt.Errorf("unable to validate svc struct: %w", err)
+		return fmt.Errorf("unable to validate input svc struct: %w", err)
 	}
 
-	vcl, err := generateCompleteServiceVcl(svc.Origins, svc.Domains, svc.VclSteps)
+	// If someone is submitting data to create a new service version it
+	// will not contain what addresses have been allocated to the
+	// service, so we need to enrich the submitted data with this
+	// information in order to be able to construct a complete VCL for
+	// validation.
+	var serviceIPAddrs []netip.Addr
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("looking up org failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("looking up service failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		err = tx.QueryRow(
+			context.Background(),
+			"SELECT array_agg(address ORDER BY address) AS service_ip_addresses FROM service_ip_addresses WHERE service_id = $1",
+			serviceIdent.id,
+		).Scan(&serviceIPAddrs)
+		if err != nil {
+			logger.Err(err).Msg("looking up service IPs failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("service version validation transaction failed: %w", err)
+	}
+
+	vcl, err := generateCompleteVcl(vclTempl, iSvc.SNIHostname, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -461,7 +496,7 @@ func camelCaseToSnakeCase(s string) string {
 	return b.String()
 }
 
-func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, vclTempl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -526,12 +561,13 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			// We do not allow empty strings for VCL columns in the
 			// database (they should be NULL) so reset any VCL
 			// string pointer fields back to nil if they are
-			// pointing to empty strings.
+			// pointing to empty strings, also do the same for
+			// SNIHostname which can also be NULL.
 			// https://github.com/gorilla/schema/issues/161
 			val := reflect.ValueOf(&formData)
 			structVal := val.Elem()
 			for _, field := range reflect.VisibleFields(structVal.Type()) {
-				if _, ok := vclSK.FieldToKey[field.Name]; ok {
+				if _, ok := vclSK.FieldToKey[field.Name]; ok || field.Name == "SNIHostname" {
 					fieldVal := structVal.FieldByIndex(field.Index)
 					if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
 						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
@@ -574,8 +610,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					TLS:  formData.OriginTLS[i],
 				})
 			}
-
-			_, err = insertServiceVersion(logger, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
+			_, err = insertServiceVersion(logger, vclTempl, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps, formData.SNIHostname)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -764,9 +799,10 @@ type createServiceForm struct {
 
 type createServiceVersionForm struct {
 	types.VclSteps
-	Domains   []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins   []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
-	OriginTLS []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
+	Domains     []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins     []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
+	OriginTLS   []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
+	SNIHostname *string              `schema:"sni-hostname" validate:"omitnil,min=1,max=253"`
 }
 
 type activateServiceVersionForm struct {
@@ -2347,7 +2383,17 @@ func deleteService(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID str
 	return serviceID, nil
 }
 
-func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeConfig, error) {
+func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
+	for _, addr := range addrs {
+		if addr.Is4() {
+			return addr, nil
+		}
+	}
+
+	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
+}
+
+func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, vclTempl *template.Template) (types.CacheNodeConfig, error) {
 	if !ad.Superuser {
 		return types.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
@@ -2365,6 +2411,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
                                service_versions.id AS service_version_id,
                                service_versions.version,
                                service_versions.active,
+                               service_versions.sni_hostname,
                                service_vcls.vcl_recv,
                                service_vcls.vcl_pipe,
                                service_vcls.vcl_pass,
@@ -2377,6 +2424,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
                                service_vcls.vcl_backend_fetch,
                                service_vcls.vcl_backend_response,
                                service_vcls.vcl_backend_error,
+                               agg_service_ip_addresses.service_ip_addresses,
                                agg_domains.domains,
                                agg_origins.origins
                        FROM
@@ -2384,6 +2432,11 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
                                JOIN services ON orgs.id = services.org_id
                                JOIN service_versions ON services.id = service_versions.service_id
                                JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
+			       JOIN (
+					SELECT service_id, array_agg(address ORDER BY address) as service_ip_addresses
+					FROM service_ip_addresses
+                                        GROUP BY service_id
+				) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
                                JOIN (
                                        SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
                                        FROM service_domains
@@ -2405,10 +2458,12 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 	}
 
 	var orgID, serviceID, serviceVersionID pgtype.UUID
+	var serviceIPAddresses []netip.Addr
 	var orgName, serviceName string
 	var serviceUIDRange pgtype.Range[pgtype.Int8]
 	var serviceVersion int64
 	var serviceVersionActive bool
+	var serviceVersionSNIHostname *string
 	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
 	var domains []types.DomainString
 	var origins []types.Origin
@@ -2423,6 +2478,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 			&serviceVersionID,
 			&serviceVersion,
 			&serviceVersionActive,
+			&serviceVersionSNIHostname,
 			&vclRecv,
 			&vclPipe,
 			&vclPass,
@@ -2435,6 +2491,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 			&vclBackendFetch,
 			&vclBackendResponse,
 			&vclBackendError,
+			&serviceIPAddresses,
 			&domains,
 			&origins,
 		},
@@ -2462,7 +2519,10 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData) (types.CacheNodeCo
 				return fmt.Errorf("%s, %s: saw service version %d a second time, this is unpexpected", orgName, serviceName, serviceVersion)
 			}
 
-			vcl, err := generateCompleteServiceVcl(
+			vcl, err := generateCompleteVcl(
+				vclTempl,
+				serviceVersionSNIHostname,
+				serviceIPAddresses,
 				origins,
 				domains,
 				types.VclSteps{
@@ -2605,6 +2665,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 				service_versions.id,
 				service_versions.version,
 				service_versions.active,
+				service_versions.sni_hostname,
 				service_vcls.vcl_recv,
 				service_vcls.vcl_pipe,
 				service_vcls.vcl_pass,
@@ -2617,6 +2678,11 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 				service_vcls.vcl_backend_fetch,
 				service_vcls.vcl_backend_response,
 				service_vcls.vcl_backend_error,
+				(SELECT
+					array_agg(address ORDER BY address)
+					FROM service_ip_addresses
+					WHERE service_id = services.id
+				) AS service_ip_addresses,
 				(SELECT
 					array_agg(domain ORDER BY domain)
 					FROM service_domains
@@ -2822,7 +2888,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, vclTempl *template.Template, ad authData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2831,11 +2897,19 @@ func insertServiceVersion(logger *zerolog.Logger, ad authData, dbPool *pgxpool.P
 		}
 	}
 
-	err := vclValidator.validateServiceVersionConfig(types.ServiceVersionConfig{
-		VclSteps: vcls,
-		Origins:  origins,
-		Domains:  domains,
-	})
+	err := vclValidator.validateServiceVersionConfig(
+		dbPool,
+		logger,
+		vclTempl,
+		orgNameOrID,
+		serviceNameOrID,
+		types.InputServiceVersion{
+			VclSteps:    vcls,
+			Origins:     origins,
+			Domains:     domains,
+			SNIHostname: sniHostname,
+		},
+	)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
 	}
@@ -2939,78 +3013,22 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 	return activatedServiceVersionID, nil
 }
 
-func writeVclRecv(b *strings.Builder, domains []types.DomainString, vclRecv *string, haProxyHTTP bool, haProxyHTTPS bool) error {
-	b.WriteString("sub vcl_recv {\n")
-	if len(domains) > 0 {
-		b.WriteString("  if (")
-		for i, domain := range domains {
-			if i > 0 {
-				b.WriteString(" && ")
-			}
-			fmt.Fprintf(b, "req.http.host != \"%s\"", domain)
-		}
-		b.WriteString(")")
-		b.WriteString(" {\n")
-		b.WriteString("    return(synth(400,\"Unknown Host header.\"));\n")
-		b.WriteString("  }\n")
-
-		b.WriteString("if (proxy.is_ssl()) {\n")
-		if haProxyHTTPS {
-			b.WriteString("  set req.http.X-Forwarded-Proto = \"https\";\n")
-			fmt.Fprintf(b, "  set req.backend_hint = %s;\n", varnishBackendHTTPS)
-		} else {
-			b.WriteString("  return(synth(400,\"HTTPS request but no HTTPS origin available.\"));\n")
-		}
-		b.WriteString("} else {\n")
-		if haProxyHTTP {
-			b.WriteString("  set req.http.X-Forwarded-Proto = \"http\";\n")
-			fmt.Fprintf(b, "  set req.backend_hint = %s;\n", varnishBackendHTTP)
-		} else {
-			b.WriteString("  return(synth(400,\"HTTP request but no HTTP origin available.\"));\n")
-		}
-		b.WriteString("}\n")
-	}
-
-	if vclRecv != nil {
-		b.WriteString("  # vcl_recv content from database\n")
-		scanner := bufio.NewScanner(strings.NewReader(*vclRecv))
-		for scanner.Scan() {
-			if scanner.Text() != "" {
-				b.WriteString("  " + scanner.Text() + "\n")
-			} else {
-				b.WriteString("\n")
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("scanning vcl_recv failed: %w", err)
-		}
-	}
-	b.WriteString("}\n")
-	return nil
+type varnishVCLInput struct {
+	VCLVersion   string
+	Modules      []string
+	Domains      []types.DomainString
+	HTTPSEnabled bool
+	HTTPEnabled  bool
+	ServiceIPv4  netip.Addr
+	SNIHostname  *string
+	VCLSteps     types.VclSteps
 }
 
-func writeGenericVclSub(b *strings.Builder, subName string, vclContent *string) error {
-	if vclContent != nil {
-		fmt.Fprintf(b, "sub %s {\n", subName)
-		fmt.Fprintf(b, "  # %s content from database\n", subName)
-		scanner := bufio.NewScanner(strings.NewReader(*vclContent))
-		for scanner.Scan() {
-			if scanner.Text() != "" {
-				b.WriteString("  " + scanner.Text() + "\n")
-			} else {
-				b.WriteString("\n")
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("scanning %s failed: %w", subName, err)
-		}
-		b.WriteString("}\n")
+func generateCompleteVcl(tmpl *template.Template, sniHostname *string, serviceIPAddresses []netip.Addr, origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
+	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
+	if err != nil {
+		return "", errors.New("no IPv4 address allocated to service")
 	}
-	return nil
-}
-
-func generateCompleteServiceVcl(origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
-	var b strings.Builder
 
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
@@ -3033,73 +3051,25 @@ func generateCompleteServiceVcl(origins []types.Origin, domains []types.DomainSt
 		return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
 	}
 
-	b.WriteString("vcl 4.1;\n")
-	b.WriteString("import std;\n")
-	b.WriteString("import proxy;\n")
-
-	if haProxyHTTPS {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "backend %s {\n", varnishBackendHTTPS)
-		b.WriteString("  .path = \"/shared/haproxy_https\";\n")
-		b.WriteString("}\n")
+	vvc := varnishVCLInput{
+		VCLVersion: "4.1",
+		Modules: []string{
+			"std",
+			"proxy",
+		},
+		Domains:      domains,
+		ServiceIPv4:  serviceIPv4Address,
+		HTTPSEnabled: haProxyHTTPS,
+		HTTPEnabled:  haProxyHTTP,
+		SNIHostname:  sniHostname,
+		VCLSteps:     vclSteps,
 	}
 
-	if haProxyHTTP {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "backend %s {\n", varnishBackendHTTP)
-		b.WriteString("  .path = \"/shared/haproxy_http\";\n")
-		b.WriteString("}\n")
-	}
+	var b strings.Builder
 
-	b.WriteString("\n")
-
-	err := writeVclRecv(&b, domains, vclSteps.VclRecv, haProxyHTTP, haProxyHTTPS)
+	err = tmpl.Execute(&b, vvc)
 	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_pipe", vclSteps.VclPipe)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_pass", vclSteps.VclPass)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_hash", vclSteps.VclHash)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_purge", vclSteps.VclPurge)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_miss", vclSteps.VclMiss)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_hit", vclSteps.VclHit)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_deliver", vclSteps.VclDeliver)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_synth", vclSteps.VclSynth)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_fetch", vclSteps.VclBackendFetch)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_response", vclSteps.VclBackendResponse)
-	if err != nil {
-		return "", err
-	}
-	err = writeGenericVclSub(&b, "vcl_backend_error", vclSteps.VclBackendError)
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute template: %w", err)
 	}
 
 	return b.String(), nil
@@ -3163,7 +3133,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipN
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, vclTempl *template.Template) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -3196,8 +3166,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get("/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
-		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator))
+		r.Get("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, vclTempl))
+		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, vclTempl))
 		r.Get("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
@@ -3291,7 +3261,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, vclTempl *template.Template) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -3729,10 +3699,11 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
 					types.VclSteps
-					Org     string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-					Domains []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active  bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					Org         string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Domains     []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins     []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active      bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					SNIHostname *string              `json:"sni_hostname,omitempty" doc:"Name expected in certificate presented by origin server"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -3743,7 +3714,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, vclTempl, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps, input.Body.SNIHostname)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -3834,7 +3805,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, err
 			}
 
-			vcl, err := generateCompleteServiceVcl(svc.Origins, svc.Domains, svc.VclSteps)
+			vcl, err := generateCompleteVcl(vclTempl, svc.SNIHostname, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
@@ -3860,7 +3831,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
 			}
 
-			cnc, err := selectCacheNodeConfig(dbPool, ad)
+			cnc, err := selectCacheNodeConfig(dbPool, ad, vclTempl)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -4422,9 +4393,14 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 
 	vclValidator := newVclValidator(vclValidationURL)
 
-	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator)
+	vclTmpl, err := template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	if err != nil {
+		panic(err)
+	}
 
-	err = setupHumaAPI(router, dbPool, vclValidator)
+	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator, vclTmpl)
+
+	err = setupHumaAPI(router, dbPool, vclValidator, vclTmpl)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}

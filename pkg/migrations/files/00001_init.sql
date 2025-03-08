@@ -65,14 +65,14 @@ EXECUTE FUNCTION validate_ip_in_network();
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label_name CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     superuser boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE auth_providers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$')
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label_name CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$')
 );
 
 CREATE TABLE users (
@@ -81,7 +81,7 @@ CREATE TABLE users (
     org_id uuid REFERENCES orgs(id),
     role_id uuid NOT NULL REFERENCES roles(id),
     auth_provider_id uuid NOT NULL references auth_providers(id),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty CHECK(length(name)>=1 AND length(name)<=63)
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_name CHECK(length(name)>=1 AND length(name)<=63)
 );
 
 CREATE TABLE gorilla_session_keys (
@@ -126,6 +126,7 @@ CREATE TABLE service_versions (
     service_id uuid NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     version bigint NOT NULL,
     active boolean DEFAULT false NOT NULL,
+    sni_hostname text CONSTRAINT non_empty_sni_hostname CHECK(length(sni_hostname)>=1 AND length(sni_hostname)<=253),
     UNIQUE(service_id, version)
 );
 -- https://dba.stackexchange.com/questions/197562/constraint-one-boolean-row-is-true-all-other-rows-false
@@ -135,7 +136,7 @@ CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
-    domain text NOT NULL CONSTRAINT non_empty CHECK(length(domain)>=1 AND length(domain)<=253),
+    domain text NOT NULL CONSTRAINT non_empty_domain CHECK(length(domain)>=1 AND length(domain)<=253),
     UNIQUE(service_version_id, domain)
 );
 
@@ -143,7 +144,7 @@ CREATE TABLE service_origins (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
-    host text NOT NULL CONSTRAINT non_empty CHECK(length(host)>=1 AND length(host)<=253),
+    host text NOT NULL CONSTRAINT non_empty_host CHECK(length(host)>=1 AND length(host)<=253),
     port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
     UNIQUE(service_version_id, host, port)

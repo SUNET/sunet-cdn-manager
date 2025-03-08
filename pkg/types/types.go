@@ -1,6 +1,8 @@
 package types
 
 import (
+	"net/netip"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -39,8 +41,19 @@ type ServiceVersionVCL struct {
 type ServiceVersionConfig struct {
 	ServiceVersion
 	VclSteps
-	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	SNIHostname        *string        `json:"sni_hostname" doc:"The name that should be present in the TLS cert presented by TLS origins" validate:"omitnil,min=1,max=253"`
+	ServiceIPAddresses []netip.Addr   `json:"service_ip_addresses" doc:"The IP (v4 and v6) addresses allocated to the service" validate:"min=2"`
+	Domains            []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins            []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+}
+
+// What data is expected when handling a request to add a version version
+type InputServiceVersion struct {
+	ServiceVersion
+	VclSteps
+	SNIHostname *string        `json:"sni_hostname" doc:"The name that should be present in the TLS cert presented by TLS origins" validate:"omitnil,min=1,max=253"`
+	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 type Origin struct {

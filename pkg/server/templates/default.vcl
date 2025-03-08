@@ -1,0 +1,148 @@
+vcl {{.VCLVersion}};
+{{range .Modules }}
+import {{.}};
+{{- end }}
+
+{{- if .HTTPSEnabled}}
+backend haproxy_https {
+  .path = "/shared/haproxy_https";
+}
+{{ end}}
+
+{{- if .HTTPEnabled}}
+backend haproxy_http {
+  .path = "/shared/haproxy_http";
+}
+{{ end}}
+
+{{- if .HTTPSEnabled }}
+backend origin_https {
+    .host = "{{.ServiceIPv4}}";
+    .authority = "{{if .SNIHostname}}{{.SNIHostname}}{{end}}";
+    .port = "443";
+    .via = haproxy_https;
+}
+{{- end}}
+
+{{- if .HTTPEnabled }}
+backend origin_http {
+    .host = "{{.ServiceIPv4}}";
+    .port = "80";
+    .via = haproxy_http;
+}
+{{- end}}
+
+sub vcl_recv {
+  if ({{ range $index, $domain := $.Domains }}{{if gt $index 0}} && {{end}}req.http.host != "{{$domain}}"{{end}}) {
+    return(synth(400,"Unknown Host header."));
+  }
+  if (proxy.is_ssl()) {
+    {{- if .HTTPSEnabled}}
+    set req.http.X-Forwarded-Proto = "https";
+    set req.backend_hint = origin_https;
+    {{- else}}
+    return(synth(400,"HTTPS request but no HTTPS origin available."));
+    {{- end}}
+  } else {
+    {{- if .HTTPEnabled}}
+    set req.http.X-Forwarded-Proto = "http";
+    set req.backend_hint = origin_http;
+    {{- else}}
+    return(synth(400,"HTTP request but no HTTP origin available."));
+    {{- end}}
+  }
+
+# START vcl_recv content
+{{- if .VCLSteps.VclRecv}}
+{{.VCLSteps.VclRecv}}
+{{- end}}
+# END vcl_recv content
+}
+
+# START vcl_pipe content
+{{- if .VCLSteps.VclPipe}}
+sub vcl_pipe {
+{{.VCLSteps.VclPipe}}
+}
+{{- end}}
+# END vcl_pipe content
+
+# START vcl_pass content
+{{- if .VCLSteps.VclPass}}
+sub vcl_pass {
+{{.VCLSteps.VclPass}}
+}
+{{- end}}
+# END vcl_pass content
+
+# START vcl_hash content
+{{- if .VCLSteps.VclHash}}
+sub vcl_hash {
+{{.VCLSteps.VclHash}}
+}
+{{- end}}
+# END vcl_hash content
+
+# START vcl_purge content
+{{- if .VCLSteps.VclPurge}}
+sub vcl_purge {
+{{.VCLSteps.VclPurge}}
+}
+{{- end}}
+# END vcl_purge content
+
+# START vcl_miss content
+{{- if .VCLSteps.VclMiss}}
+sub vcl_miss {
+{{.VCLSteps.VclMiss}}
+}
+{{- end}}
+# END vcl_miss content
+
+# START vcl_hit content
+{{- if .VCLSteps.VclHit}}
+sub vcl_hit {
+{{.VCLSteps.VclHit}}
+}
+{{- end}}
+# END vcl_hit content
+
+# START vcl_deliver content
+{{- if .VCLSteps.VclDeliver}}
+sub vcl_deliver {
+{{.VCLSteps.VclDeliver}}
+}
+{{- end}}
+# END vcl_deliver content
+
+# START vcl_synth content
+{{- if .VCLSteps.VclSynth}}
+sub vcl_synth {
+{{.VCLSteps.VclSynth}}
+}
+{{- end}}
+# END vcl_synth content
+
+# START vcl_backend_fetch content
+{{- if .VCLSteps.VclBackendFetch}}
+sub vcl_backend_fetch {
+{{.VCLSteps.VclBackendFetch}}
+}
+{{- end}}
+# END vcl_backend_fetch content
+
+# START vcl_backend_response content
+{{- if .VCLSteps.VclBackendResponse}}
+sub vcl_backend_response {
+{{.VCLSteps.VclBackendResponse}}
+}
+{{- end}}
+# END vcl_backend_response content
+
+# START vcl_backend_error content
+{{- if .VCLSteps.VclBackendError}}
+sub vcl_backend_error {
+{{.VCLSteps.VclBackendError}}
+}
+{{- end}}
+# END vcl_backend_error content

@@ -172,6 +172,8 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		@CSRF()
 		<label for="domains">Domains:</label>
 		<input type="text" id="domains" name="domains"/>
+		<label for="domains">SNI hostname:</label>
+		<input type="text" id="sni-hostname" name="sni-hostname"/>
 		<fieldset>
 			<legend>Origins:</legend>
 			<label for="origins">Origins:</label>
