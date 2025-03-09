@@ -63,6 +63,9 @@ func init() {
 //go:embed templates/default.vcl
 var defaultVCLTemplateFS embed.FS
 
+//go:embed templates/haproxy.cfg
+var defaultHAProxyTemplateFS embed.FS
+
 const (
 	// https://www.postgresql.org/docs/current/errcodes-appendix.html
 	// unique_violation: 23505
@@ -108,7 +111,7 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, vclTempl *template.Template, orgNameOrID string, serviceNameOrID string, iSvc types.InputServiceVersion) error {
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, confTemplates configTemplates, orgNameOrID string, serviceNameOrID string, iSvc types.InputServiceVersion) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
 		return fmt.Errorf("unable to validate input svc struct: %w", err)
@@ -149,7 +152,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgx
 		return fmt.Errorf("service version validation transaction failed: %w", err)
 	}
 
-	vcl, err := generateCompleteVcl(vclTempl, iSvc.SNIHostname, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
+	vcl, err := generateCompleteVcl(confTemplates.vcl, iSvc.SNIHostname, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -496,7 +499,7 @@ func camelCaseToSnakeCase(s string) string {
 	return b.String()
 }
 
-func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, vclTempl *template.Template) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -610,7 +613,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					TLS:  formData.OriginTLS[i],
 				})
 			}
-			_, err = insertServiceVersion(logger, vclTempl, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps, formData.SNIHostname)
+			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps, formData.SNIHostname)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -2393,7 +2396,7 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
 }
 
-func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, vclTempl *template.Template) (types.CacheNodeConfig, error) {
+func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, confTemplates configTemplates) (types.CacheNodeConfig, error) {
 	if !ad.Superuser {
 		return types.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
@@ -2520,7 +2523,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, vclTempl *template
 			}
 
 			vcl, err := generateCompleteVcl(
-				vclTempl,
+				confTemplates.vcl,
 				serviceVersionSNIHostname,
 				serviceIPAddresses,
 				origins,
@@ -2543,11 +2546,17 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, vclTempl *template
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
 
+			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins)
+			if err != nil {
+				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
+			}
+
 			cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion] = types.ServiceVersionWithConfig{
-				ID:      serviceVersionID,
-				Version: serviceVersion,
-				Active:  serviceVersionActive,
-				VCL:     vcl,
+				ID:            serviceVersionID,
+				Version:       serviceVersion,
+				Active:        serviceVersionActive,
+				VCL:           vcl,
+				HAProxyConfig: haProxyConf,
 			}
 
 			return nil
@@ -2888,7 +2897,7 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, vclTempl *template.Template, ad authData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad authData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -2900,7 +2909,7 @@ func insertServiceVersion(logger *zerolog.Logger, vclTempl *template.Template, a
 	err := vclValidator.validateServiceVersionConfig(
 		dbPool,
 		logger,
-		vclTempl,
+		confTemplates,
 		orgNameOrID,
 		serviceNameOrID,
 		types.InputServiceVersion{
@@ -3075,6 +3084,65 @@ func generateCompleteVcl(tmpl *template.Template, sniHostname *string, serviceIP
 	return b.String(), nil
 }
 
+type haproxyConfInput struct {
+	Origins        []types.Origin
+	HTTPSEnabled   bool
+	HTTPEnabled    bool
+	AddressStrings []string
+}
+
+func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin) (string, error) {
+	// Detect what haproxy backends should be present
+	haProxyHTTP := false
+	haProxyHTTPS := false
+	for _, origin := range origins {
+		// If both have been found we do not need to look at more
+		// backends
+		if haProxyHTTP && haProxyHTTPS {
+			break
+		}
+
+		if origin.TLS {
+			haProxyHTTPS = true
+		} else {
+			haProxyHTTP = true
+		}
+	}
+
+	if !haProxyHTTP && !haProxyHTTPS {
+		return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
+	}
+
+	addressStrings := []string{}
+
+	// HAProxy expects IPv6 addresses to be enclosed in []
+	for _, addr := range serviceIPAddresses {
+		if addr.Unmap().Is4() {
+			addressStrings = append(addressStrings, addr.Unmap().String())
+		} else if addr.Unmap().Is6() {
+			addressStrings = append(addressStrings, fmt.Sprintf("[%s]", addr.Unmap()))
+		} else {
+			return "", fmt.Errorf("address is neither IPv4 or IPv6")
+		}
+	}
+
+	hci := haproxyConfInput{
+		Origins:        origins,
+		AddressStrings: addressStrings,
+		HTTPSEnabled:   haProxyHTTPS,
+		HTTPEnabled:    haProxyHTTP,
+	}
+
+	var b strings.Builder
+
+	err := tmpl.Execute(&b, hci)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteHaProxyConf: unable to execute template: %w", err)
+	}
+
+	return b.String(), nil
+}
+
 func selectNetworks(dbPool *pgxpool.Pool, ad authData, family int) ([]ipNetwork, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
@@ -3133,7 +3201,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad authData) (ipN
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, vclTempl *template.Template) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -3166,8 +3234,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get("/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, vclTempl))
-		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, vclTempl))
+		r.Get("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, confTemplates))
+		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, confTemplates))
 		r.Get("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 	})
@@ -3261,7 +3329,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, vclTempl *template.Template) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, confTemplates configTemplates) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -3714,7 +3782,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, vclTempl, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps, input.Body.SNIHostname)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps, input.Body.SNIHostname)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -3805,7 +3873,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(vclTempl, svc.SNIHostname, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
+			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.SNIHostname, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
@@ -3831,7 +3899,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
 			}
 
-			cnc, err := selectCacheNodeConfig(dbPool, ad, vclTempl)
+			cnc, err := selectCacheNodeConfig(dbPool, ad, confTemplates)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -4325,6 +4393,11 @@ func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) ht
 	return csrfMiddleware, nil
 }
 
+type configTemplates struct {
+	vcl     *template.Template
+	haproxy *template.Template
+}
+
 func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -4393,14 +4466,21 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 
 	vclValidator := newVclValidator(vclValidationURL)
 
-	vclTmpl, err := template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	confTemplates := configTemplates{}
+
+	confTemplates.vcl, err = template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
 	if err != nil {
-		panic(err)
+		logger.Fatal().Err(err).Msg("unable to create varnish template")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator, vclTmpl)
+	confTemplates.haproxy, err = template.ParseFS(defaultHAProxyTemplateFS, "templates/haproxy.cfg")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create haproxy template")
+	}
 
-	err = setupHumaAPI(router, dbPool, vclValidator, vclTmpl)
+	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates)
+
+	err = setupHumaAPI(router, dbPool, vclValidator, confTemplates)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}

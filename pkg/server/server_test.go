@@ -397,14 +397,21 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	vclTmpl, err := template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	confTemplates := configTemplates{}
+
+	confTemplates.vcl, err = template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("varnish template parsing failed")
+		logger.Fatal().Err(err).Msg("unable to create varnish template")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator, vclTmpl)
+	confTemplates.haproxy, err = template.ParseFS(defaultHAProxyTemplateFS, "templates/haproxy.cfg")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create haproxy template")
+	}
 
-	err = setupHumaAPI(router, dbPool, vclValidator, vclTmpl)
+	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates)
+
+	err = setupHumaAPI(router, dbPool, vclValidator, confTemplates)
 	if err != nil {
 		return nil, dbPool, err
 	}
