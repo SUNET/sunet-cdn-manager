@@ -1928,12 +1928,12 @@ func selectServices(dbPool *pgxpool.Pool, ad authData) ([]types.Service, error) 
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range) AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range) AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
+		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
 		}
@@ -2310,7 +2310,7 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 		// SELECT is protected by the FOR UPDATE select above, so is
 		// safe from concurrent service creation.
 		var uidRange pgtype.Range[pgtype.Int8]
-		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT int8range(upper(uid_range)+1, upper(uid_range)+10000, '[]') FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000019999, '[]'))").Scan(&uidRange)
+		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT int8range(upper(uid_range), upper(uid_range)+10000) FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000020000))").Scan(&uidRange)
 		if err != nil {
 			return err
 		}
