@@ -107,11 +107,13 @@ type ServiceWithVersions struct {
 }
 
 type ServiceVersionWithConfig struct {
-	ID            pgtype.UUID `json:"id"`
-	Version       int64       `json:"version" example:"1" doc:"Version of the service"`
-	Active        bool        `json:"active" example:"true" doc:"If the version is active"`
-	VCL           string      `json:"vcl"`
-	HAProxyConfig string      `json:"haproxy_config"`
+	ID            pgtype.UUID    `json:"id"`
+	Version       int64          `json:"version" example:"1" doc:"Version of the service"`
+	Active        bool           `json:"active" example:"true" doc:"If the version is active"`
+	VCL           string         `json:"vcl"`
+	TLS           bool           `json:"tls" example:"true" doc:"If at least one origin has TLS enabled which means we require certificates"`
+	Domains       []DomainString `json:"domains" doc:"Names that the service is listening on"`
+	HAProxyConfig string         `json:"haproxy_config"`
 }
 
 type VclStepKeys struct {

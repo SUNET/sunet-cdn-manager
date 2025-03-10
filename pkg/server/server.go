@@ -2551,10 +2551,20 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, confTemplates conf
 				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
 			}
 
+			tlsActive := false
+			for _, origin := range origins {
+				if origin.TLS {
+					tlsActive = true
+					break
+				}
+			}
+
 			cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion] = types.ServiceVersionWithConfig{
 				ID:            serviceVersionID,
 				Version:       serviceVersion,
 				Active:        serviceVersionActive,
+				TLS:           tlsActive,
+				Domains:       domains,
 				VCL:           vcl,
 				HAProxyConfig: haProxyConf,
 			}
