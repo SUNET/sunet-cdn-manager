@@ -3,7 +3,8 @@ CREATE TABLE orgs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
-    service_quota bigint NOT NULL DEFAULT 1
+    service_quota bigint NOT NULL DEFAULT 1,
+    domain_quota bigint NOT NULL DEFAULT 5
 );
 
 CREATE TABLE services (
@@ -132,12 +133,21 @@ CREATE TABLE service_versions (
 -- https://dba.stackexchange.com/questions/197562/constraint-one-boolean-row-is-true-all-other-rows-false
 CREATE UNIQUE INDEX service_versions_active_only_1_true ON service_versions (service_id, active) WHERE active;
 
+CREATE TABLE domains (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    time_created timestamptz NOT NULL DEFAULT now(),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_name CHECK(length(name)>=1 AND length(name)<=253),
+    verified boolean DEFAULT false NOT NULL,
+    verification_token text NOT NULL
+);
+
 CREATE TABLE service_domains (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
-    domain text NOT NULL CONSTRAINT non_empty_domain CHECK(length(domain)>=1 AND length(domain)<=253),
-    UNIQUE(service_version_id, domain)
+    domain_id uuid NOT NULL REFERENCES domains(id),
+    UNIQUE(service_version_id, domain_id)
 );
 
 CREATE TABLE service_origins (

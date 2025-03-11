@@ -21,6 +21,7 @@ var (
 	ErrServiceByNameNeedsOrg   = errors.New("looking up service by name requires org")
 	ErrServiceQuotaHit         = errors.New("not allowed to create more services")
 	ErrInvalidVCL              = errors.New("VCL is invalid")
+	ErrUnknownDomain           = errors.New("unknown domain name")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a

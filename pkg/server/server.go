@@ -44,6 +44,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	zlog "github.com/rs/zerolog/log"
@@ -1839,6 +1840,38 @@ func selectOrgs(dbPool *pgxpool.Pool, ad authData) ([]types.Org, error) {
 	return orgs, nil
 }
 
+func selectOrgDomains(dbPool *pgxpool.Pool, orgNameOrID string, ad authData) ([]types.Domain, error) {
+	domains := []types.Domain{}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+			return cdnerrors.ErrNotFound
+		}
+
+		rows, err := tx.Query(context.Background(), "SELECT id, name, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY name", orgIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to query for domains: %w", err)
+		}
+
+		domains, err = pgx.CollectRows(rows, pgx.RowToStructByName[types.Domain])
+		if err != nil {
+			return fmt.Errorf("unable to CollectRows for org domains: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("selectOrg: transaction failed: %w", err)
+	}
+
+	return domains, nil
+}
+
 func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad authData) (serviceAddresses, error) {
 	sAddrs := serviceAddresses{}
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -2259,6 +2292,87 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	return allocatedIPs, nil
 }
 
+func insertOrgDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (types.Domain, error) {
+	var domainID pgtype.UUID
+	var verificationToken string
+
+	var orgIdent orgIdentifier
+	var err error
+
+	if !ad.Superuser && ad.OrgID == nil {
+		return types.Domain{}, cdnerrors.ErrForbidden
+	}
+
+	if orgNameOrID == nil {
+		return types.Domain{}, cdnerrors.ErrUnprocessable
+	}
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err = newOrgIdentifier(tx, *orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// A normal user must supply an org id for an org they are
+		// a member of
+		if !ad.Superuser && *ad.OrgID != orgIdent.id {
+			return cdnerrors.ErrForbidden
+		}
+
+		var domainQuota int64
+		// Verify we are not hitting the limit of how many domains the
+		// org allows, do "FOR UPDATE" to lock out any concurrently
+		// running function until we are done with counting rows.
+		err = tx.QueryRow(context.Background(), "SELECT domain_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&domainQuota)
+		if err != nil {
+			return err
+		}
+
+		var numDomains int64
+		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
+		if err != nil {
+			return err
+		}
+
+		if numDomains >= domainQuota {
+			logger.Error().Int64("num_domains", numDomains).Int64("domain_quota", domainQuota).Msg("unable to create additional domain as quota has been reached")
+			return cdnerrors.ErrServiceQuotaHit
+		}
+
+		// Generate verification token, just reuse our password generation function for now
+		verificationToken, err = generatePassword(40)
+		if err != nil {
+			return fmt.Errorf("failed generating verification token: %w", err)
+		}
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO domains (name, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", name, verificationToken, orgIdent.id).Scan(&domainID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT domain: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("insertDomain transaction failed")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return types.Domain{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return types.Domain{}, fmt.Errorf("insertDomain transaction failed: %w", err)
+	}
+
+	d := types.Domain{
+		ID:                domainID,
+		Name:              name,
+		Verified:          false,
+		VerificationToken: verificationToken,
+	}
+
+	return d, nil
+}
+
 func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad authData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
@@ -2329,7 +2443,7 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 		return nil
 	})
 	if err != nil {
-		logger.Err(err).Msg("insertServices transaction failed")
+		logger.Err(err).Msg("insertService transaction failed")
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == pgUniqueViolation {
@@ -2441,8 +2555,10 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad authData, confTemplates conf
                                         GROUP BY service_id
 				) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
                                JOIN (
-                                       SELECT service_version_id, array_agg(domain ORDER BY domain) AS domains
+                                       SELECT service_version_id, array_agg(domains.name ORDER BY domains.name) AS domains
                                        FROM service_domains
+				       JOIN domains ON service_domains.domain_id = domains.id
+				       WHERE domains.verified = true
                                        GROUP BY service_version_id
                                ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
                                JOIN (
@@ -2703,9 +2819,10 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad authData, orgNameOrID stri
 					WHERE service_id = services.id
 				) AS service_ip_addresses,
 				(SELECT
-					array_agg(domain ORDER BY domain)
-					FROM service_domains
-					WHERE service_version_id = service_versions.id
+					array_agg(domains.name ORDER BY domains.name)
+					FROM domains
+					JOIN service_domains ON service_domains.domain_id = domains.id
+					WHERE domains.verified = true AND service_version_id = service_versions.id
 				) AS domains,
 				(SELECT
 					array_agg((host, port, tls) ORDER BY host, port)
@@ -2779,7 +2896,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -2814,12 +2931,28 @@ func insertServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, domains [
 
 	var serviceDomainIDs []pgtype.UUID
 	for _, domain := range domains {
+		// Map domain name to correct ID
+		var domainID pgtype.UUID
+		err = tx.QueryRow(
+			context.Background(),
+			"SELECT id FROM domains WHERE name=$1 AND org_id=$2 AND verified=$3",
+			domain,
+			orgIdent.id,
+			true,
+		).Scan(&domainID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return serviceVersionInsertResult{}, cdnerrors.ErrUnknownDomain
+			}
+			return serviceVersionInsertResult{}, fmt.Errorf("mapping domain name to existing domain failed: %w", err)
+		}
+
 		var serviceDomainID pgtype.UUID
 		err = tx.QueryRow(
 			context.Background(),
-			"INSERT INTO service_domains (service_version_id, domain) VALUES ($1, $2) RETURNING id",
+			"INSERT INTO service_domains (service_version_id, domain_id) VALUES ($1, $2) RETURNING id",
 			serviceVersionID,
-			domain,
+			domainID,
 		).Scan(&serviceDomainID)
 		if err != nil {
 			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service domain: %w", err)
@@ -2956,7 +3089,7 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, serviceIdent, domains, origins, active, vcls)
+		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -3542,6 +3675,81 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			return resp, nil
 		})
 
+		huma.Get(api, "/v1/orgs/{org}/domains", func(ctx context.Context, input *struct {
+			Org string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*orgDomainsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(authData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from organization GET handler")
+			}
+
+			domains, err := selectOrgDomains(dbPool, input.Org, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden(api403String)
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("organization not found")
+				}
+				logger.Err(err).Msg("unable to query organization")
+				return nil, err
+			}
+			resp := &orgDomainsOutput{}
+			resp.Body = domains
+			return resp, nil
+		})
+
+		postOrgDomainsPath := "/v1/orgs/{org}/domains"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postOrgDomainsPath, &orgDomainsOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postOrgDomainsPath, &orgDomainsOutput{}),
+				Method:        http.MethodPost,
+				Path:          postOrgDomainsPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Org  string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+				Body struct {
+					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
+				}
+			},
+			) (*orgDomainOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				// The regex used above is not really a good
+				// filter for valid domain names, do some extra
+				// validation
+				_, ok := dns.IsDomainName(input.Body.Name)
+				if !ok {
+					return nil, huma.Error422UnprocessableEntity("the DNS name is not valid")
+				}
+
+				ad, ok := ctx.Value(authDataKey{}).(authData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+				}
+
+				domain, err := insertOrgDomain(logger, dbPool, input.Body.Name, &input.Org, ad)
+				if err != nil {
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
+						return nil, huma.Error403Forbidden("not allowed to add resource")
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("domain already exists")
+					}
+					logger.Err(err).Msg("unable to add domain")
+					return nil, err
+				}
+				resp := &orgDomainOutput{}
+				resp.Body = domain
+				return resp, nil
+			},
+		)
+
 		huma.Get(api, "/v1/services/{service}/ips", func(ctx context.Context, input *struct {
 			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 			Org     string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
@@ -3803,6 +4011,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 						return nil, huma.Error403Forbidden("not allowed to create this service version")
 					case errors.Is(err, cdnerrors.ErrNotFound):
 						return nil, huma.Error422UnprocessableEntity("service name not found")
+					case errors.Is(err, cdnerrors.ErrUnknownDomain):
+						return nil, huma.Error422UnprocessableEntity("domain name(s) unknown or unverified")
 					case errors.Is(err, cdnerrors.ErrInvalidVCL):
 						var ve *cdnerrors.VCLValidationError
 						if errors.As(err, &ve) {
@@ -4058,6 +4268,14 @@ type orgsOutput struct {
 
 type orgIPsOutput struct {
 	Body serviceAddresses
+}
+
+type orgDomainOutput struct {
+	Body types.Domain
+}
+
+type orgDomainsOutput struct {
+	Body []types.Domain
 }
 
 type serviceOutput struct {

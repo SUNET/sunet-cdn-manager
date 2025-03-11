@@ -112,8 +112,15 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000002', 'user')",
 
 		// Domains
-		"INSERT INTO service_domains (id, service_version_id, domain) VALUES ('00000008-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', 'www.example.se')",
-		"INSERT INTO service_domains (id, service_version_id, domain) VALUES ('00000008-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', 'www.example.com')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', 'example.se', true, 'token1')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000002', '00000002-0000-0000-0000-000000000001', 'example.com', true, 'token2')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000003', '00000002-0000-0000-0000-000000000001', 'example.nu', false, 'token2')",
+
+		// Service domain mappings (only valid if the domains-entry is verified=true)
+		// org1: www.example.se
+		"INSERT INTO service_domains (id, service_version_id, domain_id) VALUES ('00000008-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '00000015-0000-0000-0000-000000000001')",
+		// org1: www.example.com
+		"INSERT INTO service_domains (id, service_version_id, domain_id) VALUES ('00000008-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '00000015-0000-0000-0000-000000000002')",
 
 		// Origins
 		// org1-service3
@@ -1407,6 +1414,105 @@ func TestGetOrg(t *testing.T) {
 	}
 }
 
+func TestGetOrgDomains(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		orgNameOrID    string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request with ID",
+			username:       "admin",
+			password:       "adminpass1",
+			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			orgNameOrID:    "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org request with ID",
+			username:       "username1",
+			password:       "password1",
+			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org request with name",
+			username:       "username1",
+			password:       "password1",
+			orgNameOrID:    "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed org request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed lookup of org you do not belong to with ID",
+			username:       "username2",
+			password:       "password2",
+			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed lookup of org you do not belong to with name",
+			username:       "username2",
+			password:       "password2",
+			orgNameOrID:    "org1",
+			expectedStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/domains", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET orgs/%s/domains unexpected status code: %d (%s)", test.description, test.orgNameOrID, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
 func TestGetServiceIPs(t *testing.T) {
 	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
@@ -2125,6 +2231,86 @@ func TestPostServices(t *testing.T) {
 	}
 }
 
+func TestPostOrgDomains(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		newDomain      string
+		orgNameOrID    string
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			newDomain:      "example.net",
+			orgNameOrID:    "org1",
+		},
+		{
+			description:    "failed superuser request with invalid DNS name",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newDomain:      "example .nu",
+			orgNameOrID:    "org1",
+		},
+	}
+
+	for _, test := range tests {
+		newDomain := struct {
+			Name string `json:"name"`
+		}{
+			Name: test.newDomain,
+		}
+
+		b, err := json.Marshal(newDomain)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+fmt.Sprintf("/api/v1/orgs/%s/domains", test.orgNameOrID), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
 func TestGetServiceVersions(t *testing.T) {
 	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
@@ -2312,6 +2498,75 @@ func TestPostServiceVersion(t *testing.T) {
 				},
 			},
 			expectedStatus: http.StatusCreated,
+			active:         true,
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+		},
+		{
+			description:     "successful superuser request with ID",
+			username:        "admin",
+			password:        "adminpass1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			origins: []origin{
+				{
+					Host: "198.51.100.20",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "192.51.100.21",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusCreated,
+			active:         true,
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+		},
+		{
+			description:     "failed superuser request with ID, domain not known",
+			username:        "admin",
+			password:        "adminpass1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"nonexistant.com"},
+			origins: []origin{
+				{
+					Host: "198.51.100.20",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "192.51.100.21",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
+			active:         true,
+			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+		},
+		{
+			description:     "failed superuser request with ID, domain exist but not verified",
+			username:        "admin",
+			password:        "adminpass1",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.nu"},
+			origins: []origin{
+				{
+					Host: "198.51.100.20",
+					Port: 443,
+					TLS:  true,
+				},
+				{
+					Host: "192.51.100.21",
+					Port: 80,
+					TLS:  false,
+				},
+			},
+			expectedStatus: http.StatusUnprocessableEntity,
 			active:         true,
 			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
 		},

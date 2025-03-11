@@ -80,6 +80,13 @@ type VclSteps struct {
 	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=2048"`
 }
 
+type Domain struct {
+	ID                pgtype.UUID `json:"id"`
+	Name              string      `json:"name"`
+	Verified          bool        `json:"verified"`
+	VerificationToken string      `json:"verification_token"`
+}
+
 // Nested struct containing complete config for a cache node optimized for easy
 // iteration over the contents and minimal duplication of fields.
 //
