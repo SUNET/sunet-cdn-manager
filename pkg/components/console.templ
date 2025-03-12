@@ -13,7 +13,6 @@ templ ConsolePage(title string, orgs []string, contents templ.Component) {
 		@headerComponent(title)
 		<body>
 			@Logout()
-			@OrgSelector(orgs)
 			@NavBar()
 			<h1>{ title }</h1>
 			<div id="contents">
@@ -35,23 +34,6 @@ templ Logout() {
 	<div class="logout">
 		<div><a href={ templ.URL("/auth/logout") }>Logout</a></div>
 	</div>
-}
-
-templ OrgSelector(orgs []string) {
-	<form action={ templ.URL("/console") }>
-		@CSRF()
-		<label for="orgs">Organization:</label>
-		<select name="orgs" id="orgs" disabled?={ len(orgs) < 2 }>
-			if len(orgs) == 0 {
-				<option value="undefined">undefined</option>
-			} else {
-				for _, org := range orgs {
-					<option value={ org }>{ org }</option>
-				}
-			}
-		</select>
-		<input type="submit"/>
-	</form>
 }
 
 templ NavBar() {
