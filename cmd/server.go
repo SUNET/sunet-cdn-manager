@@ -24,7 +24,12 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
-		err = server.Run(cdnLogger, devMode, shutdownDelay)
+		disableDomainVerification, err := cmd.Flags().GetBool("disable-domain-verification")
+		if err != nil {
+			return err
+		}
+
+		err = server.Run(cdnLogger, devMode, shutdownDelay, disableDomainVerification)
 		return err
 	},
 }
@@ -41,6 +46,7 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// serverCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	serverCmd.Flags().BoolP("dev", "", false, "run server in development mode")
+	serverCmd.Flags().Bool("dev", false, "run server in development mode")
 	serverCmd.Flags().Duration("shutdown-delay", time.Second*5, "how long to wait before stopping http request handling on shutdown")
+	serverCmd.Flags().Bool("disable-domain-verification", false, "disable domain verification DNS lookups")
 }

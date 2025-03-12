@@ -15,3 +15,7 @@ issuer = "http://localhost:8080/realms/sunet-cdn-manager"
 client_id = "server-client-id"
 client_secret = "server-client-secret"
 redirect_url = "http://localhost:8081/auth/oidc/keycloak/callback"
+
+[domains]
+resolver_address = "127.0.0.1:53"
+verify_interval = "2m"

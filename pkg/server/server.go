@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
@@ -78,6 +79,11 @@ const (
 
 	consolePath  = "/console"
 	api403String = "not allowed to access resource"
+
+	// Used for TXT domain verification
+	sunetTxtTag     = "sunet-cdn-verification"
+	txtTagSeparator = "="
+	sunetTxtPrefix  = sunetTxtTag + txtTagSeparator
 )
 
 var (
@@ -4621,12 +4627,133 @@ func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) ht
 	return csrfMiddleware, nil
 }
 
+type domainVerifyData struct {
+	ID                pgtype.UUID
+	Name              string
+	VerificationToken string
+}
+
+func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logger, resolverAddress string, domainData domainVerifyData, udpClient *dns.Client, tcpClient *dns.Client) error {
+	logger.Info().Str("name", domainData.Name).Msg("found unverified domain name")
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domainData.Name), dns.TypeTXT)
+	m.SetEdns0(4096, false)
+	in, rtt, err := udpClient.Exchange(m, resolverAddress)
+	if err != nil {
+		logger.Err(err).Dur("rtt", rtt).Str("name", domainData.Name).Msg("error looking up unverified domain via UDP")
+		return err
+	}
+
+	if in.Truncated {
+		logger.Error().Dur("rtt", rtt).Msg("udp query was truncated, retrying over TCP")
+		in, rtt, err = tcpClient.Exchange(m, resolverAddress)
+		if err != nil {
+			logger.Err(err).Dur("rtt", rtt).Str("name", domainData.Name).Msg("error looking up unverified domain via TCP")
+			return err
+		}
+	}
+
+	if in.Rcode != dns.RcodeSuccess {
+		logger.Error().Str("name", domainData.Name).Str("rcode", dns.RcodeToString[in.Rcode]).Msg("unsuccessful query rcode")
+		return fmt.Errorf("unsuccessful query code")
+	}
+
+	for _, answer := range in.Answer {
+		t, ok := answer.(*dns.TXT)
+		if !ok {
+			rrType := "unknown"
+			if val, ok := dns.TypeToString[answer.Header().Rrtype]; ok {
+				rrType = val
+			}
+			logger.Error().Str("name", domainData.Name).Str("rr_type", rrType).Msg("unable to parse entry in TXT answer section as TXT record")
+			// Keep looking at any additional answers since our record might still be in there
+			continue
+		}
+
+		// Handling of TXT record which contain multiple strings, e.g.:
+		// record.example.com. 3600 IN TXT "a" "text" "record"
+		//
+		// Follow the SPF way of handling it as specified in
+		// https://www.rfc-editor.org/rfc/rfc7208#section-3.3:
+		// ===
+		// If a published record contains multiple
+		// character-strings, then the record MUST be treated
+		// as if those strings are concatenated together
+		// without adding spaces.
+		// ===
+		var b strings.Builder
+		for _, s := range t.Txt {
+			b.WriteString(s)
+		}
+
+		if strings.HasPrefix(b.String(), sunetTxtPrefix) {
+			logger.Info().Str("txt_tag", sunetTxtTag).Msg("found tag")
+			parts := strings.SplitN(b.String(), txtTagSeparator, 2)
+			if len(parts) != 2 {
+				logger.Error().Int("num_parts", len(parts)).Msg("unexpected number of parts after splitting TXT tag")
+				continue
+			}
+
+			if parts[1] == domainData.VerificationToken {
+				_, err := dbPool.Exec(ctx, "UPDATE domains SET verified=true WHERE id=$1", domainData.ID)
+				if err != nil {
+					logger.Err(err).Str("id", domainData.ID.String()).Str("name", domainData.Name).Msg("unable to update verified status for domain")
+					return fmt.Errorf("unable to update database: %w", err)
+				}
+				logger.Info().Str("id", domainData.ID.String()).Str("name", domainData.Name).Msg("successfully verified domain")
+				// We are done
+				return nil
+			}
+		}
+	}
+
+	return errors.New("validation failed")
+}
+
+func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logger, dbPool *pgxpool.Pool, resolverAddr string, verifyInterval time.Duration) {
+	defer wg.Done()
+
+	udpClient := &dns.Client{}
+	tcpClient := &dns.Client{Net: "tcp"}
+
+	for {
+		select {
+		case <-time.Tick(verifyInterval):
+			rows, err := dbPool.Query(ctx, "SELECT id, name, verification_token FROM domains WHERE verified=false")
+			if err != nil {
+				logger.Err(err).Msg("lookup of unverified domains failed")
+				continue
+			}
+
+			domainsToVerify, err := pgx.CollectRows(rows, pgx.RowToStructByName[domainVerifyData])
+			if err != nil {
+				logger.Err(err).Msg("CollectRows of unverified domains failed")
+				continue
+			}
+
+			for _, domainToVerify := range domainsToVerify {
+				err = verifyDomain(ctx, dbPool, logger, resolverAddr, domainToVerify, udpClient, tcpClient)
+				if err != nil {
+					// We already do logging etc in
+					// verifyDomain(), no need to repeat
+					// messages here.
+					continue
+				}
+			}
+
+		case <-ctx.Done():
+			logger.Info().Msg("domainVerifier: shutting down")
+			return
+		}
+	}
+}
+
 type configTemplates struct {
 	vcl     *template.Template
 	haproxy *template.Template
 }
 
-func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error {
+func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -4713,6 +4840,15 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}
 
+	var wg sync.WaitGroup
+	if disableDomainVerification {
+		logger.Info().Msg("domain verification is disabled")
+	} else {
+		logger.Info().Msg("domain verification is enabled")
+		wg.Add(1)
+		go domainVerifier(ctx, &wg, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
+	}
+
 	srv := &http.Server{
 		Addr:         conf.Server.Addr,
 		Handler:      router,
@@ -4741,6 +4877,9 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration) error
 	}
 
 	<-idleConnsClosed
+
+	// Wait for workers to complete
+	wg.Wait()
 
 	return nil
 }

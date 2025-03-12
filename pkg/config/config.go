@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,9 +13,10 @@ import (
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
-	Server serverSettings
-	DB     dbSettings
-	OIDC   oidcSettings
+	Server  serverSettings
+	DB      dbSettings
+	OIDC    oidcSettings
+	Domains domainSettings
 }
 
 type serverSettings struct {
@@ -36,6 +38,11 @@ type oidcSettings struct {
 	ClientID     string `mapstructure:"client_id" validate:"required"`
 	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 	RedirectURL  string `mapstructure:"redirect_url" validate:"required"`
+}
+
+type domainSettings struct {
+	ResolverAddr   string        `mapstructure:"resolver_address" validate:"required"`
+	VerifyInterval time.Duration `mapstructure:"verify_interval" validate:"required"`
 }
 
 func GetConfig() (Config, error) {
