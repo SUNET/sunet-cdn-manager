@@ -81,9 +81,9 @@ const (
 	api403String = "not allowed to access resource"
 
 	// Used for TXT domain verification
-	sunetTxtTag     = "sunet-cdn-verification"
-	txtTagSeparator = "="
-	sunetTxtPrefix  = sunetTxtTag + txtTagSeparator
+	sunetTxtTag       = "sunet-cdn-verification"
+	sunetTxtSeparator = "="
+	sunetTxtPrefix    = sunetTxtTag + sunetTxtSeparator
 )
 
 var (
@@ -222,6 +222,42 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 		err := renderConsolePage(w, r, ad, "SUNET CDN manager", components.Dashboard(ad.Username))
 		if err != nil {
 			logger.Err(err).Msg("unable to render console home page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing AuthData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(types.AuthData)
+
+		domains, err := selectDomains(dbPool, ad, "")
+		if err != nil {
+			if errors.Is(err, cdnerrors.ErrForbidden) {
+				logger.Err(err).Msg("domains console: not authorized to view page")
+				http.Error(w, "not allowed to view this page, you need to be a member of an organization", http.StatusForbidden)
+				return
+			}
+			logger.Err(err).Msg("domains console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		err = renderConsolePage(w, r, ad, "Domains", components.DomainsContent(domains, sunetTxtTag, sunetTxtSeparator))
+		if err != nil {
+			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1832,22 +1868,53 @@ func selectOrgs(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Org, error) {
 	return orgs, nil
 }
 
-func selectOrgDomains(dbPool *pgxpool.Pool, orgNameOrID string, ad types.AuthData) ([]types.Domain, error) {
+func selectDomains(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string) ([]types.Domain, error) {
 	domains := []types.Domain{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
-		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+		var err error
+		var orgIdent orgIdentifier
+		var lookupOrg pgtype.UUID
+
+		// Must be either superuser or member of an org
+		if !ad.Superuser && ad.OrgID == nil {
+			return cdnerrors.ErrForbidden
 		}
 
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-			return cdnerrors.ErrNotFound
+		if orgNameOrID != "" {
+			orgIdent, err = newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+
+			lookupOrg = orgIdent.id
 		}
 
-		rows, err := tx.Query(context.Background(), "SELECT id, name, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY name", orgIdent.id)
-		if err != nil {
-			return fmt.Errorf("unable to query for domains: %w", err)
+		// If not superuser and a specific org is requested the user is
+		// only allowed to request it if they are member of the same org
+		if !ad.Superuser && lookupOrg.Valid {
+			if lookupOrg != *ad.OrgID {
+				return cdnerrors.ErrForbidden
+			}
+		}
+
+		// If not superuser and a specific org was not requested, set
+		// it to the org of the user.
+		if !ad.Superuser && !lookupOrg.Valid {
+			lookupOrg = *ad.OrgID
+		}
+
+		var rows pgx.Rows
+		if lookupOrg.Valid {
+			rows, err = tx.Query(context.Background(), "SELECT id, name, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY name", lookupOrg)
+			if err != nil {
+				return fmt.Errorf("unable to query for domains for specific org: %w", err)
+			}
+		} else {
+			rows, err = tx.Query(context.Background(), "SELECT id, name, verified, verification_token FROM domains ORDER BY name")
+			if err != nil {
+				return fmt.Errorf("unable to query for all domains: %w", err)
+			}
 		}
 
 		domains, err = pgx.CollectRows(rows, pgx.RowToStructByName[types.Domain])
@@ -3364,6 +3431,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
+		r.Get("/domains", consoleDomainsHandler(dbPool, cookieStore))
 		r.Get("/services", consoleServicesHandler(dbPool, cookieStore))
 		r.Get("/services/{service}", consoleServiceHandler(dbPool, cookieStore))
 		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
@@ -3667,8 +3735,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/orgs/{org}/domains", func(ctx context.Context, input *struct {
-			Org string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		huma.Get(api, "/v1/domains", func(ctx context.Context, input *struct {
+			Org string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*orgDomainsOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -3678,7 +3746,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
 
-			domains, err := selectOrgDomains(dbPool, input.Org, ad)
+			domains, err := selectDomains(dbPool, ad, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -4674,7 +4742,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 
 		if strings.HasPrefix(b.String(), sunetTxtPrefix) {
 			logger.Info().Str("txt_tag", sunetTxtTag).Msg("found tag")
-			parts := strings.SplitN(b.String(), txtTagSeparator, 2)
+			parts := strings.SplitN(b.String(), sunetTxtSeparator, 2)
 			if len(parts) != 2 {
 				logger.Error().Int("num_parts", len(parts)).Msg("unexpected number of parts after splitting TXT tag")
 				continue

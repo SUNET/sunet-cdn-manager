@@ -1414,7 +1414,7 @@ func TestGetOrg(t *testing.T) {
 	}
 }
 
-func TestGetOrgDomains(t *testing.T) {
+func TestGetDomains(t *testing.T) {
 	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -1439,6 +1439,13 @@ func TestGetOrgDomains(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
+			description:    "successful superuser request for all orgs",
+			username:       "admin",
+			password:       "adminpass1",
+			orgNameOrID:    "",
+			expectedStatus: http.StatusOK,
+		},
+		{
 			description:    "successful superuser request with name",
 			username:       "admin",
 			password:       "adminpass1",
@@ -1460,6 +1467,20 @@ func TestGetOrgDomains(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
+			description:    "successful normal user request with no org",
+			username:       "username1",
+			password:       "password1",
+			orgNameOrID:    "",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful normal user request with no org and no domains",
+			username:       "username2",
+			password:       "password2",
+			orgNameOrID:    "",
+			expectedStatus: http.StatusOK,
+		},
+		{
 			description:    "failed org request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
@@ -1471,21 +1492,27 @@ func TestGetOrgDomains(t *testing.T) {
 			username:       "username2",
 			password:       "password2",
 			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusNotFound,
+			expectedStatus: http.StatusForbidden,
 		},
 		{
 			description:    "failed lookup of org you do not belong to with name",
 			username:       "username2",
 			password:       "password2",
 			orgNameOrID:    "org1",
-			expectedStatus: http.StatusNotFound,
+			expectedStatus: http.StatusForbidden,
 		},
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/domains", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/domains", nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 		}
 
 		req.SetBasicAuth(test.username, test.password)
@@ -1501,7 +1528,7 @@ func TestGetOrgDomains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s/domains unexpected status code: %d (%s)", test.description, test.orgNameOrID, resp.StatusCode, string(r))
+			t.Fatalf("%s: GET '%s' unexpected status code: %d (%s)", test.description, req.URL.String(), resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)

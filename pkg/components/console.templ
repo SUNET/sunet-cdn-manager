@@ -41,10 +41,38 @@ templ NavBar() {
 		<nav>
 			<ul>
 				<li><a href={ templ.URL("/console") }>Dashboard</a></li>
+				<li><a href={ templ.URL("/console/domains") }>Domains</a></li>
 				<li><a href={ templ.URL("/console/services") }>Services</a></li>
 			</ul>
 		</nav>
 	</div>
+}
+
+templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparator string) {
+	if len(domains) == 0 {
+		<div>No domains added</div>
+	} else {
+		<div>Domains:</div>
+		<table>
+			<tr>
+				<th>Domain name</th>
+				<th>Verified</th>
+				<th>Verification record</th>
+			</tr>
+			for _, domain := range domains {
+				<tr>
+					<td>{ domain.Name }</td>
+					if domain.Verified {
+						<td>✅</td>
+					} else {
+						<td>⏳</td>
+					}
+					<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
+				</tr>
+			}
+		</table>
+	}
+	<a href={ templ.URL("/console/create/domain") }>Add domain</a>
 }
 
 templ ServicesContent(services []types.Service) {
