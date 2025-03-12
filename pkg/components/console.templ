@@ -8,11 +8,11 @@ import (
 	"strconv"
 )
 
-templ ConsolePage(title string, orgs []string, contents templ.Component) {
+templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
 	<html>
 		@headerComponent(title)
 		<body>
-			@Logout()
+			@Logout(ad.Username)
 			@NavBar()
 			<h1>{ title }</h1>
 			<div id="contents">
@@ -30,9 +30,9 @@ templ Dashboard(username string) {
 	<div>Hello { username }!</div>
 }
 
-templ Logout() {
+templ Logout(username string) {
 	<div class="logout">
-		<div><a href={ templ.URL("/auth/logout") }>Logout</a></div>
+		<div><a href={ templ.URL("/auth/logout") }>Logout</a> { username }</div>
 	</div>
 }
 

@@ -7,6 +7,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// Authentication data for a given user
+type AuthData struct {
+	Username  string
+	UserID    pgtype.UUID
+	OrgID     *pgtype.UUID
+	OrgName   *string
+	Superuser bool
+	RoleID    pgtype.UUID
+	RoleName  string
+}
+
 // Types that can be shared across the other packages
 type Org struct {
 	ID   pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
