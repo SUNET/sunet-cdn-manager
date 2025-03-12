@@ -119,6 +119,7 @@ type OrgWithServices struct {
 type ServiceWithVersions struct {
 	ID              pgtype.UUID                        `json:"id"`
 	Name            string                             `json:"name"`
+	IPAddresses     []netip.Addr                       `json:"ip_addresses"`
 	UIDRangeFirst   int64                              `json:"uid_range_first"`
 	UIDRangeLast    int64                              `json:"uid_range_last"`
 	ServiceVersions map[int64]ServiceVersionWithConfig `json:"service_versions"`

@@ -2771,6 +2771,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 				cnc.Orgs[orgID.String()].Services[serviceID.String()] = types.ServiceWithVersions{
 					ID:              serviceID,
 					Name:            serviceName,
+					IPAddresses:     serviceIPAddresses,
 					UIDRangeFirst:   serviceUIDRange.Lower.Int64,
 					UIDRangeLast:    serviceUIDRange.Upper.Int64,
 					ServiceVersions: map[int64]types.ServiceVersionWithConfig{},
