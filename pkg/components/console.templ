@@ -117,6 +117,25 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 }
 
+templ CreateDomainContent(err error) {
+	<form method="post" action={ templ.URL("/console/create/domain") }>
+		@CSRF()
+		<label for="name">Name:</label>
+		<input type="text" id="name" name="name"/>
+		<input type="submit"/>
+	</form>
+	if err != nil {
+		switch  {
+			case errors.Is(err, cdnerrors.ErrAlreadyExists):
+				<div>Domain already exists</div>
+			case errors.Is(err, cdnerrors.ErrInvalidFormData):
+				<div>Invalid form data</div>
+			default:
+				<div>Domain creation failed</div>
+		}
+	}
+}
+
 templ CreateServiceContent(err error) {
 	<form method="post" action={ templ.URL("/console/create/service") }>
 		@CSRF()

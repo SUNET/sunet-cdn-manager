@@ -300,6 +300,85 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 	}
 }
 
+func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		title := "Add domain"
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing AuthData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(types.AuthData)
+
+		switch r.Method {
+		case "GET":
+			err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(nil))
+			if err != nil {
+				logger.Err(err).Msg("unable to render domain creation page in GET")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case "POST":
+			err := r.ParseForm()
+			if err != nil {
+				logger.Err(err).Msg("unable to parse create-domain POST form")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := createDomainForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-domain form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST create-domain form data")
+				err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(cdnerrors.ErrInvalidFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render domain creation page in POST")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				return
+			}
+
+			_, err = insertDomain(logger, dbPool, formData.Name, ad.OrgName, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(err))
+					if err != nil {
+						logger.Err(err).Msg("unable to render domain creation page after insert error")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+						return
+					}
+					return
+				}
+				logger.Err(err).Msg("unable to insert domain")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect("/console/domains", w, r)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-domain handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
 func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -837,6 +916,12 @@ type createServiceForm struct {
 	// Service name length validation needs to be kept in sync with the CHECK
 	// constraints in the service table, see the migrations module.
 	Name string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
+}
+
+type createDomainForm struct {
+	// Domain name length validation needs to be kept in sync with the CHECK
+	// constraints in the domains table, see the migrations module.
+	Name string `schema:"name" validate:"min=1,max=253,hostname_rfc1123"`
 }
 
 type createServiceVersionForm struct {
@@ -2351,7 +2436,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	return allocatedIPs, nil
 }
 
-func insertOrgDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad types.AuthData) (types.Domain, error) {
+func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad types.AuthData) (types.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
 
@@ -3432,6 +3517,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
 		r.Get("/domains", consoleDomainsHandler(dbPool, cookieStore))
+		r.Get("/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
+		r.Post("/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
 		r.Get("/services", consoleServicesHandler(dbPool, cookieStore))
 		r.Get("/services/{service}", consoleServiceHandler(dbPool, cookieStore))
 		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
@@ -3793,7 +3880,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from organization POST handler: %w")
 				}
 
-				domain, err := insertOrgDomain(logger, dbPool, input.Body.Name, &input.Org, ad)
+				domain, err := insertDomain(logger, dbPool, input.Body.Name, &input.Org, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
