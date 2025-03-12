@@ -2258,7 +2258,7 @@ func TestPostServices(t *testing.T) {
 	}
 }
 
-func TestPostOrgDomains(t *testing.T) {
+func TestPostDomains(t *testing.T) {
 	ts, dbPool, err := prepareServer(false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -2292,6 +2292,14 @@ func TestPostOrgDomains(t *testing.T) {
 			newDomain:      "example .nu",
 			orgNameOrID:    "org1",
 		},
+		{
+			description:    "failed superuser request, no org query param",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			newDomain:      "example.net",
+			orgNameOrID:    "",
+		},
 	}
 
 	for _, test := range tests {
@@ -2308,9 +2316,15 @@ func TestPostOrgDomains(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("POST", ts.URL+fmt.Sprintf("/api/v1/orgs/%s/domains", test.orgNameOrID), r)
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/domains", r)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 		}
 
 		req.SetBasicAuth(test.username, test.password)

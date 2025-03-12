@@ -3848,18 +3848,18 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 			return resp, nil
 		})
 
-		postOrgDomainsPath := "/v1/orgs/{org}/domains"
+		postDomainsPath := "/v1/domains"
 		huma.Register(
 			api,
 			huma.Operation{
-				OperationID:   huma.GenerateOperationID(http.MethodPost, postOrgDomainsPath, &orgDomainsOutput{}),
-				Summary:       huma.GenerateSummary(http.MethodPost, postOrgDomainsPath, &orgDomainsOutput{}),
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postDomainsPath, &orgDomainsOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postDomainsPath, &orgDomainsOutput{}),
 				Method:        http.MethodPost,
-				Path:          postOrgDomainsPath,
+				Path:          postDomainsPath,
 				DefaultStatus: http.StatusCreated,
 			},
 			func(ctx context.Context, input *struct {
-				Org  string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+				Org  string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body struct {
 					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
 				}
@@ -3887,6 +3887,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 						return nil, huma.Error403Forbidden("not allowed to add resource")
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("domain already exists")
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
+						return nil, huma.Error422UnprocessableEntity("missing required params")
 					}
 					logger.Err(err).Msg("unable to add domain")
 					return nil, err

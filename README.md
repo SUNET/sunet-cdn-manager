@@ -59,7 +59,7 @@ curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/create-org.js
 
 Assign a domain to the org (this will make the manager start looking for a verification TXT record for that name):
 ```
-curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-domain.json -H "content-type: application/json" http://localhost:8081/api/v1/orgs/testorg/domains
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-domain.json -H "content-type: application/json" 'http://localhost:8081/api/v1/domains?org=testorg'
 ```
 
 Given that a user called `testuser` exists (either a local user created via API or automatically created via keycloak login), assign it to the the org:
