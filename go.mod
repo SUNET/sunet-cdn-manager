@@ -4,8 +4,8 @@ go 1.23.2
 
 require (
 	github.com/a-h/templ v0.3.833
-	github.com/coreos/go-oidc/v3 v3.12.0
-	github.com/danielgtaylor/huma/v2 v2.29.0
+	github.com/coreos/go-oidc/v3 v3.13.0
+	github.com/danielgtaylor/huma/v2 v2.31.0
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/go-playground/validator/v10 v10.25.0
 	github.com/gorilla/csrf v1.7.2
@@ -20,8 +20,8 @@ require (
 	github.com/stapelberg/postgrestest v0.0.0-20241116183525-c42666fa9681
 	github.com/testcontainers/testcontainers-go v0.35.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.35.0
-	golang.org/x/oauth2 v0.27.0
+	golang.org/x/crypto v0.36.0
+	golang.org/x/oauth2 v0.28.0
 )
 
 require (
@@ -96,13 +96,13 @@ require (
 	go.opentelemetry.io/otel/metric v1.29.0 // indirect
 	go.opentelemetry.io/otel/trace v1.29.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
-	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
-	golang.org/x/tools v0.30.0 // indirect
+	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
+	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/net v0.37.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/tools v0.31.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
