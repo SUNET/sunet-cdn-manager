@@ -2665,9 +2665,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 		context.Background(),
 		`SELECT
                                orgs.id AS org_id,
-			       orgs.name AS org_name,
                                services.id AS service_id,
-                               services.name AS service_name,
                                services.uid_range,
                                service_versions.id AS service_version_id,
                                service_versions.version,
@@ -2722,7 +2720,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 
 	var orgID, serviceID, serviceVersionID pgtype.UUID
 	var serviceIPAddresses []netip.Addr
-	var orgName, serviceName string
 	var serviceUIDRange pgtype.Range[pgtype.Int8]
 	var serviceVersion int64
 	var serviceVersionActive bool
@@ -2734,9 +2731,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 		rows,
 		[]any{
 			&orgID,
-			&orgName,
 			&serviceID,
-			&serviceName,
 			&serviceUIDRange,
 			&serviceVersionID,
 			&serviceVersion,
@@ -2762,7 +2757,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 			if _, orgExists := cnc.Orgs[orgID.String()]; !orgExists {
 				cnc.Orgs[orgID.String()] = types.OrgWithServices{
 					ID:       orgID,
-					Name:     orgName,
 					Services: map[string]types.ServiceWithVersions{},
 				}
 			}
@@ -2770,7 +2764,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 			if _, serviceExists := cnc.Orgs[orgID.String()].Services[serviceID.String()]; !serviceExists {
 				cnc.Orgs[orgID.String()].Services[serviceID.String()] = types.ServiceWithVersions{
 					ID:              serviceID,
-					Name:            serviceName,
 					IPAddresses:     serviceIPAddresses,
 					UIDRangeFirst:   serviceUIDRange.Lower.Int64,
 					UIDRangeLast:    serviceUIDRange.Upper.Int64,
@@ -2780,7 +2773,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 
 			// We only expect to see a given service version once for a given service
 			if _, serviceVersionExists := cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion]; serviceVersionExists {
-				return fmt.Errorf("%s, %s: saw service version %d a second time, this is unpexpected", orgName, serviceName, serviceVersion)
+				return fmt.Errorf("%s, %s: saw service version %d a second time, this is unpexpected", orgID, serviceID, serviceVersion)
 			}
 
 			vcl, err := generateCompleteVcl(

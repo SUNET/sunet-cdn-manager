@@ -112,13 +112,11 @@ type CacheNodeConfig struct {
 
 type OrgWithServices struct {
 	ID       pgtype.UUID                    `json:"id"`
-	Name     string                         `json:"name"`
 	Services map[string]ServiceWithVersions `json:"services"`
 }
 
 type ServiceWithVersions struct {
 	ID              pgtype.UUID                        `json:"id"`
-	Name            string                             `json:"name"`
 	IPAddresses     []netip.Addr                       `json:"ip_addresses"`
 	UIDRangeFirst   int64                              `json:"uid_range_first"`
 	UIDRangeLast    int64                              `json:"uid_range_last"`
