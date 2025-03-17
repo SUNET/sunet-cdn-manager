@@ -5,14 +5,14 @@ import {{.}};
 
 {{- if .HTTPSEnabled}}
 backend haproxy_https {
-  .path = "/shared/haproxy_https";
+  .path = "/shared/unix-sockets/haproxy_https";
   .proxy_header = 2;
 }
 {{ end}}
 
 {{- if .HTTPEnabled}}
 backend haproxy_http {
-  .path = "/shared/haproxy_http";
+  .path = "/shared/unix-sockets/haproxy_http";
   .proxy_header = 2;
 }
 {{ end}}
