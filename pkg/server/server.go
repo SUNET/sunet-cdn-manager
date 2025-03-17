@@ -3034,7 +3034,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -3058,10 +3058,11 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 
 	err = tx.QueryRow(
 		context.Background(),
-		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
+		"INSERT INTO service_versions (service_id, version, active, sni_hostname) VALUES ($1, $2, $3, $4) RETURNING id",
 		serviceIdent.id,
 		versionCounter,
 		active,
+		sniHostname,
 	).Scan(&serviceVersionID)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
@@ -3227,7 +3228,7 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls)
+		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls, sniHostname)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
