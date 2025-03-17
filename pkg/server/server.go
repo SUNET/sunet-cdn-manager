@@ -159,7 +159,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgx
 		return fmt.Errorf("service version validation transaction failed: %w", err)
 	}
 
-	vcl, err := generateCompleteVcl(confTemplates.vcl, iSvc.SNIHostname, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
+	vcl, err := generateCompleteVcl(confTemplates.vcl, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -2778,7 +2778,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 
 			vcl, err := generateCompleteVcl(
 				confTemplates.vcl,
-				serviceVersionSNIHostname,
 				serviceIPAddresses,
 				origins,
 				domains,
@@ -2800,7 +2799,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
 
-			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins)
+			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins, serviceVersionSNIHostname)
 			if err != nil {
 				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
 			}
@@ -3311,11 +3310,10 @@ type varnishVCLInput struct {
 	HTTPSEnabled bool
 	HTTPEnabled  bool
 	ServiceIPv4  netip.Addr
-	SNIHostname  *string
 	VCLSteps     types.VclSteps
 }
 
-func generateCompleteVcl(tmpl *template.Template, sniHostname *string, serviceIPAddresses []netip.Addr, origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
+func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
 	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
 	if err != nil {
 		return "", errors.New("no IPv4 address allocated to service")
@@ -3352,7 +3350,6 @@ func generateCompleteVcl(tmpl *template.Template, sniHostname *string, serviceIP
 		ServiceIPv4:  serviceIPv4Address,
 		HTTPSEnabled: haProxyHTTPS,
 		HTTPEnabled:  haProxyHTTP,
-		SNIHostname:  sniHostname,
 		VCLSteps:     vclSteps,
 	}
 
@@ -3368,12 +3365,13 @@ func generateCompleteVcl(tmpl *template.Template, sniHostname *string, serviceIP
 
 type haproxyConfInput struct {
 	Origins        []types.Origin
+	SNIHostname    *string
 	HTTPSEnabled   bool
 	HTTPEnabled    bool
 	AddressStrings []string
 }
 
-func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin) (string, error) {
+func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin, sniHostname *string) (string, error) {
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
@@ -3409,6 +3407,7 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	}
 
 	hci := haproxyConfInput{
+		SNIHostname:    sniHostname,
 		Origins:        origins,
 		AddressStrings: addressStrings,
 		HTTPSEnabled:   haProxyHTTPS,
@@ -4237,7 +4236,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.SNIHostname, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
+			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err

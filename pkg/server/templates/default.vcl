@@ -6,31 +6,16 @@ import {{.}};
 {{- if .HTTPSEnabled}}
 backend haproxy_https {
   .path = "/shared/haproxy_https";
+  .proxy_header = 2;
 }
 {{ end}}
 
 {{- if .HTTPEnabled}}
 backend haproxy_http {
   .path = "/shared/haproxy_http";
+  .proxy_header = 2;
 }
 {{ end}}
-
-{{- if .HTTPSEnabled }}
-backend origin_https {
-    .host = "{{.ServiceIPv4}}";
-    .authority = "{{if .SNIHostname}}{{.SNIHostname}}{{end}}";
-    .port = "443";
-    .via = haproxy_https;
-}
-{{- end}}
-
-{{- if .HTTPEnabled }}
-backend origin_http {
-    .host = "{{.ServiceIPv4}}";
-    .port = "80";
-    .via = haproxy_http;
-}
-{{- end}}
 
 sub vcl_recv {
   if ({{ range $index, $domain := $.Domains }}{{if gt $index 0}} && {{end}}req.http.host != "{{$domain}}"{{end}}) {
@@ -39,14 +24,14 @@ sub vcl_recv {
   if (proxy.is_ssl()) {
     {{- if .HTTPSEnabled}}
     set req.http.X-Forwarded-Proto = "https";
-    set req.backend_hint = origin_https;
+    set req.backend_hint = haproxy_https;
     {{- else}}
     return(synth(400,"HTTPS request but no HTTPS origin available."));
     {{- end}}
   } else {
     {{- if .HTTPEnabled}}
     set req.http.X-Forwarded-Proto = "http";
-    set req.backend_hint = origin_http;
+    set req.backend_hint = haproxy_http;
     {{- else}}
     return(synth(400,"HTTP request but no HTTP origin available."));
     {{- end}}
