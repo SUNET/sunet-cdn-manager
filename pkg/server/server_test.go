@@ -406,12 +406,12 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 
 	confTemplates := configTemplates{}
 
-	confTemplates.vcl, err = template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/default.vcl")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create varnish template")
 	}
 
-	confTemplates.haproxy, err = template.ParseFS(defaultHAProxyTemplateFS, "templates/haproxy.cfg")
+	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create haproxy template")
 	}

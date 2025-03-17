@@ -62,11 +62,8 @@ func init() {
 	schemaDecoder.IgnoreUnknownKeys(true)
 }
 
-//go:embed templates/default.vcl
-var defaultVCLTemplateFS embed.FS
-
-//go:embed templates/haproxy.cfg
-var defaultHAProxyTemplateFS embed.FS
+//go:embed templates
+var templateFS embed.FS
 
 const (
 	// https://www.postgresql.org/docs/current/errcodes-appendix.html
@@ -4960,12 +4957,12 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 
 	confTemplates := configTemplates{}
 
-	confTemplates.vcl, err = template.ParseFS(defaultVCLTemplateFS, "templates/default.vcl")
+	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/default.vcl")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create varnish template")
 	}
 
-	confTemplates.haproxy, err = template.ParseFS(defaultHAProxyTemplateFS, "templates/haproxy.cfg")
+	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create haproxy template")
 	}
