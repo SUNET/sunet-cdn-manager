@@ -3592,7 +3592,8 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 		if err != nil {
 			switch err {
 			case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-				// The user does not exist etc or the password was bad, try again
+				// The user does not exist, has no password set etc or the password was bad, try again
+				logger.Err(err).Msg("API auth failed")
 				sendHumaBasicAuth(logger, api, ctx)
 				return
 			}
