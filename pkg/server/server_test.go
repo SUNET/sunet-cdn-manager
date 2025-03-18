@@ -37,6 +37,10 @@ var (
 	logger zerolog.Logger
 )
 
+func Ptr[T any](v T) *T {
+	return &v
+}
+
 func TestMain(m *testing.M) {
 	var err error
 	pgt, err = postgrestest.Start(context.Background(), postgrestest.WithSQLDriver("pgx"))
@@ -152,6 +156,10 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Users
 		// No org, local user
 		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'put-user-1')",
+
+		// Cache nodes
+		"INSERT INTO cache_nodes (id, description, ipv4_address, ipv6_address) VALUES ('00000015-0000-0000-0000-000000000001', 'A cache node, cache-node1.example.com', '127.0.0.100', '::1337')",
+		"INSERT INTO cache_nodes (id, description) VALUES ('00000015-0000-0000-0000-000000000002', 'A cache node, cache-node1.example.com, no addresses')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -3543,5 +3551,222 @@ func TestCamelCaseToSnakeCase(t *testing.T) {
 		if result != test.expected {
 			t.Fatalf("%s: input '%s' resulted in '%s', expected: '%s'", test.description, test.input, result, test.expected)
 		}
+	}
+}
+
+func TestPostCacheNodes(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		cacheNodeDescr string
+		ipv4Address    *netip.Addr
+		ipv6Address    *netip.Addr
+	}{
+		{
+			description:    "successful superuser request with both addresses",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			cacheNodeDescr: "cache-node-1.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.1")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::1")),
+		},
+		{
+			description:    "successful superuser request without addresses",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			cacheNodeDescr: "cache-node-1-no-addrs.example.com",
+		},
+		{
+			description:    "successful superuser request with description right at limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			cacheNodeDescr: strings.Repeat("a", 100),
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+		},
+		{
+			description:    "failed superuser request with description above limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			cacheNodeDescr: strings.Repeat("a", 101),
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+		},
+		{
+			description:    "failed superuser request with description below limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			cacheNodeDescr: "",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.3")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::3")),
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       "password1",
+			cacheNodeDescr: "cache-node-1.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.4")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::4")),
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed node user request",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			cacheNodeDescr: "cache-node-user-1.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.5")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::5")),
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		newCacheNode := struct {
+			Description string      `json:"description"`
+			IPv4Address *netip.Addr `json:"ipv4_address,omitempty"`
+			IPv6Address *netip.Addr `json:"ipv6_address,omitempty"`
+		}{
+			Description: test.cacheNodeDescr,
+			IPv4Address: test.ipv4Address,
+			IPv6Address: test.ipv6Address,
+		}
+
+		b, err := json.Marshal(newCacheNode)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/cache-nodes", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetCacheNodes(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed user request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed node user request",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-nodes", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
 	}
 }

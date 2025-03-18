@@ -1797,6 +1797,66 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 	return keyID, nil
 }
 
+func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNode, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	var rows pgx.Rows
+	var err error
+
+	rows, err = dbPool.Query(context.Background(), "SELECT id, description, ipv4_address, ipv6_address FROM cache_nodes ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for all cache nodes: %w", err)
+	}
+
+	cacheNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.CacheNode])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for cache nodes: %w", err)
+	}
+
+	return cacheNodes, nil
+}
+
+func createCacheNode(dbPool *pgxpool.Pool, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, ad types.AuthData) (types.CacheNode, error) {
+	if !ad.Superuser {
+		return types.CacheNode{}, cdnerrors.ErrForbidden
+	}
+
+	var err error
+
+	var cacheNodeID pgtype.UUID
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		cacheNodeID, err = insertCacheNodeTx(tx, description, ipv4Address, ipv6Address)
+		if err != nil {
+			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return types.CacheNode{}, fmt.Errorf("createCacheNode: transaction failed: %w", err)
+	}
+
+	return types.CacheNode{
+		ID:          cacheNodeID,
+		Description: description,
+		IPv4Address: ipv4Address,
+		IPv6Address: ipv6Address,
+	}, nil
+}
+
+func insertCacheNodeTx(tx pgx.Tx, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr) (pgtype.UUID, error) {
+	var cacheNodeID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (description, ipv4_address, ipv6_address) VALUES ($1, $2, $3) RETURNING id", description, ipv4Address, ipv6Address).Scan(&cacheNodeID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
+	}
+
+	return cacheNodeID, nil
+}
+
 func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad types.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
@@ -4355,6 +4415,61 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return resp, nil
 			},
 		)
+
+		huma.Get(api, "/v1/cache-nodes", func(ctx context.Context, _ *struct{}) (*cacheNodesOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-nodes GET handler")
+			}
+
+			cacheNodes, err := selectCacheNodes(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden(api403String)
+				}
+				logger.Err(err).Msg("unable to query for cache nodes")
+				return nil, err
+			}
+
+			resp := &cacheNodesOutput{
+				Body: cacheNodes,
+			}
+			return resp, nil
+		})
+
+		postCacheNodesPath := "/v1/cache-nodes"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postCacheNodesPath, &cacheNodeOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postCacheNodesPath, &cacheNodeOutput{}),
+				Method:        http.MethodPost,
+				Path:          postCacheNodesPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *cacheNodePostInput) (*cacheNodeOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from cache-node POST handler")
+				}
+
+				cacheNode, err := createCacheNode(dbPool, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, ad)
+				if err != nil {
+					if errors.Is(err, cdnerrors.ErrForbidden) {
+						return nil, huma.Error403Forbidden("not allowed to add resource")
+					}
+					logger.Err(err).Msg("unable to add cache node")
+					return nil, err
+				}
+				return &cacheNodeOutput{
+					Body: cacheNode,
+				}, nil
+			},
+		)
 	})
 
 	return nil
@@ -4384,6 +4499,24 @@ type userPutInput struct {
 
 type userOutput struct {
 	Body user
+}
+
+type cacheNodeInput struct {
+	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
+	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
+	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
+}
+
+type cacheNodePostInput struct {
+	Body cacheNodeInput
+}
+
+type cacheNodeOutput struct {
+	Body types.CacheNode
+}
+
+type cacheNodesOutput struct {
+	Body []types.CacheNode
 }
 
 type usersOutput struct {

@@ -179,3 +179,11 @@ CREATE TABLE service_vcls (
     vcl_backend_response text CONSTRAINT vcl_backend_response_non_empty_if_not_null CHECK(length(vcl_backend_response)>0),
     vcl_backend_error text CONSTRAINT vcl_backend_error_non_empty_if_not_null CHECK(length(vcl_backend_error)>0)
 );
+
+CREATE TABLE cache_nodes (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    time_created timestamptz NOT NULL DEFAULT now(),
+    description text NOT NULL,
+    ipv4_address inet UNIQUE CONSTRAINT valid_ipv4_address CHECK(family(ipv4_address) = 4 AND masklen(ipv4_address) = 32),
+    ipv6_address inet UNIQUE CONSTRAINT valid_ipv6_address CHECK(family(ipv6_address) = 6 AND masklen(ipv6_address) = 128)
+);

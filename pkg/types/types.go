@@ -98,6 +98,13 @@ type Domain struct {
 	VerificationToken string      `json:"verification_token"`
 }
 
+type CacheNode struct {
+	ID          pgtype.UUID `json:"id" doc:"ID of cache node"`
+	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
+	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
+	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
+}
+
 // Nested struct containing complete config for a cache node optimized for easy
 // iteration over the contents and minimal duplication of fields.
 //
