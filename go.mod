@@ -5,14 +5,14 @@ go 1.23.2
 require (
 	github.com/a-h/templ v0.3.833
 	github.com/coreos/go-oidc/v3 v3.13.0
-	github.com/danielgtaylor/huma/v2 v2.31.0
+	github.com/danielgtaylor/huma/v2 v2.32.0
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/go-playground/validator/v10 v10.25.0
 	github.com/gorilla/csrf v1.7.2
 	github.com/gorilla/schema v1.4.1
 	github.com/gorilla/sessions v1.4.0
 	github.com/jackc/pgx/v5 v5.7.2
-	github.com/miekg/dns v1.1.63
+	github.com/miekg/dns v1.1.64
 	github.com/pressly/goose/v3 v3.24.1
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.9.1
