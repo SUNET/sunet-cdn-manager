@@ -105,6 +105,18 @@ type CacheNode struct {
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
 }
 
+type L4LBNodeConfig struct {
+	Services   []ServiceConnectivity `json:"service_ip_info"`
+	CacheNodes []CacheNode           `json:"cache_nodes"`
+}
+
+type ServiceConnectivity struct {
+	ServiceID          pgtype.UUID
+	ServiceIPAddresses []netip.Addr
+	HTTPS              bool
+	HTTP               bool
+}
+
 // Nested struct containing complete config for a cache node optimized for easy
 // iteration over the contents and minimal duplication of fields.
 //

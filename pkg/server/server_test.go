@@ -136,6 +136,9 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// org1-service1
 		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000004', '00000004-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
 
+		// org2-service2
+		"INSERT INTO service_origins (id, service_version_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000005', '00000004-0000-0000-0000-000000000005', '198.51.100.20', 80, false)",
+
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000002', 'keycloak')",
@@ -3487,6 +3490,91 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Fatalf("%s: GET cache-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestGetL4LBNodeConfigs(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request with 'node' role",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed request, normal user not allowed to request config",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed user request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET l4lb-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)

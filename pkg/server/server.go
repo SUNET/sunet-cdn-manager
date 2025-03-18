@@ -2889,6 +2889,104 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 	return cnc, nil
 }
 
+type serviceIPInfo struct {
+	ServiceID          pgtype.UUID
+	ServiceIPAddresses []netip.Addr
+	OriginTLSStatus    []bool
+}
+
+func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNodeConfig, error) {
+	if !ad.Superuser && ad.RoleName != "node" {
+		return types.L4LBNodeConfig{}, cdnerrors.ErrForbidden
+	}
+
+	serviceIPInfos := []serviceIPInfo{}
+
+	cacheNodes := []types.CacheNode{}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(context.Background(), "SELECT id, description, ipv4_address, ipv6_address FROM cache_nodes")
+		if err != nil {
+			return fmt.Errorf("unable to select cache node information: %w", err)
+		}
+
+		cacheNodes, err = pgx.CollectRows(rows, pgx.RowToStructByName[types.CacheNode])
+		if err != nil {
+			return fmt.Errorf("unable to collect cache node rows: %w", err)
+		}
+
+		// Collect IP addresses, TLS status and Service ID of every active service version
+		rows, err = tx.Query(
+			context.Background(),
+			`SELECT
+				service_versions.service_id,
+				( SELECT
+					array_agg(address)
+					FROM service_ip_addresses
+					WHERE service_ip_addresses.service_id = service_versions.service_id
+				) AS service_ip_addresses,
+				( SELECT
+					array_agg(tls)
+					FROM service_origins
+					WHERE service_origins.service_version_id = service_versions.id
+				) AS origin_tls_status
+				FROM service_versions
+				WHERE service_versions.active=true
+				ORDER BY service_versions.service_id
+                `,
+		)
+		if err != nil {
+			return fmt.Errorf("unable to select active service IP info: %w", err)
+		}
+
+		serviceIPInfos, err = pgx.CollectRows(rows, pgx.RowToStructByName[serviceIPInfo])
+		if err != nil {
+			return fmt.Errorf("unable to collect service IP info rows: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return types.L4LBNodeConfig{}, fmt.Errorf("l4lb node config transaction failed: %w", err)
+	}
+
+	lnc := types.L4LBNodeConfig{
+		CacheNodes: cacheNodes,
+	}
+
+	for _, sii := range serviceIPInfos {
+		if len(sii.OriginTLSStatus) < 1 {
+			return types.L4LBNodeConfig{}, fmt.Errorf("we expect at least one origin in the set, this is odd, serviceID: %s", sii.ServiceID)
+		}
+
+		sConn := types.ServiceConnectivity{
+			ServiceID:          sii.ServiceID,
+			ServiceIPAddresses: sii.ServiceIPAddresses,
+		}
+
+		// Loop over the collected TLS status of each origin to figure
+		// out if either HTTP, HTTPS or both is expected. This will
+		// decide if we open up port 443/80 on the l4lb
+		for _, originHasTLS := range sii.OriginTLSStatus {
+			if originHasTLS {
+				sConn.HTTPS = true
+			} else {
+				sConn.HTTP = true
+			}
+
+			if sConn.HTTPS && sConn.HTTP {
+				// We have found both, no need to inspect
+				// additional origins
+				break
+			}
+		}
+
+		lnc.Services = append(lnc.Services, sConn)
+	}
+
+	return lnc, nil
+}
+
 func selectServiceVersions(dbPool *pgxpool.Pool, ad types.AuthData, serviceNameOrID string, orgNameOrID string) ([]types.ServiceVersion, error) {
 	var rows pgx.Rows
 
@@ -4326,12 +4424,38 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
 				}
-				logger.Err(err).Msg("unable to query cache-version-configs")
+				logger.Err(err).Msg("unable to query cache-node-configs")
 				return nil, err
 			}
 
 			resp := &cacheNodeConfigOutput{
 				Body: cnc,
+			}
+
+			return resp, nil
+		})
+
+		huma.Get(api, "/v1/l4lb-node-configs", func(ctx context.Context, _ *struct{},
+		) (*l4lbNodeConfigOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-node-configs GET handler")
+			}
+
+			lnc, err := selectL4LBNodeConfig(dbPool, ad)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				}
+				logger.Err(err).Msg("unable to query l4lb-version-configs")
+				return nil, err
+			}
+
+			resp := &l4lbNodeConfigOutput{
+				Body: lnc,
 			}
 
 			return resp, nil
@@ -4566,6 +4690,10 @@ type serviceVersionOutput struct {
 
 type serviceVersionVCLOutput struct {
 	Body types.ServiceVersionVCL
+}
+
+type l4lbNodeConfigOutput struct {
+	Body types.L4LBNodeConfig
 }
 
 type cacheNodeConfigOutput struct {
