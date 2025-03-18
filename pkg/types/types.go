@@ -111,10 +111,10 @@ type L4LBNodeConfig struct {
 }
 
 type ServiceConnectivity struct {
-	ServiceID          pgtype.UUID
-	ServiceIPAddresses []netip.Addr
-	HTTPS              bool
-	HTTP               bool
+	ServiceID          pgtype.UUID  `json:"service_id"`
+	ServiceIPAddresses []netip.Addr `json:"service_ip_addresses"`
+	HTTPS              bool         `json:"https"`
+	HTTP               bool         `json:"http"`
 }
 
 // Nested struct containing complete config for a cache node optimized for easy
