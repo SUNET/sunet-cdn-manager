@@ -2652,7 +2652,7 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 }
 
 func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplates configTemplates) (types.CacheNodeConfig, error) {
-	if !ad.Superuser {
+	if !ad.Superuser && ad.RoleName != "node" {
 		return types.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
@@ -4582,8 +4582,14 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
 		}
 
-		// Also add role used by ordinary users
+		// Add role used by ordinary users
 		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "user")
+		if err != nil {
+			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+		}
+
+		// Add role used by cache and l4lb nodes to fetch config
+		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "node")
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
 		}

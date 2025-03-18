@@ -67,6 +67,16 @@ Given that a user called `testuser` exists (either a local user created via API 
 curl -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" http://localhost:8081/api/v1/users/testuser
 ```
 
+Create a local "node-user-1" user with the "node" role used by nodes fetching config:
+```
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-node-user.json -H "content-type: application/json" http://localhost:8081/api/v1/users
+```
+
+Set a password for the user with "node" role:
+```
+curl -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-node-user-password.json -H "content-type: application/json" http://localhost:8081/api/v1/users/node-user-1/local-password
+```
+
 ### Formatting and linting
 When working with this code at least the following tools are expected to be
 run at the top level directory prior to commiting:

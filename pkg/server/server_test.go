@@ -110,6 +110,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Roles
 		"INSERT INTO roles (id, name, superuser) VALUES ('00000005-0000-0000-0000-000000000001', 'admin', TRUE)",
 		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000002', 'user')",
+		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000003', 'node')",
 
 		// Domains
 		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', 'example.se', true, 'token1')",
@@ -221,6 +222,13 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				role:         "user",
 				orgName:      "org1",
 				id:           "00000006-0000-0000-0000-000000000007",
+				authProvider: "local",
+			},
+			{
+				name:         "node-user-1",
+				password:     "nodeuserpass1",
+				role:         "node",
+				id:           "00000006-0000-0000-0000-000000000008",
 				authProvider: "local",
 			},
 		}
@@ -903,6 +911,15 @@ func TestPostUsers(t *testing.T) {
 			description:    "failed non-superuser request",
 			username:       "username1",
 			password:       "password1",
+			addedUser:      "user-created-user-1",
+			roleIDorName:   "user",
+			orgIDorName:    "org1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed node user request",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
 			addedUser:      "user-created-user-1",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
@@ -3408,6 +3425,12 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 			description:    "successful superuser request",
 			username:       "admin",
 			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request with 'node' role",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
 			expectedStatus: http.StatusOK,
 		},
 		{
