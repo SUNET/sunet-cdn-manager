@@ -100,9 +100,11 @@ type Domain struct {
 
 type CacheNode struct {
 	ID          pgtype.UUID `json:"id" doc:"ID of cache node"`
+	Name        string      `json:"name" doc:"Name of the cache node"`
 	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
 	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
+	Maintenance bool        `json:"maintenance" doc:"If the cache node is currently in maintenance mode"`
 }
 
 type L4LBNodeConfig struct {

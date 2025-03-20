@@ -1797,6 +1797,31 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 	return keyID, nil
 }
 
+func setCacheNodeMaintenance(ad types.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, maintenance bool) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(tx, cacheNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse cache node ID for maintenance: %w", err)
+		}
+
+		_, err = tx.Exec(context.Background(), "UPDATE cache_nodes SET maintenance = $1 WHERE id = $2", maintenance, cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to update maintenance mode for cache node: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setCacheNodeMaintenance: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
 func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNode, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
@@ -1805,7 +1830,7 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNod
 	var rows pgx.Rows
 	var err error
 
-	rows, err = dbPool.Query(context.Background(), "SELECT id, description, ipv4_address, ipv6_address FROM cache_nodes ORDER BY id")
+	rows, err = dbPool.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for all cache nodes: %w", err)
 	}
@@ -1818,7 +1843,7 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNod
 	return cacheNodes, nil
 }
 
-func createCacheNode(dbPool *pgxpool.Pool, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, ad types.AuthData) (types.CacheNode, error) {
+func createCacheNode(dbPool *pgxpool.Pool, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, ad types.AuthData) (types.CacheNode, error) {
 	if !ad.Superuser {
 		return types.CacheNode{}, cdnerrors.ErrForbidden
 	}
@@ -1828,7 +1853,7 @@ func createCacheNode(dbPool *pgxpool.Pool, description string, ipv4Address *neti
 	var cacheNodeID pgtype.UUID
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeID, err = insertCacheNodeTx(tx, description, ipv4Address, ipv6Address)
+		cacheNodeID, err = insertCacheNodeTx(tx, name, description, ipv4Address, ipv6Address)
 		if err != nil {
 			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
 		}
@@ -1847,9 +1872,9 @@ func createCacheNode(dbPool *pgxpool.Pool, description string, ipv4Address *neti
 	}, nil
 }
 
-func insertCacheNodeTx(tx pgx.Tx, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr) (pgtype.UUID, error) {
+func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr) (pgtype.UUID, error) {
 	var cacheNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (description, ipv4_address, ipv6_address) VALUES ($1, $2, $3) RETURNING id", description, ipv4Address, ipv6Address).Scan(&cacheNodeID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, ipv4_address, ipv6_address) VALUES ($1, $2, $3, $4) RETURNING id", name, description, ipv4Address, ipv6Address).Scan(&cacheNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
 	}
@@ -2247,6 +2272,10 @@ type userIdentifier struct {
 	roleID pgtype.UUID
 }
 
+type cacheNodeIdentifier struct {
+	resourceIdentifier
+}
+
 func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	if input == "" {
 		return orgIdentifier{}, errors.New("input identifier is empty")
@@ -2380,6 +2409,38 @@ func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
 		},
 		orgID:  orgID,
 		roleID: roleID,
+	}, nil
+}
+
+func newCacheNodeIdentifier(tx pgx.Tx, input string) (cacheNodeIdentifier, error) {
+	if input == "" {
+		return cacheNodeIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM cache_nodes WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		if err != nil {
+			return cacheNodeIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (cache node names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM cache_nodes WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		if err != nil {
+			return cacheNodeIdentifier{}, err
+		}
+	}
+
+	return cacheNodeIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
 	}, nil
 }
 
@@ -2905,7 +2966,7 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNo
 	cacheNodes := []types.CacheNode{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(context.Background(), "SELECT id, description, ipv4_address, ipv6_address FROM cache_nodes")
+		rows, err := tx.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes")
 		if err != nil {
 			return fmt.Errorf("unable to select cache node information: %w", err)
 		}
@@ -4581,7 +4642,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from cache-node POST handler")
 				}
 
-				cacheNode, err := createCacheNode(dbPool, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, ad)
+				cacheNode, err := createCacheNode(dbPool, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
@@ -4594,6 +4655,28 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				}, nil
 			},
 		)
+
+		huma.Put(api, "/v1/cache-nodes/{cachenode}/maintenance", func(ctx context.Context, input *struct {
+			CacheNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
+			Body      struct {
+				Maintenance bool `json:"maintenance" example:"true" doc:"Put the given cache node into maintenance mode"`
+			}
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-nodes maintenance PUT handler")
+			}
+
+			err := setCacheNodeMaintenance(ad, dbPool, input.CacheNode, input.Body.Maintenance)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				}
+				return nil, fmt.Errorf("unable to set maintenance: %w", err)
+			}
+			return nil, nil
+		})
 	})
 
 	return nil
@@ -4626,6 +4709,7 @@ type userOutput struct {
 }
 
 type cacheNodeInput struct {
+	Name        string      `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
 	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`

@@ -183,7 +183,9 @@ CREATE TABLE service_vcls (
 CREATE TABLE cache_nodes (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
+    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
     description text NOT NULL,
+    maintenance bool NOT NULL DEFAULT true,
     ipv4_address inet UNIQUE CONSTRAINT valid_ipv4_address CHECK(family(ipv4_address) = 4 AND masklen(ipv4_address) = 32),
     ipv6_address inet UNIQUE CONSTRAINT valid_ipv6_address CHECK(family(ipv6_address) = 6 AND masklen(ipv6_address) = 128)
 );
