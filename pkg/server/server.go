@@ -2966,7 +2966,7 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNo
 	cacheNodes := []types.CacheNode{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes")
+		rows, err := tx.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes ORDER BY ipv4_address, ipv6_address")
 		if err != nil {
 			return fmt.Errorf("unable to select cache node information: %w", err)
 		}
