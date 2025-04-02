@@ -7,7 +7,6 @@ linters:
     errcheck:
       check-blank: true
   exclusions:
-    generated: lax
     presets:
       - comments
       - common-false-positives
@@ -21,7 +20,6 @@ formatters:
   enable:
     - gofumpt
   exclusions:
-    generated: lax
     paths:
       - third_party$
       - builtin$
