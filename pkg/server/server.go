@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -676,12 +675,16 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			formData := createServiceVersionForm{}
 
+			fmt.Printf("%#v\n", r.PostForm)
+
 			err = schemaDecoder.Decode(&formData, r.PostForm)
 			if err != nil {
 				logger.Err(err).Msg("unable to decode POST create-service-version form data")
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
+
+			fmt.Printf("%#v\n", formData)
 
 			// Deal with the fact that submitting an empty
 			// text field from an HTML form will cause
@@ -718,25 +721,12 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			}
 
 			origins := []types.Origin{}
-			for i, formOrigin := range formData.Origins {
-				host, port, err := net.SplitHostPort(formOrigin)
-				if err != nil {
-					logger.Err(err).Msg("unable to parse formOrigin")
-					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-					return
-				}
-
-				portInt, err := strconv.Atoi(port)
-				if err != nil {
-					logger.Err(err).Msg("unable to parse formOrigin port as int")
-					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-					return
-				}
+			for _, formOrigin := range formData.Origins {
 				origins = append(origins, types.Origin{
-					Host:      host,
-					Port:      portInt,
-					TLS:       formData.OriginTLS[i],
-					VerifyTLS: formData.OriginVerifyTLS[i],
+					Host:      formOrigin.OriginHost,
+					Port:      formOrigin.OriginPort,
+					TLS:       formOrigin.OriginTLS,
+					VerifyTLS: formOrigin.OriginVerifyTLS,
 				})
 			}
 			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
@@ -928,12 +918,17 @@ type createDomainForm struct {
 	Name string `schema:"name" validate:"min=1,max=253,hostname_rfc1123"`
 }
 
+type createServiceVersionOrigin struct {
+	OriginHost      string `schema:"host" validate:"gte=1,dive,min=1,max=253"`
+	OriginPort      int    `schema:"port" validate:"gte=1,dive,min=1,max=65535"`
+	OriginTLS       bool   `schema:"tls"`
+	OriginVerifyTLS bool   `schema:"verify-tls"`
+}
+
 type createServiceVersionForm struct {
 	types.VclSteps
-	Domains         []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins         []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
-	OriginTLS       []bool               `schema:"origins-tls"`
-	OriginVerifyTLS []bool               `schema:"origins-verify-tls"`
+	Domains []types.DomainString         `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins []createServiceVersionOrigin `schema:"origins" validate:"min=1"`
 }
 
 type activateServiceVersionForm struct {

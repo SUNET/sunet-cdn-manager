@@ -211,12 +211,14 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		</select>
 		<fieldset>
 			<legend>Origins:</legend>
-			<label for="origins">Origin:</label>
-			<input type="text" id="origins" name="origins"/>
-			<label for="origins-tls">TLS:</label>
-			<input type="checkbox" id="origins-tls" name="origins-tls"/>
-			<label for="origins-verify-tls">Verify TLS:</label>
-			<input type="checkbox" id="origins-verify-tls" name="origins-verify-tls"/>
+			<label for="origins.0.host">Host:</label>
+			<input type="text" id="origins.0.host" name="origins.0.host"/>
+			<label for="origins.0.port">Port:</label>
+			<input type="text" id="origins.0.port" name="origins.0.port"/>
+			<label for="origins.0.tls">TLS:</label>
+			<input type="checkbox" id="origins.0.tls" name="origins.0.tls"/>
+			<label for="origins.0.verify-tls">Verify TLS:</label>
+			<input type="checkbox" id="origins.0.verify-tls" name="origins.0.verify-tls"/>
 		</fieldset>
 		for _, vclStep := range vclSK.FieldOrder {
 			<div>
