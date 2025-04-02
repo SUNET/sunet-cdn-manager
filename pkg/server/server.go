@@ -675,16 +675,12 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			formData := createServiceVersionForm{}
 
-			fmt.Printf("%#v\n", r.PostForm)
-
 			err = schemaDecoder.Decode(&formData, r.PostForm)
 			if err != nil {
 				logger.Err(err).Msg("unable to decode POST create-service-version form data")
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
-
-			fmt.Printf("%#v\n", formData)
 
 			// Deal with the fact that submitting an empty
 			// text field from an HTML form will cause
