@@ -915,8 +915,8 @@ type createDomainForm struct {
 }
 
 type createServiceVersionOrigin struct {
-	OriginHost      string `schema:"host" validate:"gte=1,dive,min=1,max=253"`
-	OriginPort      int    `schema:"port" validate:"gte=1,dive,min=1,max=65535"`
+	OriginHost      string `schema:"host" validate:"gte=1,min=1,max=253"`
+	OriginPort      int    `schema:"port" validate:"gte=1,min=1,max=65535"`
 	OriginTLS       bool   `schema:"tls"`
 	OriginVerifyTLS bool   `schema:"verify-tls"`
 }
@@ -924,7 +924,7 @@ type createServiceVersionOrigin struct {
 type createServiceVersionForm struct {
 	types.VclSteps
 	Domains []types.DomainString         `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins []createServiceVersionOrigin `schema:"origins" validate:"min=1"`
+	Origins []createServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
 }
 
 type activateServiceVersionForm struct {
