@@ -11,6 +11,7 @@ require (
 	github.com/gorilla/csrf v1.7.2
 	github.com/gorilla/schema v1.4.1
 	github.com/gorilla/sessions v1.4.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/miekg/dns v1.1.64
 	github.com/pressly/goose/v3 v3.24.2

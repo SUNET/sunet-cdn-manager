@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +42,7 @@ import (
 	"github.com/gorilla/csrf"
 	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -932,7 +935,7 @@ type activateServiceVersionForm struct {
 }
 
 // Endpoint used for console login
-func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -993,7 +996,7 @@ func loginHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.
 
 			var ad types.AuthData
 			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-				ad, err = dbUserLogin(tx, formData.Username, formData.Password)
+				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
 				if err != nil {
 					return err
 				}
@@ -1515,7 +1518,19 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func dbUserLogin(tx pgx.Tx, username string, password string) (types.AuthData, error) {
+func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expectedSalt []byte, password string) string {
+	var loginCacheKey []byte
+	loginCacheKey = append(loginCacheKey, userID.String()...)
+	loginCacheKey = append(loginCacheKey, expectedPasswordHash...)
+	loginCacheKey = append(loginCacheKey, expectedSalt...)
+	loginCacheKey = append(loginCacheKey, password...)
+	hashedCacheKeyBytes := sha256.Sum256(loginCacheKey)
+	hashedCacheKey := hex.EncodeToString(hashedCacheKeyBytes[:])
+
+	return hashedCacheKey
+}
+
+func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (types.AuthData, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
@@ -1564,14 +1579,44 @@ func dbUserLogin(tx pgx.Tx, username string, password string) (types.AuthData, e
 		return types.AuthData{}, err
 	}
 
-	loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
-	// Use subtle.ConstantTimeCompare() in an attempt to
-	// not leak password contents via timing attack
-	passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+	hashedCacheKey := createLoginCacheKey(userID, argon2Key, argon2Salt, password)
 
-	if !passwordMatch {
+	validLogin := false
+
+	if _, ok := loginCache.Get(hashedCacheKey); ok {
+		logger.Info().Msgf("login cache hit for userID '%s'", userID.String())
+		validLogin = true
+	} else {
+		logger.Info().Msgf("login cache miss for userID '%s'", userID.String())
+	}
+
+	if !validLogin {
+		// Protect concurrent access to memory intensive argon2
+		// operation. We do not want to overwhelm the server
+		// with many simultaneous logins which could cause OOM
+		// problems.
+		argon2Mutex.Lock()
+		logger.Info().Msgf("calculating hash for userID '%s'", userID.String())
+		loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
+		argon2Mutex.Unlock()
+		// Use subtle.ConstantTimeCompare() in an attempt to
+		// not leak password contents via timing attack
+		passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
+
+		if passwordMatch {
+			validLogin = true
+			evicted := loginCache.Add(hashedCacheKey, struct{}{})
+			if evicted {
+				logger.Info().Msg("adding key to loginCache resulted in eviction")
+			}
+		}
+	}
+
+	if !validLogin {
 		return types.AuthData{}, cdnerrors.ErrBadPassword
 	}
+
+	logger.Info().Msgf("successful login for userID '%s', username '%s'", userID.String(), username)
 
 	return types.AuthData{
 		Username:  username,
@@ -1685,7 +1730,7 @@ type argon2Data struct {
 	argon2Settings
 }
 
-func passwordToArgon2(password string) (argon2Data, error) {
+func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, error) {
 	argonSettings := newArgon2DefaultSettings()
 
 	// Generate 16 byte (128 bit) salt as
@@ -1698,7 +1743,10 @@ func passwordToArgon2(password string) (argon2Data, error) {
 		return argon2Data{}, fmt.Errorf("unable to create argon2 salt: %w", err)
 	}
 
+	// Protect access to memory intensive hash calculation to not overwhelm server if handling many concurrect connections.
+	argon2Mutex.Lock()
 	key := argon2.IDKey([]byte(password), salt, argonSettings.argonTime, argonSettings.argonMemory, argonSettings.argonThreads, argonSettings.argonTagSize)
+	argon2Mutex.Unlock()
 
 	return argon2Data{
 		key:            key,
@@ -1727,7 +1775,7 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 	return keyID, nil
 }
 
-func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool.Pool, userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -1735,7 +1783,7 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 	// another round of hashing when testing the oldPassword below but in
 	// that case it probably makes sense to know the database is in a
 	// consistent state (via FOR SHARE selects) during the operation.
-	a2Data, err := passwordToArgon2(newPassword)
+	a2Data, err := passwordToArgon2(argon2Mutex, newPassword)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to generate argon2 data from newPassword: %w", err)
 	}
@@ -1774,7 +1822,7 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 		// optimal but not sure about a better way since we want to do
 		// the following upsert operation in the transaction.
 		if !ad.Superuser {
-			_, err := dbUserLogin(tx, userIdent.name, oldPassword)
+			_, err := dbUserLogin(tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword
@@ -1785,6 +1833,14 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 		if err != nil {
 			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 		}
+
+		// Clear the login cache if the password is updated correctly. This should not be strictly
+		// needed because the random salt added to the account should make sure even reuse of
+		// the same password results in a different cache hash, but be careful just in case.
+		lenBefore := loginCache.Len()
+		loginCache.Purge()
+		lenAfter := loginCache.Len()
+		logger.Info().Msgf("purged login cache after successful password change, items before: %d, items after: %d", lenBefore, lenAfter)
 
 		return nil
 	})
@@ -3690,7 +3746,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad types.AuthData
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -3735,8 +3791,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
 		r.Use(csrfMiddleware)
-		r.Get("/login", loginHandler(dbPool, cookieStore))
-		r.Post("/login", loginHandler(dbPool, cookieStore))
+		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
+		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Get("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
@@ -3778,7 +3834,7 @@ func decodeBasicAuth(token string) (username, password string, ok bool) {
 }
 
 // https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
-func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Context, next func(huma.Context)) {
+func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) func(ctx huma.Context, next func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		logger := zlog.Ctx(ctx.Context())
 
@@ -3797,7 +3853,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 		var ad types.AuthData
 		var err error
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			ad, err = dbUserLogin(tx, username, password)
+			ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
 			return err
 		})
 		if err != nil {
@@ -3822,7 +3878,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool) func(ctx huma.Cont
 	}
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, confTemplates configTemplates) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -3842,7 +3898,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 
 		api := humachi.New(r, config)
 
-		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool))
+		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool, argon2Mutex, loginCache))
 
 		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
 		) (*usersOutput, error) {
@@ -3943,7 +3999,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
 
-			_, err := setLocalPassword(logger, ad, dbPool, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			_, err := setLocalPassword(logger, ad, dbPool, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrBadOldPassword) {
 					return nil, huma.Error400BadRequest("old password is not correct")
@@ -4867,7 +4923,10 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to generate password: %w", err)
 	}
 
-	a2Data, err := passwordToArgon2(password)
+	// We get away with a local version of the argon2 mutex here because Init() is only called when first initializing the database, so there is no possibility of concurrent calls to argon2 calculations.
+	var initArgon2Mutex sync.Mutex
+
+	a2Data, err := passwordToArgon2(&initArgon2Mutex, password)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
@@ -5312,9 +5371,16 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("unable to create haproxy template")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates)
+	var argon2Mutex sync.Mutex
 
-	err = setupHumaAPI(router, dbPool, vclValidator, confTemplates)
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
+	}
+
+	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates)
+
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to setup Huma API")
 	}

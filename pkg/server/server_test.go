@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"text/template"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/SUNET/sunet-cdn-manager/pkg/types"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -436,9 +438,16 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("unable to create haproxy template")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates)
+	var argon2Mutex sync.Mutex
 
-	err = setupHumaAPI(router, dbPool, vclValidator, confTemplates)
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
+	}
+
+	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates)
+
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
 		return nil, dbPool, err
 	}
