@@ -127,7 +127,6 @@ CREATE TABLE service_versions (
     service_id uuid NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     version bigint NOT NULL,
     active boolean DEFAULT false NOT NULL,
-    sni_hostname text CONSTRAINT non_empty_sni_hostname CHECK(length(sni_hostname)>=1 AND length(sni_hostname)<=253),
     UNIQUE(service_id, version)
 );
 -- https://dba.stackexchange.com/questions/197562/constraint-one-boolean-row-is-true-all-other-rows-false
@@ -157,6 +156,7 @@ CREATE TABLE service_origins (
     host text NOT NULL CONSTRAINT non_empty_host CHECK(length(host)>=1 AND length(host)<=253),
     port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
+    verify_tls boolean DEFAULT true NOT NULL,
     UNIQUE(service_version_id, host, port)
 );
 

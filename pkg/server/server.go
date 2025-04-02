@@ -651,9 +651,16 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		vclSK := newVclStepKeys()
 
+		domains, err := selectDomains(dbPool, ad, orgName)
+		if err != nil {
+			logger.Error().Msg("console: unable to lookup domains for service version creation")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, nil, ""))
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -683,13 +690,12 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			// We do not allow empty strings for VCL columns in the
 			// database (they should be NULL) so reset any VCL
 			// string pointer fields back to nil if they are
-			// pointing to empty strings, also do the same for
-			// SNIHostname which can also be NULL.
+			// pointing to empty strings.
 			// https://github.com/gorilla/schema/issues/161
 			val := reflect.ValueOf(&formData)
 			structVal := val.Elem()
 			for _, field := range reflect.VisibleFields(structVal.Type()) {
-				if _, ok := vclSK.FieldToKey[field.Name]; ok || field.Name == "SNIHostname" {
+				if _, ok := vclSK.FieldToKey[field.Name]; ok {
 					fieldVal := structVal.FieldByIndex(field.Index)
 					if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
 						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
@@ -702,7 +708,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, cdnerrors.ErrInvalidFormData, ""))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -727,12 +733,13 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					return
 				}
 				origins = append(origins, types.Origin{
-					Host: host,
-					Port: portInt,
-					TLS:  formData.OriginTLS[i],
+					Host:      host,
+					Port:      portInt,
+					TLS:       formData.OriginTLS[i],
+					VerifyTLS: formData.OriginVerifyTLS[i],
 				})
 			}
-			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps, formData.SNIHostname)
+			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -741,7 +748,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, err, errDetails))
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -923,10 +930,10 @@ type createDomainForm struct {
 
 type createServiceVersionForm struct {
 	types.VclSteps
-	Domains     []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins     []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
-	OriginTLS   []bool               `schema:"origins-tls" validate:"eqfield=Origins"`
-	SNIHostname *string              `schema:"sni-hostname" validate:"omitnil,min=1,max=253"`
+	Domains         []types.DomainString `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins         []string             `schema:"origins" validate:"gte=1,dive,min=1,max=253"`
+	OriginTLS       []bool               `schema:"origins-tls"`
+	OriginVerifyTLS []bool               `schema:"origins-verify-tls"`
 }
 
 type activateServiceVersionForm struct {
@@ -1843,7 +1850,7 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNod
 	return cacheNodes, nil
 }
 
-func createCacheNode(dbPool *pgxpool.Pool, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, ad types.AuthData) (types.CacheNode, error) {
+func createCacheNode(dbPool *pgxpool.Pool, ad types.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (types.CacheNode, error) {
 	if !ad.Superuser {
 		return types.CacheNode{}, cdnerrors.ErrForbidden
 	}
@@ -1853,7 +1860,7 @@ func createCacheNode(dbPool *pgxpool.Pool, name string, description string, ipv4
 	var cacheNodeID pgtype.UUID
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeID, err = insertCacheNodeTx(tx, name, description, ipv4Address, ipv6Address)
+		cacheNodeID, err = insertCacheNodeTx(tx, name, description, ipv4Address, ipv6Address, maintenance)
 		if err != nil {
 			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
 		}
@@ -1869,12 +1876,13 @@ func createCacheNode(dbPool *pgxpool.Pool, name string, description string, ipv4
 		Description: description,
 		IPv4Address: ipv4Address,
 		IPv6Address: ipv6Address,
+		Maintenance: maintenance,
 	}, nil
 }
 
-func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr) (pgtype.UUID, error) {
+func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (pgtype.UUID, error) {
 	var cacheNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, ipv4_address, ipv6_address) VALUES ($1, $2, $3, $4) RETURNING id", name, description, ipv4Address, ipv6Address).Scan(&cacheNodeID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, ipv4_address, ipv6_address, maintenance) VALUES ($1, $2, $3, $4, $5) RETURNING id", name, description, ipv4Address, ipv6Address, maintenance).Scan(&cacheNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
 	}
@@ -2788,7 +2796,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
                                service_versions.id AS service_version_id,
                                service_versions.version,
                                service_versions.active,
-                               service_versions.sni_hostname,
                                service_vcls.vcl_recv,
                                service_vcls.vcl_pipe,
                                service_vcls.vcl_pass,
@@ -2822,7 +2829,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
                                        GROUP BY service_version_id
                                ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
                                JOIN (
-                                       SELECT service_version_id, array_agg((host, port, tls) ORDER BY host, port) AS origins
+                                       SELECT service_version_id, array_agg((host, port, tls, verify_tls) ORDER BY host, port) AS origins
                                        FROM service_origins
                                        GROUP BY service_version_id
                                ) AS agg_origins ON agg_origins.service_version_id = service_versions.id
@@ -2841,7 +2848,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 	var serviceUIDRange pgtype.Range[pgtype.Int8]
 	var serviceVersion int64
 	var serviceVersionActive bool
-	var serviceVersionSNIHostname *string
 	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
 	var domains []types.DomainString
 	var origins []types.Origin
@@ -2854,7 +2860,6 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 			&serviceVersionID,
 			&serviceVersion,
 			&serviceVersionActive,
-			&serviceVersionSNIHostname,
 			&vclRecv,
 			&vclPipe,
 			&vclPass,
@@ -2917,7 +2922,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
 
-			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins, serviceVersionSNIHostname)
+			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins)
 			if err != nil {
 				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
 			}
@@ -3153,7 +3158,6 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrI
 				service_versions.id,
 				service_versions.version,
 				service_versions.active,
-				service_versions.sni_hostname,
 				service_vcls.vcl_recv,
 				service_vcls.vcl_pipe,
 				service_vcls.vcl_pass,
@@ -3178,7 +3182,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrI
 					WHERE domains.verified = true AND service_version_id = service_versions.id
 				) AS domains,
 				(SELECT
-					array_agg((host, port, tls) ORDER BY host, port)
+					array_agg((host, port, tls, verify_tls) ORDER BY host, port)
 					FROM service_origins
 					WHERE service_version_id = service_versions.id
 				) AS origins
@@ -3249,7 +3253,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -3273,11 +3277,10 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 
 	err = tx.QueryRow(
 		context.Background(),
-		"INSERT INTO service_versions (service_id, version, active, sni_hostname) VALUES ($1, $2, $3, $4) RETURNING id",
+		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
 		serviceIdent.id,
 		versionCounter,
 		active,
-		sniHostname,
 	).Scan(&serviceVersionID)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
@@ -3319,11 +3322,12 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 		var serviceOriginID pgtype.UUID
 		err = tx.QueryRow(
 			context.Background(),
-			"INSERT INTO service_origins (service_version_id, host, port, tls) VALUES ($1, $2, $3, $4) RETURNING id",
+			"INSERT INTO service_origins (service_version_id, host, port, tls, verify_tls) VALUES ($1, $2, $3, $4, $5) RETURNING id",
 			serviceVersionID,
 			origin.Host,
 			origin.Port,
 			origin.TLS,
+			origin.VerifyTLS,
 		).Scan(&serviceOriginID)
 		if err != nil {
 			return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service origin: %w", err)
@@ -3394,7 +3398,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad types.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps, sniHostname *string) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad types.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -3410,10 +3414,9 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 		orgNameOrID,
 		serviceNameOrID,
 		types.InputServiceVersion{
-			VclSteps:    vcls,
-			Origins:     origins,
-			Domains:     domains,
-			SNIHostname: sniHostname,
+			VclSteps: vcls,
+			Origins:  origins,
+			Domains:  domains,
 		},
 	)
 	if err != nil {
@@ -3443,7 +3446,7 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 			}
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls, sniHostname)
+		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -3581,13 +3584,12 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 
 type haproxyConfInput struct {
 	Origins        []types.Origin
-	SNIHostname    *string
 	HTTPSEnabled   bool
 	HTTPEnabled    bool
 	AddressStrings []string
 }
 
-func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin, sniHostname *string) (string, error) {
+func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin) (string, error) {
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
@@ -3623,7 +3625,6 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	}
 
 	hci := haproxyConfInput{
-		SNIHostname:    sniHostname,
 		Origins:        origins,
 		AddressStrings: addressStrings,
 		HTTPSEnabled:   haProxyHTTPS,
@@ -4345,11 +4346,10 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
 					types.VclSteps
-					Org         string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-					Domains     []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins     []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active      bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
-					SNIHostname *string              `json:"sni_hostname,omitempty" doc:"Name expected in certificate presented by origin server"`
+					Org     string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Domains []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active  bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -4360,7 +4360,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps, input.Body.SNIHostname)
+				serviceVersionInsertRes, err := insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -4642,7 +4642,14 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, vclValidator *vclVali
 					return nil, errors.New("unable to read auth data from cache-node POST handler")
 				}
 
-				cacheNode, err := createCacheNode(dbPool, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, ad)
+				var maintenance bool
+				if input.Body.Maintenance == nil {
+					maintenance = true
+				} else {
+					maintenance = *input.Body.Maintenance
+				}
+
+				cacheNode, err := createCacheNode(dbPool, ad, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden("not allowed to add resource")
@@ -4713,6 +4720,7 @@ type cacheNodeInput struct {
 	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
 	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
+	Maintenance *bool       `json:"maintenance,omitempty" doc:"If the node should start in maintenance mode or not, defaults to maintenance mode"`
 }
 
 type cacheNodePostInput struct {
@@ -4786,12 +4794,6 @@ type cacheNodeConfigOutput struct {
 
 type serviceVersionsOutput struct {
 	Body []types.ServiceVersion
-}
-
-type origin struct {
-	Host string `json:"host" minLength:"1" maxLength:"253"`
-	Port int    `json:"port" minimum:"1" maximum:"65535"`
-	TLS  bool   `json:"tls"`
 }
 
 type ipNetwork struct {

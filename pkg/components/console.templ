@@ -183,6 +183,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 						<li>Host: { origin.Host }</li>
 						<li>Port: { strconv.Itoa(origin.Port) }</li>
 						<li>TLS: { strconv.FormatBool(origin.TLS) }</li>
+						<li>Verify TLS: { strconv.FormatBool(origin.VerifyTLS) }</li>
 					</ul>
 				}
 			</td>
@@ -197,19 +198,25 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
 		<label for="domains">Domains:</label>
-		<input type="text" id="domains" name="domains"/>
-		<label for="domains">SNI hostname:</label>
-		<input type="text" id="sni-hostname" name="sni-hostname"/>
+		<select id="domains" name="domains">
+			for _, domain := range domains {
+				if domain.Verified {
+					<option value={ domain.Name }>{ domain.Name }</option>
+				}
+			}
+		</select>
 		<fieldset>
 			<legend>Origins:</legend>
-			<label for="origins">Origins:</label>
+			<label for="origins">Origin:</label>
 			<input type="text" id="origins" name="origins"/>
 			<label for="origins-tls">TLS:</label>
 			<input type="checkbox" id="origins-tls" name="origins-tls"/>
+			<label for="origins-verify-tls">Verify TLS:</label>
+			<input type="checkbox" id="origins-verify-tls" name="origins-verify-tls"/>
 		</fieldset>
 		for _, vclStep := range vclSK.FieldOrder {
 			<div>

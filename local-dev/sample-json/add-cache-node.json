@@ -1,0 +1,6 @@
+{
+    "name": "example-name-for-cache-node",
+    "description": "some description",
+    "ipv4_address": "10.0.0.1",
+    "ipv6_address": "2001:db8:1337::100"
+}

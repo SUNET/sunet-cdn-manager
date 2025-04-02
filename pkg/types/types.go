@@ -52,7 +52,6 @@ type ServiceVersionVCL struct {
 type ServiceVersionConfig struct {
 	ServiceVersion
 	VclSteps
-	SNIHostname        *string        `json:"sni_hostname" doc:"The name that should be present in the TLS cert presented by TLS origins" validate:"omitnil,min=1,max=253"`
 	ServiceIPAddresses []netip.Addr   `json:"service_ip_addresses" doc:"The IP (v4 and v6) addresses allocated to the service" validate:"min=2"`
 	Domains            []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
 	Origins            []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
@@ -62,15 +61,15 @@ type ServiceVersionConfig struct {
 type InputServiceVersion struct {
 	ServiceVersion
 	VclSteps
-	SNIHostname *string        `json:"sni_hostname" doc:"The name that should be present in the TLS cert presented by TLS origins" validate:"omitnil,min=1,max=253"`
-	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 type Origin struct {
-	Host string `json:"host" minLength:"1" maxLength:"253"`
-	Port int    `json:"port" minimum:"1" maximum:"65535"`
-	TLS  bool   `json:"tls"`
+	Host      string `json:"host" minLength:"1" maxLength:"253"`
+	Port      int    `json:"port" minimum:"1" maximum:"65535"`
+	TLS       bool   `json:"tls"`
+	VerifyTLS bool   `json:"verify_tls"`
 }
 
 // The "Client" and "Backend" steps from

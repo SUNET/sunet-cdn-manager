@@ -22,6 +22,7 @@ import (
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/SUNET/sunet-cdn-manager/pkg/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -2543,7 +2544,7 @@ func TestPostServiceVersion(t *testing.T) {
 		orgNameOrID     string
 		serviceNameOrID string
 		domains         []string
-		origins         []origin
+		origins         []types.Origin
 		active          bool
 		vclRecvFile     string
 	}{
@@ -2554,11 +2555,12 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
-					Host: "198.51.100.20",
-					Port: 443,
-					TLS:  true,
+					Host:      "198.51.100.20",
+					Port:      443,
+					TLS:       true,
+					VerifyTLS: true,
 				},
 				{
 					Host: "192.51.100.21",
@@ -2577,7 +2579,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "198.51.100.20",
 					Port: 443,
@@ -2600,7 +2602,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"nonexistant.com"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "198.51.100.20",
 					Port: 443,
@@ -2623,7 +2625,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.nu"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "198.51.100.20",
 					Port: 443,
@@ -2646,7 +2648,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "198.51.100.20",
 					Port: 443,
@@ -2669,7 +2671,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "org1-service1",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2692,7 +2694,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "does-not-exist",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2715,7 +2717,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2738,7 +2740,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: strings.Repeat("a", 254),
 					Port: 443,
@@ -2761,7 +2763,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{strings.Repeat("a", 254), "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2784,7 +2786,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: strings.Repeat("a", 64),
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2807,7 +2809,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2830,7 +2832,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2853,7 +2855,7 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []origin{
+			origins: []types.Origin{
 				{
 					Host: "192.51.100.20",
 					Port: 443,
@@ -2873,11 +2875,11 @@ func TestPostServiceVersion(t *testing.T) {
 
 	for _, test := range tests {
 		newServiceVersion := struct {
-			Org     string   `json:"org"`
-			Active  bool     `json:"active"`
-			Domains []string `json:"domains"`
-			Origins []origin `json:"origins"`
-			VclRecv string   `json:"vcl_recv"`
+			Org     string         `json:"org"`
+			Active  bool           `json:"active"`
+			Domains []string       `json:"domains"`
+			Origins []types.Origin `json:"origins"`
+			VclRecv string         `json:"vcl_recv"`
 		}{
 			Org:     test.orgNameOrID,
 			Active:  test.active,

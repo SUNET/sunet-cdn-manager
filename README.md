@@ -77,6 +77,16 @@ Set a password for the user with "node" role:
 curl -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-node-user-password.json -H "content-type: application/json" http://localhost:8081/api/v1/users/node-user-1/local-password
 ```
 
+Add a cache node to the system:
+```
+curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-cache-node.json -H "content-type: application/json" http://localhost:8081/api/v1/cache-nodes
+```
+
+A cache node will be added in maintenance mode by default (can be overriden in JSON on creation), to disable maintenance mode:
+```
+curl -i -s -u admin:$admin_password -X PUT -d @local-dev/sample-json/disable-maintenance.json -H "content-type: application/json" http://localhost:8081/api/v1/cache-nodes/example-name-for-cache-node/maintenance
+```
+
 ### Formatting and linting
 When working with this code at least the following tools are expected to be
 run at the top level directory prior to commiting:
