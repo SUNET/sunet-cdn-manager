@@ -53,7 +53,6 @@ templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparato
 	if len(domains) == 0 {
 		<div>No domains added</div>
 	} else {
-		<div>Domains:</div>
 		<table>
 			<tr>
 				<th>Domain name</th>
@@ -118,23 +117,15 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 }
 
-templ CreateDomainContent(err error) {
+templ CreateDomainContent(dData DomainData) {
+	<span class="error">{ dData.Errors.ServerError }</span>
 	<form method="post" action={ templ.URL("/console/create/domain") }>
 		@CSRF()
 		<label for="name">Name:</label>
-		<input type="text" id="name" name="name"/>
+		<input type="text" id="name" name="name" placeholder="A domain name" value={ dData.Name }/>
+		<span class="error">{ dData.Errors.Name }</span>
 		<input type="submit"/>
 	</form>
-	if err != nil {
-		switch  {
-			case errors.Is(err, cdnerrors.ErrAlreadyExists):
-				<div>Domain already exists</div>
-			case errors.Is(err, cdnerrors.ErrInvalidFormData):
-				<div>Invalid form data</div>
-			default:
-				<div>Domain creation failed</div>
-		}
-	}
 }
 
 templ CreateServiceContent(err error) {

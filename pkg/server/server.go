@@ -318,7 +318,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(nil))
+			err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(components.DomainData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render domain creation page in GET")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -341,10 +341,26 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				return
 			}
 
+			domainData := components.DomainData{
+				DomainFormFields: components.DomainFormFields{
+					Name: formData.Name,
+				},
+			}
+
 			err = validate.Struct(formData)
 			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					if fieldError.StructField() == "Name" {
+						if fieldError.Tag() == "fqdn" {
+							domainData.Errors.Name = "not a valid FQDN"
+						} else {
+							domainData.Errors.Name = fieldError.Error()
+						}
+					}
+				}
 				logger.Err(err).Msg("unable to validate POST create-domain form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(domainData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render domain creation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -356,16 +372,17 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			_, err = insertDomain(logger, dbPool, formData.Name, ad.OrgName, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(err))
-					if err != nil {
-						logger.Err(err).Msg("unable to render domain creation page after insert error")
-						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-						return
-					}
+					domainData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
+				} else {
+					logger.Err(err).Msg("unable to insert domain")
+					domainData.Errors.ServerError = "unable to insert domain"
+				}
+				err := renderConsolePage(w, r, ad, title, components.CreateDomainContent(domainData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render domain creation page after insert error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
-				logger.Err(err).Msg("unable to insert domain")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 
@@ -914,7 +931,7 @@ type createServiceForm struct {
 type createDomainForm struct {
 	// Domain name length validation needs to be kept in sync with the CHECK
 	// constraints in the domains table, see the migrations module.
-	Name string `schema:"name" validate:"min=1,max=253,hostname_rfc1123"`
+	Name string `schema:"name" validate:"min=1,max=253,fqdn"`
 }
 
 type createServiceVersionOrigin struct {
@@ -2612,6 +2629,9 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad types.AuthData) (types.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
+
+	// Cleanup any trailing "." in domain name
+	name = strings.TrimRight(name, ".")
 
 	var orgIdent orgIdentifier
 	var err error
