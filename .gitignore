@@ -1,3 +1,4 @@
 sunet-cdn-manager
 sunet-cdn-manager.toml
 sunet-cdn-manager-dev.toml
+local-dev/sample-json/*.json.tmp
