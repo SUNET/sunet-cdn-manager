@@ -67,6 +67,13 @@ func init() {
 //go:embed templates
 var templateFS embed.FS
 
+// Keys used for flash message storing
+var flashMessageKeys = struct {
+	domains string
+}{
+	domains: "_flash_domains",
+}
+
 const (
 	// https://www.postgresql.org/docs/current/errcodes-appendix.html
 	// unique_violation: 23505
@@ -200,7 +207,7 @@ func (zew *zerologErrorWriter) Write(p []byte) (n int, err error) {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
-	validatedRedirect(consolePath, w, r)
+	validatedRedirect(consolePath, w, r, http.StatusFound)
 }
 
 func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
@@ -225,6 +232,17 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 			return
 		}
 	}
+}
+
+func getFlashMessageStrings(flashMessages []any) []string {
+	flashMessageStrings := []string{}
+	for _, message := range flashMessages {
+		if stringMessage, ok := message.(string); ok {
+			flashMessageStrings = append(flashMessageStrings, stringMessage)
+		}
+	}
+
+	return flashMessageStrings
 }
 
 func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
@@ -254,12 +272,75 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, "Domains", components.DomainsContent(domains, sunetTxtTag, sunetTxtSeparator))
+		// If someone has been redirected from domain creation we will
+		// have a flash message to tell the user so.
+		flashMessages := session.Flashes(flashMessageKeys.domains)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("domains console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(w, r, ad, "Domains", components.DomainsContent(domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
+	}
+}
+
+func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("in DELETE handler")
+		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing AuthData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(types.AuthData)
+
+		domainName := chi.URLParam(r, "domain")
+		if domainName == "" {
+			logger.Error().Msg("console: missing domain name in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		_, err := deleteDomain(logger, dbPool, ad, domainName)
+		if err != nil {
+			if errors.Is(err, cdnerrors.ErrForbidden) {
+				logger.Err(err).Msg("domains console: not authorized to delete domain")
+				http.Error(w, "not allowed to delete domain", http.StatusForbidden)
+				return
+			}
+			logger.Err(err).Msg("domains console: domain deletion failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Domain '%s' deleted!", domainName), flashMessageKeys.domains)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+			return
+		}
+
+		// Use StatusSeeOther (303) here to make htmx hx-delete AJAX
+		// request replace original DELETE method with GET when
+		// following the redirect.
+		validatedRedirect("/console/domains", w, r, http.StatusSeeOther)
 	}
 }
 
@@ -386,7 +467,14 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				return
 			}
 
-			validatedRedirect("/console/domains", w, r)
+			session.AddFlash(fmt.Sprintf("Domain '%s' added!", formData.Name), flashMessageKeys.domains)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect("/console/domains", w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-domain handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -465,7 +553,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				return
 			}
 
-			validatedRedirect("/console/services", w, r)
+			validatedRedirect("/console/services", w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -767,7 +855,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
+			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -859,7 +947,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			}
 
 			if !formData.Confirmation {
-				validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
+				validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
 			}
 
 			if formData.Confirmation {
@@ -876,7 +964,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 				}
 			}
 
-			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r)
+			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for activate-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -892,7 +980,7 @@ func renderConsolePage(w http.ResponseWriter, r *http.Request, ad types.AuthData
 
 // Return user to content of return_to query parameter but only if it points to a place we control
 // https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
-func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request) {
+func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request, code int) {
 	logger := hlog.FromRequest(r)
 	returnToURL, err := url.Parse(returnTo)
 	if err != nil {
@@ -909,7 +997,7 @@ func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request) 
 	}
 
 	logger.Info().Str("return_to", returnToURL.String()).Msg("redirecting user")
-	http.Redirect(w, r, returnToURL.String(), http.StatusFound)
+	http.Redirect(w, r, returnToURL.String(), code)
 }
 
 type loginForm struct {
@@ -966,11 +1054,11 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 				case "":
 					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
 					// http.Redirect(w, r, consolePath, http.StatusFound)
-					validatedRedirect(consolePath, w, r)
+					validatedRedirect(consolePath, w, r, http.StatusFound)
 					return
 				default:
 					logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
-					validatedRedirect(returnTo, w, r)
+					validatedRedirect(returnTo, w, r, http.StatusFound)
 					return
 				}
 			}
@@ -1062,11 +1150,11 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 				}
 
 				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form")
-				validatedRedirect(u.String(), w, r)
+				validatedRedirect(u.String(), w, r, http.StatusFound)
 				return
 			}
 			logger.Info().Msg("no return_to in POST data, redirecting logged in user to consolePath")
-			validatedRedirect(consolePath, w, r)
+			validatedRedirect(consolePath, w, r, http.StatusFound)
 			return
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for login handler")
@@ -1091,11 +1179,11 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			case "":
 				logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
 				// http.Redirect(w, r, consolePath, http.StatusFound)
-				validatedRedirect(consolePath, w, r)
+				validatedRedirect(consolePath, w, r, http.StatusFound)
 				return
 			default:
 				logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
-				validatedRedirect(returnTo, w, r)
+				validatedRedirect(returnTo, w, r, http.StatusFound)
 				return
 			}
 		}
@@ -1117,12 +1205,12 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			validatedRedirect(u.String(), w, r)
+			validatedRedirect(u.String(), w, r, http.StatusFound)
 			return
 		}
 
 		// No return_to hint, just send them to the console
-		validatedRedirect(consolePath, w, r)
+		validatedRedirect(consolePath, w, r, http.StatusFound)
 	}
 }
 
@@ -1332,11 +1420,11 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 		}
 
 		if ocd.ReturnTo != "" {
-			validatedRedirect(ocd.ReturnTo, w, r)
+			validatedRedirect(ocd.ReturnTo, w, r, http.StatusFound)
 			return
 		}
 
-		validatedRedirect(consolePath, w, r)
+		validatedRedirect(consolePath, w, r, http.StatusFound)
 	}
 }
 
@@ -1530,7 +1618,7 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
 	redirectURL.Path = "/auth/login"
 
 	// http.Redirect(w, r, redirectURL.String(), http.StatusFound)
-	validatedRedirect(redirectURL.String(), w, r)
+	validatedRedirect(redirectURL.String(), w, r, http.StatusFound)
 
 	return nil
 }
@@ -2170,6 +2258,40 @@ func selectDomains(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string) 
 	return domains, nil
 }
 
+func deleteDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad types.AuthData, domainNameOrID string) (pgtype.UUID, error) {
+	if !ad.Superuser && ad.OrgID == nil {
+		return pgtype.UUID{}, cdnerrors.ErrNotFound
+	}
+
+	var domainID pgtype.UUID
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		domainIdent, err := newDomainIdentifier(tx, domainNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("unable to look up domain identifier")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// A normal user can only delete a domain belonging to the
+		// same org they are a member of
+		if !ad.Superuser && *ad.OrgID != domainIdent.orgID {
+			return cdnerrors.ErrNotFound
+		}
+
+		err = tx.QueryRow(context.Background(), "DELETE FROM domains WHERE id = $1 RETURNING id", domainIdent.id).Scan(&domainID)
+		if err != nil {
+			return fmt.Errorf("unable to DELETE domain: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("deleteDomain transaction failed")
+		return pgtype.UUID{}, fmt.Errorf("deleteDomain transaction failed: %w", err)
+	}
+
+	return domainID, nil
+}
+
 func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad types.AuthData) (serviceAddresses, error) {
 	sAddrs := serviceAddresses{}
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -2348,6 +2470,11 @@ type cacheNodeIdentifier struct {
 	resourceIdentifier
 }
 
+type domainIdentifier struct {
+	resourceIdentifier
+	orgID pgtype.UUID
+}
+
 func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	if input == "" {
 		return orgIdentifier{}, errors.New("input identifier is empty")
@@ -2513,6 +2640,40 @@ func newCacheNodeIdentifier(tx pgx.Tx, input string) (cacheNodeIdentifier, error
 			name: name,
 			id:   id,
 		},
+	}, nil
+}
+
+func newDomainIdentifier(tx pgx.Tx, input string) (domainIdentifier, error) {
+	if input == "" {
+		return domainIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id pgtype.UUID
+	var name string
+	var orgID pgtype.UUID
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM domains WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
+		if err != nil {
+			return domainIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (domain names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM domains WHERE name = $1 FOR SHARE", input).Scan(&id, &name, &orgID)
+		if err != nil {
+			return domainIdentifier{}, err
+		}
+	}
+
+	return domainIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+		orgID: orgID,
 	}, nil
 }
 
@@ -3794,7 +3955,10 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
+		r.Handle("/css/*", http.StripPrefix("/console/", http.FileServerFS(components.CssFS)))
+		r.Handle("/js/*", http.StripPrefix("/console/", http.FileServerFS(components.JsFS)))
 		r.Get("/domains", consoleDomainsHandler(dbPool, cookieStore))
+		r.Delete("/domains/{domain}", consoleDomainDeleteHandler(dbPool, cookieStore))
 		r.Get("/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
 		r.Post("/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
 		r.Get("/services", consoleServicesHandler(dbPool, cookieStore))
