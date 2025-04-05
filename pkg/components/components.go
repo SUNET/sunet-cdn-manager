@@ -9,7 +9,7 @@ import (
 )
 
 //go:embed css/*.css
-var CssFS embed.FS
+var CSSFS embed.FS
 
 //go:embed js/*.js
 var JsFS embed.FS

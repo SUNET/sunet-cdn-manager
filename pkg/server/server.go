@@ -3955,7 +3955,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
-		r.Handle("/css/*", http.StripPrefix("/console/", http.FileServerFS(components.CssFS)))
+		r.Handle("/css/*", http.StripPrefix("/console/", http.FileServerFS(components.CSSFS)))
 		r.Handle("/js/*", http.StripPrefix("/console/", http.FileServerFS(components.JsFS)))
 		r.Get("/domains", consoleDomainsHandler(dbPool, cookieStore))
 		r.Delete("/domains/{domain}", consoleDomainDeleteHandler(dbPool, cookieStore))
