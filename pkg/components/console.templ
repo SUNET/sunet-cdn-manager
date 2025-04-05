@@ -29,7 +29,6 @@ templ headerComponent(title string) {
 	<head>
 		// Enable htmx
 		<script src="/console/js/htmx.min.js"></script>
-
 		// Enable Pico CSS
 		<link rel="stylesheet" href="/console/css/pico.min.css"/>
 		// Set some variables for Pico CSS to make things a bit smaller
@@ -155,7 +154,15 @@ templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparato
 						<td>⏳</td>
 					}
 					<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
-					<td><button hx-delete={ string(templ.URL(fmt.Sprintf("/console/domains/%s", domain.Name))) } hx-target="body">Delete</button></td>
+					<td>
+						<button
+							hx-delete={ string(templ.URL(fmt.Sprintf("/console/domains/%s", domain.Name))) }
+							hx-target="body"
+							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
+						>
+							Delete
+						</button>
+					</td>
 				</tr>
 			}
 		</table>
