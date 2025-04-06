@@ -1,0 +1,42 @@
+/*
+
+Configure the grid layout of the console
+
+The goal is:
+----------------------
+| <header>           |
+|---------------------
+| <nav> | <main>     |
+|       |            |
+|       |            |
+|       |            |
+|       |            |
+----------------------
+*/
+.console-grid {
+	display: grid;
+
+	grid-template-areas:
+		"header header"
+		"nav content";
+
+	grid-template-rows: auto 1fr;
+	grid-template-columns: 200px 1fr;
+	grid-gap: 10px;
+
+	height: 100vh;
+}
+
+header {
+	grid-area: header;
+	margin-left: 0.5rem;
+}
+
+nav {
+	grid-area: nav;
+	margin-left: 0.5rem;
+}
+
+main {
+	grid-area: content;
+}
