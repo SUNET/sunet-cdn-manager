@@ -13,30 +13,55 @@ The goal is:
 |       |            |
 ----------------------
 */
+
+@import "_variables.css";
+
 .console-grid {
 	display: grid;
 
 	grid-template-areas:
 		"header header"
-		"nav content";
+		"nav main";
 
 	grid-template-rows: auto 1fr;
-	grid-template-columns: 200px 1fr;
-	grid-gap: 10px;
+	grid-template-columns: auto 1fr;
 
 	height: 100vh;
 }
 
 header {
 	grid-area: header;
-	margin-left: 0.5rem;
+	background: var(--sunet-orange);
+	padding-top: var(--space-medium);
+	padding-right: var(--space-medium);
+	padding-bottom: var(--space-medium);
+	padding-left: var(--space-medium);
+	display:grid;
+	grid-template-columns: 1fr 1fr;
+	color: #fff;
+}
+
+.place-end {
+	place-self: self-end;
+}
+
+header a {
+	color: #fff;
+	text-decoration-color: #fff;
+}
+
+.sidebar {
+	grid-area: nav;
+	background-color: var(--console-sidebar-background-color);
 }
 
 nav {
-	grid-area: nav;
-	margin-left: 0.5rem;
+	padding-right: var(--space-medium);
+	padding-left: var(--space-medium);
 }
 
 main {
-	grid-area: content;
+	grid-area: main;
+	padding-right: var(--space-medium);
+	padding-left: var(--space-medium);
 }

@@ -225,7 +225,7 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 
 		ad := adRef.(types.AuthData)
 
-		err := renderConsolePage(w, r, ad, "SUNET CDN manager", components.Dashboard(ad.Username))
+		err := renderConsolePage(w, r, ad, "Dashboard", components.Dashboard(ad.Username))
 		if err != nil {
 			logger.Err(err).Msg("unable to render console home page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
