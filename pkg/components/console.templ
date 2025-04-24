@@ -11,7 +11,7 @@ import (
 templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
 	<!DOCTYPE html>
 	<html>
-		@headComponent(title)
+		@consoleHeadComponent(title)
 		// hx-headers used to include CSRF token in AJAX requests
 		// https://htmx.org/docs/#csrf-prevention
 		<body hx-boost="true" hx-headers={ jsonHxHeaders(ctx.Value("gorilla.csrf.Token").(string)) }>
@@ -21,7 +21,7 @@ templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
 						SUNET CDN manager
 					</span>
 					<span class="place-end">
-						{ ad.Username } <a href={ templ.URL("/auth/logout") }>Logout</a>
+						{ ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
 					</span>
 				</header>
 				@NavBar()
@@ -36,19 +36,23 @@ templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
 	</html>
 }
 
-templ headComponent(title string) {
+templ consoleHeadComponent(title string) {
 	<head>
 		// Enable htmx
-		<script src="/console/js/htmx.min.js"></script>
-		// Enable Pico CSS
-		<link rel="stylesheet" href="/console/css/pico.min.css"/>
-		// Set some variables for Pico CSS to make things a bit smaller
-		// https://github.com/picocss/pico/discussions/482
-		<link rel="stylesheet" href="/console/css/pico-settings.css"/>
+		<script src="/js/htmx.min.js"></script>
+		@picoCssLinks()
 		// Configure the grid layout of the console
-		<link rel="stylesheet" href="/console/css/console-grid.css"/>
+		<link rel="stylesheet" href="/css/console-grid.css"/>
 		<title>{ title }</title>
 	</head>
+}
+
+templ picoCssLinks() {
+	// Enable Pico CSS
+	<link rel="stylesheet" href="/css/pico.min.css"/>
+	// Set some variables for Pico CSS to make things a bit smaller
+	// https://github.com/picocss/pico/discussions/482
+	<link rel="stylesheet" href="/css/pico-settings.css"/>
 }
 
 templ Dashboard(username string) {
@@ -279,27 +283,42 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 }
 
 templ LoginPage(returnTo string, loginFailed bool) {
-	<h1>Login</h1>
-	<h2>Local</h2>
-	<form method="post" action={ templ.URL("/auth/login") }>
-		@CSRF()
-		if returnTo != "" {
-			<input type="hidden" name="return_to" value={ returnTo }/>
-		}
-		<label for="username">Username:</label>
-		<br/>
-		<input type="text" id="username" name="username"/>
-		<br/>
-		<label for="password">Password:</label>
-		<br/>
-		<input type="password" id="password" name="password"/>
-		<button type="submit">Login</button>
-	</form>
-	if loginFailed {
-		<div>Login failed!</div>
-	}
-	<h2>OpenID Connect</h2>
-	<div><a href={ templ.URL("/auth/oidc/keycloak") }>Login with Keycloak</a></div>
+	<!DOCTYPE html>
+	<head>
+		@picoCssLinks()
+		// Configure the grid layout of the login page
+		<link rel="stylesheet" href="/css/login-grid.css"/>
+		<title>SUNET CDN Manager Login</title>
+	</head>
+	<html>
+		<div class="login-container">
+			<div class="login-title">
+				<h1>SUNET CDN Manager</h1>
+			</div>
+			<div class="login-form">
+				<h2>Local</h2>
+				<form method="post" action={ templ.URL("/auth/login") }>
+					@CSRF()
+					if returnTo != "" {
+						<input type="hidden" name="return_to" value={ returnTo }/>
+					}
+					<label for="username">Username:</label>
+					<br/>
+					<input type="text" id="username" name="username"/>
+					<br/>
+					<label for="password">Password:</label>
+					<br/>
+					<input type="password" id="password" name="password"/>
+					<button type="submit">Login</button>
+				</form>
+				if loginFailed {
+					<div>Login failed!</div>
+				}
+				<h2>OpenID Connect</h2>
+				<div><a href={ templ.URL("/auth/oidc/keycloak") }>Login with Keycloak</a></div>
+			</div>
+		</div>
+	</html>
 }
 
 // https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf

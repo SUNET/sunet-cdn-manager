@@ -1,7 +1,7 @@
 :root {
 	--space-medium: 10px;
 	--sunet-orange: #f56514;
-	--console-sidebar-background-color: #f8f1ef;
+	--console-sidebar-background-color: #f0f2f5;
 }
 
 @media only screen and (prefers-color-scheme: dark) {
