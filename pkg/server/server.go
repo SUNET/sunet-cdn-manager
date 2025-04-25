@@ -3927,7 +3927,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad types.AuthData
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, secureCSRF bool, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -3954,6 +3954,9 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
+		if !secureCSRF {
+			r.Use(csrfPlainText)
+		}
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
@@ -3974,6 +3977,9 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
+		if !secureCSRF {
+			r.Use(csrfPlainText)
+		}
 		r.Use(csrfMiddleware)
 		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
@@ -5349,6 +5355,17 @@ func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) ht
 	return csrfMiddleware, nil
 }
 
+// Workaround for gorilla/csrf v1.7.3 change that will fail any non-HTTPS
+// requests. This is problematic when running unencrypted HTTP for local
+// development.
+// https://github.com/gorilla/csrf/issues/186
+func csrfPlainText(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = csrf.PlaintextHTTPRequest(r)
+		h.ServeHTTP(w, r)
+	})
+}
+
 type domainVerifyData struct {
 	ID                pgtype.UUID
 	Name              string
@@ -5562,7 +5579,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates)
+	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, secureCSRF, provider, vclValidator, confTemplates)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {

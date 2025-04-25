@@ -445,7 +445,7 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates)
+	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, false, nil, vclValidator, confTemplates)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
