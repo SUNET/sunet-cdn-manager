@@ -46,8 +46,8 @@ header {
 }
 
 header a {
-	color: #fff;
-	text-decoration-color: #fff;
+	color: var(--header-color);
+	text-decoration-color: var(--header-color);
 }
 
 .sidebar {
