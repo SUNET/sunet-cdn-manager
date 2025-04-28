@@ -65,3 +65,14 @@ main {
 	padding-right: var(--space-medium);
 	padding-left: var(--space-medium);
 }
+
+.flash-container {
+	position: fixed;
+	top: 1rem;
+	right: 1rem;
+	z-index: 1000;
+	max-width: 300px;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}

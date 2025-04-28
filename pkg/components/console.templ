@@ -39,7 +39,9 @@ templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
 templ consoleHeadComponent(title string) {
 	<head>
 		// Enable htmx
-		<script src="/js/htmx.min.js"></script>
+		<script src="/js/dist/htmx/2.0.4/htmx.min.js"></script>
+		// Enable _hyperscript
+		<script src="/js/dist/_hyperscript/0.9.14/_hyperscript.min.js"></script>
 		@picoCssLinks()
 		// Configure the grid layout of the console
 		<link rel="stylesheet" href="/css/console-grid.css"/>
@@ -49,7 +51,7 @@ templ consoleHeadComponent(title string) {
 
 templ picoCssLinks() {
 	// Enable Pico CSS
-	<link rel="stylesheet" href="/css/pico.min.css"/>
+	<link rel="stylesheet" href="/css/dist/pico-2.1.1/css/pico.min.css"/>
 	// Set some variables for Pico CSS to make things a bit smaller
 	// https://github.com/picocss/pico/discussions/482
 	<link rel="stylesheet" href="/css/pico-settings.css"/>
@@ -73,10 +75,21 @@ templ NavBar() {
 	</div>
 }
 
-templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
-	for _, flashMessage := range flashMessages {
-		<div>{ flashMessage }</div>
+templ flashMessagesComponent(flashMessages []string) {
+	if len(flashMessages) != 0 {
+		<div class="flash-container" _="on load transition my opacity to 0 over 5 seconds then remove me">
+			for _, flashMessage := range flashMessages {
+				//<article _="on load transition my opacity to 0 over 5 seconds then remove me">
+				<article>
+					{ flashMessage }
+				</article>
+			}
+		</div>
 	}
+}
+
+templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
+	@flashMessagesComponent(flashMessages)
 	if len(domains) == 0 {
 		<div>No domains added</div>
 	} else {

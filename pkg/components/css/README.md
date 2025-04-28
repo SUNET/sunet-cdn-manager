@@ -1,9 +1,10 @@
 # How to fetch the pico.min.css
 Based on https://picocss.com/docs#install-manually
 ```
-curl -LO https://github.com/picocss/pico/archive/refs/heads/main.zip
-unzip -j main.zip pico-main/css/pico.min.css
-rm main.zip
+pico_version="2.1.1"
+curl -LO https://github.com/picocss/pico/archive/refs/tags/v${pico_version}.zip
+unzip -d dist v${pico_version}.zip pico-${pico_version}/css/pico.min.css
+rm ${pico_version}.zip
 ```
 
 # pico-settings.css

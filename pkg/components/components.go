@@ -9,9 +9,13 @@ import (
 )
 
 //go:embed css/*.css
+//go:embed css/dist
 var CSSFS embed.FS
 
-//go:embed js/*.js
+// The "all:" prefix is needed here because by default files beginning with ‘.’ or
+// ‘_’ are excluded and we want to include "_hyperscript.min.js"
+//
+//go:embed all:js/dist
 var JsFS embed.FS
 
 type DomainFormFields struct {
