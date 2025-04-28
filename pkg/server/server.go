@@ -69,9 +69,11 @@ var templateFS embed.FS
 
 // Keys used for flash message storing
 var flashMessageKeys = struct {
-	domains string
+	domains  string
+	services string
 }{
-	domains: "_flash_domains",
+	domains:  "_flash_domains",
+	services: "_flash_services",
 }
 
 const (
@@ -283,7 +285,6 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 				return
 			}
 		}
-
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
 		err = renderConsolePage(w, r, ad, "Domains", components.DomainsContent(domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
@@ -343,6 +344,61 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 	}
 }
 
+func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg("console: session missing AuthData")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(types.AuthData)
+
+		orgName := r.URL.Query().Get("org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org parameter in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		serviceName := chi.URLParam(r, "service")
+		if serviceName == "" {
+			logger.Error().Msg("console: missing service name in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		_, err := deleteService(logger, dbPool, orgName, serviceName, ad)
+		if err != nil {
+			if errors.Is(err, cdnerrors.ErrForbidden) {
+				logger.Err(err).Msg("services console: not authorized to delete service")
+				http.Error(w, "not allowed to delete service", http.StatusForbidden)
+				return
+			}
+			logger.Err(err).Msg("services console: service deletion failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Service '%s' deleted!", serviceName), flashMessageKeys.services)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+			return
+		}
+
+		// Use StatusSeeOther (303) here to make htmx hx-delete AJAX
+		// request replace original DELETE method with GET when
+		// following the redirect.
+		validatedRedirect("/console/services", w, r, http.StatusSeeOther)
+	}
+}
+
 func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -370,7 +426,20 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 			return
 		}
 
-		err = renderConsolePage(w, r, ad, "Services", components.ServicesContent(services))
+		// If someone has been redirected from service creation we will
+		// have a flash message to tell the user so.
+		flashMessages := session.Flashes(flashMessageKeys.services)
+		if flashMessages != nil {
+			err := session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("services console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(w, r, ad, "Services", components.ServicesContent(services, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -549,6 +618,13 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				}
 				logger.Err(err).Msg("unable to insert service")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Service '%s' added!", formData.Name), flashMessageKeys.services)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, "unable to set flash message", http.StatusInternalServerError)
 				return
 			}
 
@@ -3965,6 +4041,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Post("/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
 		r.Get("/services", consoleServicesHandler(dbPool, cookieStore))
 		r.Get("/services/{service}", consoleServiceHandler(dbPool, cookieStore))
+		r.Delete("/services/{service}", consoleServiceDeleteHandler(dbPool, cookieStore))
 		r.Get("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Post("/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
 		r.Get("/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))

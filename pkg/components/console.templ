@@ -125,7 +125,8 @@ templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparato
 	<a href={ templ.URL("/console/create/domain") }>Add domain</a>
 }
 
-templ ServicesContent(services []types.Service) {
+templ ServicesContent(services []types.Service, flashMessages []string) {
+	@flashMessagesComponent(flashMessages)
 	if len(services) == 0 {
 		<div>No services created</div>
 	} else {
@@ -139,7 +140,7 @@ templ ServicesContent(services []types.Service) {
 					<td><a href={ templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName)) }>{ service.Name }</a></td>
 					<td>
 						<button
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/services/%s", service.Name))) }
+							hx-delete={ string(templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName))) }
 							hx-target="body"
 							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
 						>
