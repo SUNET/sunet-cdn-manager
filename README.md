@@ -3,6 +3,13 @@ This is the SUNET CDN manager server which serves an API and UI for
 configuring the CDN service.
 
 ## Development
+### Updating the web console
+The project uses [templ](https://templ.guide) for generating HTML.
+* Install the templ CLI tool, see https://templ.guide/quick-start/installation
+* Edit `pkg/components/console.templ`
+* There exists `go:generate` comments in the component code, so just do `go generate ./...` to run `templ`
+* Commit all the updated files.
+
 ### Running tests
 Running tests require a local PostgreSQL 15 or newer. The need for
 at least version 15 is because the database setup expects the "Constrain
