@@ -64,7 +64,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	// use static UUIDs to get known contents for testing
 	testData := []string{
 		// Organizations
-		"INSERT INTO orgs (id, name, service_quota) VALUES ('00000002-0000-0000-0000-000000000001', 'org1', 100)",
+		"INSERT INTO orgs (id, name, service_quota, domain_quota) VALUES ('00000002-0000-0000-0000-000000000001', 'org1', 100, 100)",
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000002', 'org2')",
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000003', 'org3')",
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000004', 'org4')",
@@ -123,6 +123,11 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', 'example.se', true, 'token1')",
 		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000002', '00000002-0000-0000-0000-000000000001', 'example.com', true, 'token2')",
 		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000003', '00000002-0000-0000-0000-000000000001', 'example.nu', false, 'token2')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000004', '00000002-0000-0000-0000-000000000001', 'example-delete-1.se', true, 'token-del-1')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000005', '00000002-0000-0000-0000-000000000001', 'example-delete-2.se', true, 'token2-del-2')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000006', '00000002-0000-0000-0000-000000000001', 'example-delete-3.se', false, 'token2-del-3')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000007', '00000002-0000-0000-0000-000000000001', 'example-delete-4.se', false, 'token2-del-4')",
+		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000008', '00000002-0000-0000-0000-000000000001', 'example-delete-5.se', false, 'token2-del-5')",
 
 		// Service domain mappings (only valid if the domains-entry is verified=true)
 		// org1: www.example.se
@@ -2106,7 +2111,7 @@ func TestDeleteService(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
 		}
 
 		jsonData, err := io.ReadAll(resp.Body)
@@ -2290,6 +2295,116 @@ func TestPostServices(t *testing.T) {
 		jsonData, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestDeleteDomain(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		domainNameOrID string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request with ID",
+			username:       "admin",
+			password:       "adminpass1",
+			domainNameOrID: "00000015-0000-0000-0000-000000000004",
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			domainNameOrID: "example-delete-2.se",
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			description:    "successful user request with ID",
+			username:       "username1",
+			password:       "password1",
+			domainNameOrID: "00000015-0000-0000-0000-000000000006",
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			description:    "successful user request with name",
+			username:       "username1",
+			password:       "password1",
+			domainNameOrID: "example-delete-4.se",
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			description:    "failed user request for domain belonging to other org with ID",
+			username:       "username2",
+			password:       "password2",
+			domainNameOrID: "00000015-0000-0000-0000-000000000008",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed user request for service belonging to other org with name",
+			username:       "username2",
+			password:       "password2",
+			domainNameOrID: "example-delete-5.se",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed user request not assigned to org with ID",
+			username:       "username3-no-org",
+			password:       "password3",
+			domainNameOrID: "00000015-0000-0000-0000-000000000008",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed user request not assigned to org with name",
+			username:       "username3-no-org",
+			password:       "password3",
+			domainNameOrID: "example-delete-5.se",
+			expectedStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		if test.domainNameOrID == "" {
+			t.Fatal("user needs domain name or ID for domain test")
+		}
+
+		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/domains/"+test.domainNameOrID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
 		}
 
 		fmt.Printf("%s\n", jsonData)

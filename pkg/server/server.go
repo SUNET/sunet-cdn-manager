@@ -4297,6 +4297,31 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			return resp, nil
 		})
 
+		huma.Delete(api, "/v1/domains/{domain}", func(ctx context.Context, input *struct {
+			Domain string `path:"domain" example:"1" doc:"Domain ID or name" minLength:"1" maxLength:"253"`
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from domain DELETE handler")
+			}
+
+			_, err := deleteDomain(logger, dbPool, ad, input.Domain)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("domain not found")
+				} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("access to this domain is not allowed")
+				}
+				logger.Err(err).Msg("unable to delete domain")
+				return nil, err
+			}
+
+			return nil, nil
+		})
+
 		postDomainsPath := "/v1/domains"
 		huma.Register(
 			api,
@@ -4476,7 +4501,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from service GET handler")
+				return nil, errors.New("unable to read auth data from service DELETE handler")
 			}
 
 			_, err := deleteService(logger, dbPool, input.Org, input.Service, ad)
