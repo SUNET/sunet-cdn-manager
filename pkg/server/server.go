@@ -297,7 +297,6 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("in DELETE handler")
 		logger := hlog.FromRequest(r)
 
 		session := getSession(r, cookieStore)
@@ -4638,7 +4637,6 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					case errors.Is(err, cdnerrors.ErrInvalidVCL):
 						var ve *cdnerrors.VCLValidationError
 						if errors.As(err, &ve) {
-							fmt.Println(ve.Details)
 							return nil, huma.Error422UnprocessableEntity(ve.Details)
 						}
 						return nil, huma.Error422UnprocessableEntity("VCL validation failed without details")
