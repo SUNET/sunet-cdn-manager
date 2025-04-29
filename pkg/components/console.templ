@@ -162,7 +162,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 			<tr>
 				<th>Version</th>
 				<th>Active</th>
-				<th>Activate version</th>
+				<th>Actions</th>
 			</tr>
 			for _, sv := range serviceVersions {
 				<tr>
@@ -173,7 +173,12 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 						{ strconv.FormatBool(sv.Active) }
 					</td>
 					<td>
-						<a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName)) }>Activate version</a>
+						<button
+							hx-get={ string(templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))) }
+							hx-target="body"
+						>
+							Activate
+						</button>
 					</td>
 				</tr>
 			}

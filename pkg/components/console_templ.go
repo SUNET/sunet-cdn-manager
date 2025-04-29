@@ -647,7 +647,7 @@ func ServiceContent(orgName string, serviceName string, serviceVersions []types.
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<table><tr><th>Version</th><th>Active</th><th>Activate version</th></tr>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<table><tr><th>Version</th><th>Active</th><th>Actions</th></tr>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -687,16 +687,20 @@ func ServiceContent(orgName string, serviceName string, serviceVersions []types.
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "</td><td><a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "</td><td><button hx-get=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var36 templ.SafeURL = templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(string(templ_7745c5c3_Var36)))
+				var templ_7745c5c3_Var36 string
+				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 177, Col: 129}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\">Activate version</a></td></tr>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "\" hx-target=\"body\">Activate</button></td></tr>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -751,7 +755,7 @@ func CreateDomainContent(dData DomainData) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Errors.ServerError)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 186, Col: 47}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 191, Col: 47}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 		if templ_7745c5c3_Err != nil {
@@ -781,7 +785,7 @@ func CreateDomainContent(dData DomainData) templ.Component {
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 190, Col: 91}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 195, Col: 91}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 		if templ_7745c5c3_Err != nil {
@@ -794,7 +798,7 @@ func CreateDomainContent(dData DomainData) templ.Component {
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 191, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 196, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 		if templ_7745c5c3_Err != nil {
@@ -906,7 +910,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var46 string
 			templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(k)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 223, Col: 11}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 228, Col: 11}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 			if templ_7745c5c3_Err != nil {
@@ -924,7 +928,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 		var templ_7745c5c3_Var47 string
 		templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(sv.ID.String())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 229, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 234, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 		if templ_7745c5c3_Err != nil {
@@ -937,7 +941,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 		var templ_7745c5c3_Var48 string
 		templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(sv.ServiceID.String())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 230, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 235, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 		if templ_7745c5c3_Err != nil {
@@ -950,7 +954,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 		var templ_7745c5c3_Var49 string
 		templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(sv.Version, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 231, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 236, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 		if templ_7745c5c3_Err != nil {
@@ -963,7 +967,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 		var templ_7745c5c3_Var50 string
 		templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatBool(sv.Active))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 232, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 237, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 		if templ_7745c5c3_Err != nil {
@@ -981,7 +985,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var51 string
 			templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(conf)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 234, Col: 14}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 239, Col: 14}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 			if templ_7745c5c3_Err != nil {
@@ -1004,7 +1008,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var52 string
 			templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(origin.Host)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 239, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 244, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 			if templ_7745c5c3_Err != nil {
@@ -1017,7 +1021,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var53 string
 			templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(origin.Port))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 240, Col: 43}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 245, Col: 43}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 			if templ_7745c5c3_Err != nil {
@@ -1030,7 +1034,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatBool(origin.TLS))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 241, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 246, Col: 47}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 			if templ_7745c5c3_Err != nil {
@@ -1043,7 +1047,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatBool(origin.VerifyTLS))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 242, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 247, Col: 60}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 			if templ_7745c5c3_Err != nil {
@@ -1066,7 +1070,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 			var templ_7745c5c3_Var56 string
 			templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(domain.String())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 249, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 254, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 			if templ_7745c5c3_Err != nil {
@@ -1136,7 +1140,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 				var templ_7745c5c3_Var59 string
 				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 264, Col: 32}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 269, Col: 32}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 				if templ_7745c5c3_Err != nil {
@@ -1149,7 +1153,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 				var templ_7745c5c3_Var60 string
 				templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 264, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 269, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 				if templ_7745c5c3_Err != nil {
@@ -1173,7 +1177,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			var templ_7745c5c3_Var61 string
 			templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 281, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 286, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 			if templ_7745c5c3_Err != nil {
@@ -1186,7 +1190,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			var templ_7745c5c3_Var62 string
 			templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 281, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 286, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 			if templ_7745c5c3_Err != nil {
@@ -1199,7 +1203,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			var templ_7745c5c3_Var63 string
 			templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 282, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 287, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 			if templ_7745c5c3_Err != nil {
@@ -1212,7 +1216,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			var templ_7745c5c3_Var64 string
 			templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 282, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 287, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var64))
 			if templ_7745c5c3_Err != nil {
@@ -1242,7 +1246,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 				var templ_7745c5c3_Var65 string
 				templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(errDetails)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 293, Col: 21}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 298, Col: 21}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 				if templ_7745c5c3_Err != nil {
@@ -1291,7 +1295,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var67 string
 		templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(serviceName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 301, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 306, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 		if templ_7745c5c3_Err != nil {
@@ -1304,7 +1308,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var68 string
 		templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(version, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 301, Col: 88}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 306, Col: 88}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 		if templ_7745c5c3_Err != nil {
@@ -1395,7 +1399,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 			var templ_7745c5c3_Var72 string
 			templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.JoinStringErrs(returnTo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 331, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 336, Col: 60}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var72))
 			if templ_7745c5c3_Err != nil {
@@ -1462,7 +1466,7 @@ func CSRF() templ.Component {
 		var templ_7745c5c3_Var75 string
 		templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinStringErrs(ctx.Value("gorilla.csrf.Token").(string))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 354, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 359, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
 		if templ_7745c5c3_Err != nil {
