@@ -176,6 +176,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 						<button
 							hx-get={ string(templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))) }
 							hx-target="body"
+							disabled?={ sv.Active }
 						>
 							Activate
 						</button>
