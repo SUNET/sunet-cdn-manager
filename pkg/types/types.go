@@ -2,6 +2,9 @@ package types
 
 import (
 	"net/netip"
+	"reflect"
+	"strings"
+	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -57,6 +60,12 @@ type ServiceVersionConfig struct {
 	Origins            []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
+type ServiceVersionCloneData struct {
+	VclSteps
+	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+}
+
 // What data is expected when handling a request to add a version version
 type InputServiceVersion struct {
 	ServiceVersion
@@ -88,6 +97,60 @@ type VclSteps struct {
 	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"omitnil,min=1,max=2048"`
 	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=2048"`
 	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=2048"`
+}
+
+func NewVclStepKeys() VclStepKeys {
+	vclSK := VclStepKeys{
+		FieldToKey: map[string]string{},
+	}
+	for _, field := range reflect.VisibleFields(reflect.TypeOf(VclSteps{})) {
+		vclSK.FieldOrder = append(vclSK.FieldOrder, field.Name)
+		vclSK.FieldToKey[field.Name] = camelCaseToSnakeCase(field.Name)
+	}
+
+	return vclSK
+}
+
+// Helper function to convert the VclSteps struct to a map for dynamic lookups at runtime
+func VclStepsToMap(vclSteps VclSteps) map[string]string {
+	vclSK := NewVclStepKeys()
+
+	vclKeyToConf := map[string]string{}
+
+	// Loop over all VCL step fields, and if they are non-nil and not empty string add them to map
+	val := reflect.ValueOf(&vclSteps)
+	structVal := val.Elem()
+	for _, field := range reflect.VisibleFields(structVal.Type()) {
+		if _, ok := vclSK.FieldToKey[field.Name]; ok {
+			fieldVal := structVal.FieldByIndex(field.Index)
+			if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
+				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
+					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
+				}
+			}
+		}
+	}
+
+	return vclKeyToConf
+}
+
+// Used to turn e.g. "VclRecv" or "VCLRecv" into "vcl_recv"
+func camelCaseToSnakeCase(s string) string {
+	// Handle capitalized VCL
+	s = strings.ReplaceAll(s, "VCL", "Vcl")
+	var b strings.Builder
+	for i, c := range s {
+		if unicode.IsUpper(c) {
+			if i > 0 {
+				b.WriteString("_")
+			}
+			b.WriteRune(unicode.ToLower(c))
+		} else {
+			b.WriteRune(c)
+		}
+	}
+
+	return b.String()
 }
 
 type Domain struct {

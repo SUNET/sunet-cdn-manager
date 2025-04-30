@@ -684,40 +684,6 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 	}
 }
 
-func newVclStepKeys() types.VclStepKeys {
-	vclSK := types.VclStepKeys{
-		FieldToKey: map[string]string{},
-	}
-	for _, field := range reflect.VisibleFields(reflect.TypeOf(types.VclSteps{})) {
-		vclSK.FieldOrder = append(vclSK.FieldOrder, field.Name)
-		vclSK.FieldToKey[field.Name] = camelCaseToSnakeCase(field.Name)
-	}
-
-	return vclSK
-}
-
-func svcToMap(svc types.ServiceVersionConfig) map[string]string {
-	vclSK := newVclStepKeys()
-
-	vclKeyToConf := map[string]string{}
-
-	// Loop over all VCL step fields, and if they are non-nil and not empty string add them to map
-	val := reflect.ValueOf(&svc)
-	structVal := val.Elem()
-	for _, field := range reflect.VisibleFields(structVal.Type()) {
-		if _, ok := vclSK.FieldToKey[field.Name]; ok {
-			fieldVal := structVal.FieldByIndex(field.Index)
-			if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
-				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
-					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
-				}
-			}
-		}
-	}
-
-	return vclKeyToConf
-}
-
 func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -770,7 +736,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		vclKeyToConf := svcToMap(svc)
+		vclKeyToConf := types.VclStepsToMap(svc.VclSteps)
 
 		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
@@ -781,7 +747,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 	}
 }
 
-// Used to turn e.g. "VclRecv" or VCLRecv into "vcl_recv"
+// Used to turn e.g. "VclRecv" or "VCLRecv" into "vcl_recv"
 func camelCaseToSnakeCase(s string) string {
 	// Handle capitalized VCL
 	s = strings.ReplaceAll(s, "VCL", "Vcl")
@@ -798,6 +764,67 @@ func camelCaseToSnakeCase(s string) string {
 	}
 
 	return b.String()
+}
+
+func getServiceVersionCloneData(tx pgx.Tx, ad types.AuthData, orgName string, serviceName string, cloneVersion int64) (types.ServiceVersionCloneData, error) {
+	orgIdent, err := newOrgIdentifier(tx, orgName)
+	if err != nil {
+		return types.ServiceVersionCloneData{}, err
+	}
+
+	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+		return types.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
+	}
+
+	serviceIdent, err := newServiceIdentifier(tx, serviceName, orgIdent.id)
+	if err != nil {
+		return types.ServiceVersionCloneData{}, err
+	}
+
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT
+			(SELECT
+				array_agg(domains.name ORDER BY domains.name)
+				FROM domains
+				JOIN service_domains ON service_domains.domain_id = domains.id
+				WHERE domains.verified = true AND service_version_id = service_versions.id
+			) AS domains,
+			(SELECT
+				array_agg((host, port, tls, verify_tls) ORDER BY host, port)
+				FROM service_origins
+				WHERE service_version_id = service_versions.id
+			) AS origins,
+			service_vcls.vcl_recv,
+			service_vcls.vcl_pipe,
+			service_vcls.vcl_pass,
+			service_vcls.vcl_hash,
+			service_vcls.vcl_purge,
+			service_vcls.vcl_miss,
+			service_vcls.vcl_hit,
+			service_vcls.vcl_deliver,
+			service_vcls.vcl_synth,
+			service_vcls.vcl_backend_fetch,
+			service_vcls.vcl_backend_response,
+			service_vcls.vcl_backend_error
+		FROM
+			services
+			JOIN service_versions ON services.id = service_versions.service_id
+			JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
+		WHERE services.id=$1 AND service_versions.version=$2`,
+		serviceIdent.id,
+		cloneVersion,
+	)
+	if err != nil {
+		return types.ServiceVersionCloneData{}, fmt.Errorf("unable to query for version config data for cloning: %w", err)
+	}
+
+	cloneData, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[types.ServiceVersionCloneData])
+	if err != nil {
+		return types.ServiceVersionCloneData{}, fmt.Errorf("unable to collect service version clone data into struct: %w", err)
+	}
+
+	return cloneData, nil
 }
 
 func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
@@ -831,7 +858,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		ad := adRef.(types.AuthData)
 
-		vclSK := newVclStepKeys()
+		vclSK := types.NewVclStepKeys()
 
 		domains, err := selectDomains(dbPool, ad, orgName)
 		if err != nil {
@@ -842,7 +869,31 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		switch r.Method {
 		case "GET":
-			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, nil, ""))
+			var cloneData types.ServiceVersionCloneData
+			cloneVersionStr := r.URL.Query().Get("clone-version")
+			if cloneVersionStr != "" {
+				cloneVersion, err := strconv.ParseInt(cloneVersionStr, 10, 64)
+				if err != nil {
+					logger.Err(err).Msg("console: unable to parse clone version as int")
+					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+					return
+				}
+
+				err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+					cloneData, err = getServiceVersionCloneData(tx, ad, orgName, serviceName, cloneVersion)
+					if err != nil {
+						return err
+					}
+					return nil
+				})
+				if err != nil {
+					logger.Err(err).Msg("db request to fill in service version clone data failed")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+			}
+
+			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render services page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -890,7 +941,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdnerrors.ErrInvalidFormData, ""))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, types.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -917,7 +968,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, err, errDetails))
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, types.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

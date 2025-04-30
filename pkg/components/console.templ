@@ -180,6 +180,13 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 						>
 							Activate
 						</button>
+						<button
+							hx-get={ string(templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s&clone-version=%d", serviceName, orgName, sv.Version))) }
+							hx-target="body"
+							hx-push-url="true"
+						>
+							Clone
+						</button>
 					</td>
 				</tr>
 			}
@@ -260,32 +267,64 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
-		<label for="domains">Domains:</label>
-		<select id="domains" name="domains">
-			for _, domain := range domains {
-				if domain.Verified {
-					<option value={ domain.Name }>{ domain.Name }</option>
+		<fieldset>
+			<legend>Domains</legend>
+			if len(domains) == 0 {
+				<div>No domains available</div>
+			} else {
+				for i, domain := range domains {
+					if domain.Verified {
+						<label for={ fmt.Sprintf("domains.%d", i) }>{ domain.Name }:</label>
+						{{
+							var precheck bool
+							for _, cloneDomain := range cloneData.Domains {
+								if string(cloneDomain) == domain.Name {
+									precheck = true
+									break
+								}
+							}
+						}}
+						<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
+					}
 				}
 			}
-		</select>
-		<fieldset>
-			<legend>Origins:</legend>
-			<label for="origins.0.host">Host:</label>
-			<input type="text" id="origins.0.host" name="origins.0.host"/>
-			<label for="origins.0.port">Port:</label>
-			<input type="text" id="origins.0.port" name="origins.0.port"/>
-			<label for="origins.0.tls">TLS:</label>
-			<input type="checkbox" id="origins.0.tls" name="origins.0.tls"/>
-			<label for="origins.0.verify-tls">Verify TLS:</label>
-			<input type="checkbox" id="origins.0.verify-tls" name="origins.0.verify-tls"/>
 		</fieldset>
+		if len(cloneData.Origins) == 0 {
+			<fieldset>
+				<legend>Origin</legend>
+				<label for="origins.0.host">Host:</label>
+				<input type="text" id="origins.0.host" name="origins.0.host"/>
+				<label for="origins.0.port">Port:</label>
+				<input type="text" id="origins.0.port" name="origins.0.port"/>
+				<label for="origins.0.tls">TLS:</label>
+				<input type="checkbox" id="origins.0.tls" name="origins.0.tls"/>
+				<label for="origins.0.verify-tls">Verify TLS:</label>
+				<input type="checkbox" id="origins.0.verify-tls" name="origins.0.verify-tls"/>
+			</fieldset>
+		} else {
+			for i, cloneOrigin := range cloneData.Origins {
+				<fieldset>
+					<legend>Origin</legend>
+					<label for={ fmt.Sprintf("origins.%d.host", i) }>Host:</label>
+					<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
+					<label for={ fmt.Sprintf("origins.%d.port", i) }>Port:</label>
+					{{ originPortStr := strconv.Itoa(cloneOrigin.Port) }}
+					<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
+					<label for={ fmt.Sprintf("origins.%d.tls", i) }>TLS:</label>
+					<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
+					<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>Verify TLS:</label>
+					<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+				</fieldset>
+			}
+		}
+		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
 		for _, vclStep := range vclSK.FieldOrder {
 			<div>
 				<label for={ vclSK.FieldToKey[vclStep] }>{ vclSK.FieldToKey[vclStep] }:</label>
-				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here..."></textarea>
+				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
 			</div>
 		}
 		<button type="submit">Add service version</button>
