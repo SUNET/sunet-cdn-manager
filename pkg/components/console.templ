@@ -267,6 +267,27 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
+templ originFieldSet(i int, cloneOrigin types.Origin) {
+	<fieldset>
+		<legend>Origin</legend>
+		<label for={ fmt.Sprintf("origins.%d.host", i) }>Host:</label>
+		<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
+		<label for={ fmt.Sprintf("origins.%d.port", i) }>Port:</label>
+		{{
+			originPortStr := ""
+			if cloneOrigin.Port != 0 {
+				originPortStr = strconv.Itoa(cloneOrigin.Port)
+
+			}
+		}}
+		<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
+		<label for={ fmt.Sprintf("origins.%d.tls", i) }>TLS:</label>
+		<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
+		<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>Verify TLS:</label>
+		<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+	</fieldset>
+}
+
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
@@ -293,31 +314,10 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 			}
 		</fieldset>
 		if len(cloneData.Origins) == 0 {
-			<fieldset>
-				<legend>Origin</legend>
-				<label for="origins.0.host">Host:</label>
-				<input type="text" id="origins.0.host" name="origins.0.host"/>
-				<label for="origins.0.port">Port:</label>
-				<input type="text" id="origins.0.port" name="origins.0.port"/>
-				<label for="origins.0.tls">TLS:</label>
-				<input type="checkbox" id="origins.0.tls" name="origins.0.tls"/>
-				<label for="origins.0.verify-tls">Verify TLS:</label>
-				<input type="checkbox" id="origins.0.verify-tls" name="origins.0.verify-tls"/>
-			</fieldset>
+			@originFieldSet(0, types.Origin{})
 		} else {
 			for i, cloneOrigin := range cloneData.Origins {
-				<fieldset>
-					<legend>Origin</legend>
-					<label for={ fmt.Sprintf("origins.%d.host", i) }>Host:</label>
-					<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
-					<label for={ fmt.Sprintf("origins.%d.port", i) }>Port:</label>
-					{{ originPortStr := strconv.Itoa(cloneOrigin.Port) }}
-					<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
-					<label for={ fmt.Sprintf("origins.%d.tls", i) }>TLS:</label>
-					<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
-					<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>Verify TLS:</label>
-					<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
-				</fieldset>
+				@originFieldSet(i, cloneOrigin)
 			}
 		}
 		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
