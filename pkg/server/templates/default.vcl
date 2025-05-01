@@ -116,13 +116,23 @@ sub vcl_backend_fetch {
 {{- end}}
 # END vcl_backend_fetch content
 
+sub vcl_backend_response {
+  # Use slash/fellow for storage
+  set beresp.storage = storage.fellow;
+
+  # https://www.varnish-software.com/developers/tutorials/avoid-http-to-https-redirect-loops-varnish/#create-cache-variations-based-on-the-x-forwarded-proto-header
+  if(beresp.http.Vary && beresp.http.Vary !~ "(?i)X-Forwarded-Proto") {
+    set beresp.http.Vary = beresp.http.Vary + ", X-Forwarded-Proto";
+  } else {
+    set beresp.http.Vary = "X-Forwarded-Proto";
+  }
+
 # START vcl_backend_response content
 {{- if .VCLSteps.VclBackendResponse}}
-sub vcl_backend_response {
 {{.VCLSteps.VclBackendResponse}}
-}
 {{- end}}
 # END vcl_backend_response content
+}
 
 # START vcl_backend_error content
 {{- if .VCLSteps.VclBackendError}}
