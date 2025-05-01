@@ -199,8 +199,10 @@ templ CreateDomainContent(dData DomainData) {
 	<span class="error">{ dData.Errors.ServerError }</span>
 	<form method="post" action={ templ.URL("/console/create/domain") }>
 		@CSRF()
-		<label for="name">Name:</label>
-		<input type="text" id="name" name="name" placeholder="The domain name" value={ dData.Name }/>
+		<label for="name">
+			Name:
+			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
+		</label>
 		<span class="error">{ dData.Errors.Name }</span>
 		<button type="submit">Add domain</button>
 	</form>
@@ -209,8 +211,10 @@ templ CreateDomainContent(dData DomainData) {
 templ CreateServiceContent(err error) {
 	<form method="post" action={ templ.URL("/console/create/service") }>
 		@CSRF()
-		<label for="name">Name:</label>
-		<input type="text" id="name" name="name"/>
+		<label for="name">
+			Name:
+			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..."/>
+		</label>
 		<button type="submit">Add service</button>
 	</form>
 	if err != nil {
@@ -270,21 +274,29 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
 	<fieldset>
 		<legend>Origin</legend>
-		<label for={ fmt.Sprintf("origins.%d.host", i) }>Host:</label>
-		<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
-		<label for={ fmt.Sprintf("origins.%d.port", i) }>Port:</label>
-		{{
+		<label for={ fmt.Sprintf("origins.%d.host", i) }>
+			Host:
+			<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
+		</label>
+		<label for={ fmt.Sprintf("origins.%d.port", i) }>
+			Port:
+			{{
 			originPortStr := ""
 			if cloneOrigin.Port != 0 {
 				originPortStr = strconv.Itoa(cloneOrigin.Port)
 
 			}
-		}}
-		<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
-		<label for={ fmt.Sprintf("origins.%d.tls", i) }>TLS:</label>
-		<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
-		<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>Verify TLS:</label>
-		<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+			}}
+			<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
+		</label>
+		<label for={ fmt.Sprintf("origins.%d.tls", i) }>
+			TLS:
+			<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
+		</label>
+		<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>
+			Verify TLS:
+			<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+		</label>
 	</fieldset>
 	if htmxRequest {
 		// If this function is called by http handler (e.g.
@@ -313,8 +325,9 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 			} else {
 				for i, domain := range domains {
 					if domain.Verified {
-						<label for={ fmt.Sprintf("domains.%d", i) }>{ domain.Name }:</label>
-						{{
+						<label for={ fmt.Sprintf("domains.%d", i) }>
+							{ domain.Name }:
+							{{
 							var precheck bool
 							for _, cloneDomain := range cloneData.Domains {
 								if string(cloneDomain) == domain.Name {
@@ -322,8 +335,9 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 									break
 								}
 							}
-						}}
-						<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
+							}}
+							<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
+						</label>
 					}
 				}
 			}
@@ -359,8 +373,10 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
 		for _, vclStep := range vclSK.FieldOrder {
 			<div>
-				<label for={ vclSK.FieldToKey[vclStep] }>{ vclSK.FieldToKey[vclStep] }:</label>
-				<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
+				<label for={ vclSK.FieldToKey[vclStep] }>
+					{ vclSK.FieldToKey[vclStep] }:
+					<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
+				</label>
 			</div>
 		}
 		<button type="submit">Add service version</button>
@@ -382,8 +398,10 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", serviceName, version, orgName)) }>
 		@CSRF()
-		<label for="confirmation">Confirmation:</label>
-		<input type="checkbox" id="confirmation" name="confirmation"/>
+		<label for="confirmation">
+			Confirmation:
+			<input type="checkbox" id="confirmation" name="confirmation"/>
+		</label>
 		<button type="submit">Activate version</button>
 	</form>
 	if err != nil {
