@@ -637,6 +637,30 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 	}
 }
 
+func consoleNewOriginFieldsetHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		index := 0
+		indexStr := r.URL.Query().Get("next-origin-index")
+		if indexStr != "" {
+			var err error
+			index, err = strconv.Atoi(indexStr)
+			if err != nil {
+				logger.Error().Msg("console: invalid console fieldset index")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+		}
+		component := components.OriginFieldSet(index, types.Origin{}, true)
+		err := component.Render(r.Context(), w)
+		if err != nil {
+			logger.Error().Msg("console: unable to render origin fieldset")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -940,7 +964,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			err = validate.Struct(formData)
 			if err != nil {
-				logger.Err(err).Msg("unable to validate POST create-service form data")
+				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, types.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
@@ -4100,6 +4124,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Post("/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, confTemplates))
 		r.Get("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post("/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		// htmx helpers
+		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler())
 	})
 
 	// Console login related routes
