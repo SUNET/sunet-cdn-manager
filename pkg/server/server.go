@@ -5527,7 +5527,7 @@ func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) ht
 		return nil, fmt.Errorf("unable to find CSRF key in database, make sure the database is initialized via the 'init' command: %w", err)
 	}
 
-	csrfMiddleware := csrf.Protect(csrfKey, csrf.Secure(secure))
+	csrfMiddleware := csrf.Protect(csrfKey, csrf.Secure(secure), csrf.Path("/"))
 
 	return csrfMiddleware, nil
 }
