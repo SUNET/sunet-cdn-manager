@@ -272,32 +272,34 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 }
 
 templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
-	<fieldset>
-		<legend>Origin</legend>
-		<label for={ fmt.Sprintf("origins.%d.host", i) }>
-			Host:
-			<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
-		</label>
-		<label for={ fmt.Sprintf("origins.%d.port", i) }>
-			Port:
-			{{
+	<article>
+		<fieldset>
+			<legend>Origin</legend>
+			<label for={ fmt.Sprintf("origins.%d.host", i) }>
+				Host:
+				<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
+			</label>
+			<label for={ fmt.Sprintf("origins.%d.port", i) }>
+				Port:
+				{{
 			originPortStr := ""
 			if cloneOrigin.Port != 0 {
 				originPortStr = strconv.Itoa(cloneOrigin.Port)
 
 			}
-			}}
-			<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
-		</label>
-		<label for={ fmt.Sprintf("origins.%d.tls", i) }>
-			TLS:
-			<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
-		</label>
-		<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>
-			Verify TLS:
-			<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
-		</label>
-	</fieldset>
+				}}
+				<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
+			</label>
+			<label for={ fmt.Sprintf("origins.%d.tls", i) }>
+				TLS:
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
+			</label>
+			<label htmlFor={ fmt.Sprintf("origins.%d.verify-tls", i) }>
+				Verify TLS:
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+			</label>
+		</fieldset>
+	</article>
 	if htmxRequest {
 		// If this function is called by http handler (e.g.
 		// because of a hx-get) we also need to increment the "add
@@ -318,16 +320,17 @@ templ nextOriginIndex(index string, swap bool) {
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
-		<fieldset>
-			<legend>Domains</legend>
-			if len(domains) == 0 {
-				<div>No domains available</div>
-			} else {
-				for i, domain := range domains {
-					if domain.Verified {
-						<label for={ fmt.Sprintf("domains.%d", i) }>
-							{ domain.Name }:
-							{{
+		<article>
+			<fieldset>
+				<legend>Domains</legend>
+				if len(domains) == 0 {
+					<div>No domains available</div>
+				} else {
+					for i, domain := range domains {
+						if domain.Verified {
+							<label for={ fmt.Sprintf("domains.%d", i) }>
+								{ domain.Name }:
+								{{
 							var precheck bool
 							for _, cloneDomain := range cloneData.Domains {
 								if string(cloneDomain) == domain.Name {
@@ -335,13 +338,14 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 									break
 								}
 							}
-							}}
-							<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
-						</label>
+								}}
+								<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
+							</label>
+						}
 					}
 				}
-			}
-		</fieldset>
+			</fieldset>
+		</article>
 		<div id="origin-fieldsets">
 			if len(cloneData.Origins) == 0 {
 				@OriginFieldSet(0, types.Origin{}, false)
@@ -371,14 +375,19 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 			Add origin
 		</button>
 		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
-		for _, vclStep := range vclSK.FieldOrder {
-			<div>
-				<label for={ vclSK.FieldToKey[vclStep] }>
-					{ vclSK.FieldToKey[vclStep] }:
-					<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
-				</label>
-			</div>
-		}
+		<article>
+			<fieldset>
+				<legend>VCL steps</legend>
+				for _, vclStep := range vclSK.FieldOrder {
+					<div>
+						<label for={ vclSK.FieldToKey[vclStep] }>
+							{ vclSK.FieldToKey[vclStep] }:
+							<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
+						</label>
+					</div>
+				}
+			</fieldset>
+		</article>
 		<button type="submit">Add service version</button>
 	</form>
 	if err != nil {
