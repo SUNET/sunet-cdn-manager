@@ -304,11 +304,11 @@ templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
 		// If this function is called by http handler (e.g.
 		// because of a hx-get) we also need to replace the "add
 		// button" counter.
-		@nextOriginIndexButton(strconv.Itoa(index+1), true)
+		@addOriginButton(strconv.Itoa(index+1), true)
 	}
 }
 
-templ nextOriginIndexButton(index string, swap bool) {
+templ addOriginButton(index string, swap bool) {
 	<button
 		id="add-origin-fieldset-button"
 		hx-get="/console/new-origin-fieldset"
@@ -371,7 +371,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 				nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
 			}
 		}}
-		@nextOriginIndexButton(nextOriginIndexStr, false)
+		@addOriginButton(nextOriginIndexStr, false)
 		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
 		<article>
 			<fieldset>

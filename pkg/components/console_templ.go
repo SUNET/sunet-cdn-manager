@@ -1354,7 +1354,7 @@ func OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) templ
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = nextOriginIndexButton(strconv.Itoa(index+1), true).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = addOriginButton(strconv.Itoa(index+1), true).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1363,7 +1363,7 @@ func OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) templ
 	})
 }
 
-func nextOriginIndexButton(index string, swap bool) templ.Component {
+func addOriginButton(index string, swap bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -1571,7 +1571,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 		} else {
 			nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
 		}
-		templ_7745c5c3_Err = nextOriginIndexButton(nextOriginIndexStr, false).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = addOriginButton(nextOriginIndexStr, false).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
