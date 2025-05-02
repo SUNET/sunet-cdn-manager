@@ -302,18 +302,26 @@ templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
 	</article>
 	if htmxRequest {
 		// If this function is called by http handler (e.g.
-		// because of a hx-get) we also need to increment the "add
+		// because of a hx-get) we also need to replace the "add
 		// button" counter.
-		@nextOriginIndex(strconv.Itoa(i+1), true)
+		@nextOriginIndexButton(strconv.Itoa(i+1), true)
 	}
 }
 
-templ nextOriginIndex(index string, swap bool) {
-	if swap {
-		<input type="hidden" id="next-origin-index" name="next-origin-index" value={ index } hx-swap-oob="true"/>
-	} else {
-		<input type="hidden" id="next-origin-index" name="next-origin-index" value={ index }/>
-	}
+templ nextOriginIndexButton(index string, swap bool) {
+	<button
+		id="add-origin-fieldset-button"
+		hx-get="/console/new-origin-fieldset"
+		hx-swap="beforeend"
+		hx-target="#origin-fieldsets"
+		name="next-origin-index"
+		value={ index }
+		if swap {
+			hx-swap-oob="true"
+		}
+	>
+		Add origin
+	</button>
 }
 
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) {
@@ -363,15 +371,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 				nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
 			}
 		}}
-		@nextOriginIndex(nextOriginIndexStr, false)
-		<button
-			hx-get="/console/new-origin-fieldset"
-			hx-include="#next-origin-index"
-			hx-swap="beforeend"
-			hx-target="#origin-fieldsets"
-		>
-			Add origin
-		</button>
+		@nextOriginIndexButton(nextOriginIndexStr, false)
 		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
 		<article>
 			<fieldset>
