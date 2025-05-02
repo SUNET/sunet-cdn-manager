@@ -271,15 +271,15 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
-templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
+templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
 	<article>
 		<fieldset>
 			<legend>Origin</legend>
-			<label for={ fmt.Sprintf("origins.%d.host", i) }>
+			<label for={ fmt.Sprintf("origins.%d.host", index) }>
 				Host
-				<input type="text" id={ fmt.Sprintf("origins.%d.host", i) } name={ fmt.Sprintf("origins.%d.host", i) } value={ cloneOrigin.Host }/>
+				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ cloneOrigin.Host }/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.port", i) }>
+			<label for={ fmt.Sprintf("origins.%d.port", index) }>
 				Port
 				{{
 			originPortStr := ""
@@ -288,15 +288,15 @@ templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
 
 			}
 				}}
-				<input type="text" id={ fmt.Sprintf("origins.%d.port", i) } name={ fmt.Sprintf("origins.%d.port", i) } value={ originPortStr }/>
+				<input type="text" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr }/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.tls", i) }>
+			<label for={ fmt.Sprintf("origins.%d.tls", index) }>
 				TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", i) } name={ fmt.Sprintf("origins.%d.tls", i) } checked?={ cloneOrigin.TLS }/>
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", index) } name={ fmt.Sprintf("origins.%d.tls", index) } checked?={ cloneOrigin.TLS }/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.verify-tls", i) }>
+			<label for={ fmt.Sprintf("origins.%d.verify-tls", index) }>
 				Verify TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", i) } name={ fmt.Sprintf("origins.%d.verify-tls", i) } checked?={ cloneOrigin.VerifyTLS }/>
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ cloneOrigin.VerifyTLS }/>
 			</label>
 		</fieldset>
 	</article>
@@ -304,7 +304,7 @@ templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
 		// If this function is called by http handler (e.g.
 		// because of a hx-get) we also need to replace the "add
 		// button" counter.
-		@nextOriginIndexButton(strconv.Itoa(i+1), true)
+		@nextOriginIndexButton(strconv.Itoa(index+1), true)
 	}
 }
 
