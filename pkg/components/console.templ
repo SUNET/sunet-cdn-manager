@@ -304,7 +304,6 @@ templ OriginFieldSet(i int, cloneOrigin types.Origin, htmxRequest bool) {
 		// If this function is called by http handler (e.g.
 		// because of a hx-get) we also need to increment the "add
 		// button" counter.
-		//<input id="next-origin-index" value={ strconv.Itoa(i + 1) } hx-swap-oob="true"/>
 		@nextOriginIndex(strconv.Itoa(i+1), true)
 	}
 }
@@ -364,7 +363,6 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 				nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
 			}
 		}}
-		//<input type="hidden" id="next-origin-index" name="next-origin-index" value={ nextOriginIndexStr }/>
 		@nextOriginIndex(nextOriginIndexStr, false)
 		<button
 			hx-get="/console/new-origin-fieldset"
