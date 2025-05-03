@@ -79,7 +79,6 @@ templ flashMessagesComponent(flashMessages []string) {
 	if len(flashMessages) != 0 {
 		<div class="flash-container" _="on load transition my opacity to 0 over 5 seconds then remove me">
 			for _, flashMessage := range flashMessages {
-				//<article _="on load transition my opacity to 0 over 5 seconds then remove me">
 				<article>
 					{ flashMessage }
 				</article>
@@ -272,7 +271,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 }
 
 templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
-	<article>
+	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
 		<fieldset>
 			<legend>Origin</legend>
 			<label for={ fmt.Sprintf("origins.%d.host", index) }>
@@ -299,6 +298,9 @@ templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
 				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ cloneOrigin.VerifyTLS }/>
 			</label>
 		</fieldset>
+		if index > 0 {
+			@deleteOriginButton(strconv.Itoa(index))
+		}
 	</article>
 	if htmxRequest {
 		// If this function is called by http handler (e.g.
@@ -321,6 +323,14 @@ templ addOriginButton(index string, swap bool) {
 		}
 	>
 		Add origin
+	</button>
+}
+
+templ deleteOriginButton(index string) {
+	<button
+		_="on click remove closest <article/> then send manager:origindeleted to #origin-fieldsets"
+	>
+		Delete origin
 	</button>
 }
 
@@ -353,7 +363,26 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 				}
 			</fieldset>
 		</article>
-		<div id="origin-fieldsets">
+		<div
+			id="origin-fieldsets"
+			_="on manager:origindeleted
+				make a RegExp from '\\.\\d+\\.' called idRE
+				repeat for article in <#origin-fieldsets > article/> index i
+					set the article's id to `article-` + i
+					repeat in <[for]/> in the article
+						set its @for to (its @for).replace(idRE, `.${i}.`)
+					end
+					repeat in <[id]/> in the article
+						set its @id to (its @id).replace(idRE, `.${i}.`)
+					end
+					repeat in <[name]/> in the article
+						set its @name to (its @name).replace(idRE, `.${i}.`)
+					end
+					set last_index to i
+				end
+				set #add-origin-fieldset-button @value to last_index + 1
+			"
+		>
 			if len(cloneData.Origins) == 0 {
 				@OriginFieldSet(0, types.Origin{}, false)
 			} else {
