@@ -364,7 +364,8 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		</article>
 		<div
 			id="origin-fieldsets"
-			_="on manager:origindeleted
+			_="
+			on manager:origindeleted
 				make a RegExp from '\\.\\d+\\.' called idRE
 				repeat for article in <#origin-fieldsets > article/> index i
 					set the article's id to `article-` + i
