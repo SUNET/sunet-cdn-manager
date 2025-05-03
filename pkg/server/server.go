@@ -651,7 +651,7 @@ func consoleNewOriginFieldsetHandler() http.HandlerFunc {
 				return
 			}
 		}
-		component := components.OriginFieldSet(index, types.Origin{}, true)
+		component := components.OriginFieldSet(index, index+1, types.Origin{}, true)
 		err := component.Render(r.Context(), w)
 		if err != nil {
 			logger.Error().Msg("console: unable to render origin fieldset")

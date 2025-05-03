@@ -270,7 +270,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
-templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
+templ OriginFieldSet(index int, numFields int, cloneOrigin types.Origin, htmxRequest bool) {
 	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
 		<fieldset>
 			<legend>Origin</legend>
@@ -298,9 +298,7 @@ templ OriginFieldSet(index int, cloneOrigin types.Origin, htmxRequest bool) {
 				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ cloneOrigin.VerifyTLS }/>
 			</label>
 		</fieldset>
-		if index > 0 {
-			@deleteOriginButton(strconv.Itoa(index))
-		}
+		@deleteOriginButton(strconv.Itoa(index), numFields == 1)
 	</article>
 	if htmxRequest {
 		// If this function is called by http handler (e.g.
@@ -326,9 +324,10 @@ templ addOriginButton(index string, swap bool) {
 	</button>
 }
 
-templ deleteOriginButton(index string) {
+templ deleteOriginButton(index string, disabled bool) {
 	<button
 		_="on click remove closest <article/> then send manager:origindeleted to #origin-fieldsets"
+		disabled?={ disabled }
 	>
 		Delete origin
 	</button>
@@ -378,16 +377,22 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 					repeat in <[name]/> in the article
 						set its @name to (its @name).replace(idRE, `.${i}.`)
 					end
-					set last_index to i
 				end
-				set #add-origin-fieldset-button @value to last_index + 1
+				set #add-origin-fieldset-button @value to (<#origin-fieldsets > article/>).length
+				if (<#origin-fieldsets > article/>).length == 1
+					add @disabled to <#article-0 > button/>
+				end
+			on htmx:afterSwap
+				if (<#origin-fieldsets > article/>).length > 1
+					remove @disabled from <#article-0 > button/>
+				end
 			"
 		>
 			if len(cloneData.Origins) == 0 {
-				@OriginFieldSet(0, types.Origin{}, false)
+				@OriginFieldSet(0, 1, types.Origin{}, false)
 			} else {
 				for i, cloneOrigin := range cloneData.Origins {
-					@OriginFieldSet(i, cloneOrigin, false)
+					@OriginFieldSet(i, len(cloneData.Origins), cloneOrigin, false)
 				}
 			}
 		</div>
