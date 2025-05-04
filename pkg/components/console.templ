@@ -156,6 +156,7 @@ templ ServicesContent(services []types.Service, flashMessages []string) {
 }
 
 templ ServiceContent(orgName string, serviceName string, serviceVersions []types.ServiceVersion) {
+	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
 	} else {
@@ -165,7 +166,9 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 				<th>Active</th>
 				<th>Actions</th>
 			</tr>
-			for _, sv := range serviceVersions {
+			// Print versions starting with the latest version
+			for i := len(serviceVersions)-1; i >= 0; i-- {
+				{{ sv := serviceVersions[i] }}
 				<tr>
 					<td>
 						<a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d?org=%s", sv.ServiceName, sv.Version, sv.OrgName)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
@@ -195,7 +198,6 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 			}
 		</table>
 	}
-	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 }
 
 templ CreateDomainContent(dData DomainData) {
