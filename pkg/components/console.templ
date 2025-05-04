@@ -110,6 +110,7 @@ templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparato
 					<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
 					<td>
 						<button
+							type="button"
 							hx-delete={ string(templ.URL(fmt.Sprintf("/console/domains/%s", domain.Name))) }
 							hx-target="body"
 							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
@@ -139,6 +140,7 @@ templ ServicesContent(services []types.Service, flashMessages []string) {
 					<td><a href={ templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName)) }>{ service.Name }</a></td>
 					<td>
 						<button
+							type="button"
 							hx-delete={ string(templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName))) }
 							hx-target="body"
 							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
@@ -173,6 +175,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 					</td>
 					<td>
 						<button
+							type="button"
 							hx-get={ string(templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))) }
 							hx-target="body"
 							disabled?={ sv.Active }
@@ -180,6 +183,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []types
 							Activate
 						</button>
 						<button
+							type="button"
 							hx-get={ string(templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s&clone-version=%d", serviceName, orgName, sv.Version))) }
 							hx-target="body"
 							hx-push-url="true"
@@ -310,6 +314,7 @@ templ OriginFieldSet(index int, numFields int, cloneOrigin types.Origin, htmxReq
 
 templ addOriginButton(index string, swap bool) {
 	<button
+		type="button"
 		id="add-origin-fieldset-button"
 		hx-get="/console/new-origin-fieldset"
 		hx-swap="beforeend"
@@ -326,6 +331,7 @@ templ addOriginButton(index string, swap bool) {
 
 templ deleteOriginButton(index string, disabled bool) {
 	<button
+		type="button"
 		_="on click remove closest <article/> then send manager:origindeleted to #origin-fieldsets"
 		disabled?={ disabled }
 	>
