@@ -5739,7 +5739,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 
 	confTemplates := configTemplates{}
 
-	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/default.vcl")
+	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create varnish template")
 	}
