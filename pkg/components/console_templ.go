@@ -1458,7 +1458,7 @@ func deleteOriginButton(index string, disabled bool) templ.Component {
 			templ_7745c5c3_Var76 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 119, "<button type=\"button\" _=\"on click remove closest &lt;article/&gt; then send manager:origindeleted to #origin-fieldsets\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 119, "<button type=\"button\" _=\"on click remove closest &lt;article/&gt; then send manager:originremoved to #origin-fieldsets\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1468,7 +1468,7 @@ func deleteOriginButton(index string, disabled bool) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 121, ">Delete origin</button>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 121, ">Remove</button>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1603,7 +1603,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 				}
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "</fieldset></article><div id=\"origin-fieldsets\" _=\"\n\t\t\ton manager:origindeleted\n\t\t\t\tmake a RegExp from &#39;\\\\.\\\\d+\\\\.&#39; called idRE\n\t\t\t\trepeat for article in &lt;#origin-fieldsets &gt; article/&gt; index i\n\t\t\t\t\tset the article&#39;s id to `article-` + i\n\t\t\t\t\trepeat in &lt;[for]/&gt; in the article\n\t\t\t\t\t\tset its @for to (its @for).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\t\trepeat in &lt;[id]/&gt; in the article\n\t\t\t\t\t\tset its @id to (its @id).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\t\trepeat in &lt;[name]/&gt; in the article\n\t\t\t\t\t\tset its @name to (its @name).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\tend\n\t\t\t\tset #add-origin-fieldset-button @value to (&lt;#origin-fieldsets &gt; article/&gt;).length\n\t\t\t\tif (&lt;#origin-fieldsets &gt; article/&gt;).length == 1\n\t\t\t\t\tadd @disabled to &lt;#article-0 &gt; button/&gt;\n\t\t\t\tend\n\t\t\ton htmx:afterSwap\n\t\t\t\tif (&lt;#origin-fieldsets &gt; article/&gt;).length &gt; 1\n\t\t\t\t\tremove @disabled from &lt;#article-0 &gt; button/&gt;\n\t\t\t\tend\n\t\t\t\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "</fieldset></article><div id=\"origin-fieldsets\" _=\"\n\t\t\ton manager:originremoved\n\t\t\t\tmake a RegExp from &#39;\\\\.\\\\d+\\\\.&#39; called idRE\n\t\t\t\trepeat for article in &lt;#origin-fieldsets &gt; article/&gt; index i\n\t\t\t\t\tset the article&#39;s id to `article-` + i\n\t\t\t\t\trepeat in &lt;[for]/&gt; in the article\n\t\t\t\t\t\tset its @for to (its @for).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\t\trepeat in &lt;[id]/&gt; in the article\n\t\t\t\t\t\tset its @id to (its @id).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\t\trepeat in &lt;[name]/&gt; in the article\n\t\t\t\t\t\tset its @name to (its @name).replace(idRE, `.${i}.`)\n\t\t\t\t\tend\n\t\t\t\tend\n\t\t\t\tset #add-origin-fieldset-button @value to (&lt;#origin-fieldsets &gt; article/&gt;).length\n\t\t\t\tif (&lt;#origin-fieldsets &gt; article/&gt;).length == 1\n\t\t\t\t\tadd @disabled to &lt;#article-0 &gt; button/&gt;\n\t\t\t\tend\n\t\t\ton htmx:afterSwap\n\t\t\t\tif (&lt;#origin-fieldsets &gt; article/&gt;).length &gt; 1\n\t\t\t\t\tremove @disabled from &lt;#article-0 &gt; button/&gt;\n\t\t\t\tend\n\t\t\t\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

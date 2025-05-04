@@ -334,10 +334,10 @@ templ addOriginButton(index string, swap bool) {
 templ deleteOriginButton(index string, disabled bool) {
 	<button
 		type="button"
-		_="on click remove closest <article/> then send manager:origindeleted to #origin-fieldsets"
+		_="on click remove closest <article/> then send manager:originremoved to #origin-fieldsets"
 		disabled?={ disabled }
 	>
-		Delete origin
+		Remove
 	</button>
 }
 
@@ -373,7 +373,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 		<div
 			id="origin-fieldsets"
 			_="
-			on manager:origindeleted
+			on manager:originremoved
 				make a RegExp from '\\.\\d+\\.' called idRE
 				repeat for article in <#origin-fieldsets > article/> index i
 					set the article's id to `article-` + i
