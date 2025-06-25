@@ -104,3 +104,4 @@ run at the top level directory prior to commiting:
 * `gosec ./...` (see [gosec](https://github.com/securego/gosec))
 * `golangci-lint run` (see [golangci-lint](https://golangci-lint.run))
 * `go test -race ./...`
+* `govulncheck ./...` (see [govulncheck](https://go.dev/doc/tutorial/govulncheck))
