@@ -2882,10 +2882,11 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 			return nil, errors.New("range is not valid")
 		}
 
-		// Iterate over all addresses of the network, skipping network
-		// and broadcast address.
+		// Iterate over all addresses of the network, including network
+		// and broadcast address since that does not matter when using
+		// these as /32 or /128 routing announcements.
 		if ipNet.Network.Addr().Is4() && len(allocatedV4) < requestedV4 {
-			for a := r.From().Next(); a.Less(r.To()); a = a.Next() {
+			for a := r.From(); a != r.To().Next(); a = a.Next() {
 				if !usedAddrSet.Contains(a) {
 					allocatedV4 = append(allocatedV4, serviceIPAddr{networkID: ipNet.ID, Address: a})
 				}
@@ -2897,7 +2898,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 		}
 
 		if ipNet.Network.Addr().Is6() && len(allocatedV6) < requestedV6 {
-			for a := r.From().Next(); a.Less(r.To()); a = a.Next() {
+			for a := r.From(); a != r.To().Next(); a = a.Next() {
 				if !usedAddrSet.Contains(a) {
 					allocatedV6 = append(allocatedV6, serviceIPAddr{networkID: ipNet.ID, Address: a})
 				}
