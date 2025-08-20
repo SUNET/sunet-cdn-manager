@@ -5796,6 +5796,8 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		close(idleConnsClosed)
 	}(ctx, logger, shutdownDelay)
 
+	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTP listener")
+
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Fatal().Err(err).Msg("HTTP server ListenAndServe failed")
 	}
