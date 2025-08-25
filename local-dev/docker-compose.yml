@@ -3,6 +3,7 @@ services:
     image: "postgres:17.2-bookworm"
     environment:
       - POSTGRES_PASSWORD=dev
+      - POSTGRES_INITDB_ARGS=--data-checksums
     ports:
       - "5432:5432"
     volumes:
