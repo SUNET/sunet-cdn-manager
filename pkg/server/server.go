@@ -1591,7 +1591,7 @@ func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, p
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(context.Background(), "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT user from keyclaok data: %w", err)
+			return fmt.Errorf("unable to INSERT user from keycloak data: %w", err)
 		}
 
 		err = tx.QueryRow(context.Background(), "INSERT INTO auth_provider_keycloak (user_id, subject) VALUES ($1, $2) RETURNING id", userID, subject).Scan(&keycloakProviderID)
