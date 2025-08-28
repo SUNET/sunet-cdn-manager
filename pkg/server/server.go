@@ -1098,6 +1098,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 			if !formData.Confirmation {
 				validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
+				return
 			}
 
 			if formData.Confirmation {
