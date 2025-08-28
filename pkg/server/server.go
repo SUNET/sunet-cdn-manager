@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"embed"
 	"encoding/base64"
 	"encoding/gob"
@@ -1446,7 +1447,7 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.
 }
 
 // Endpoint used for receiving callback from keycloak server
-func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbPool *pgxpool.Pool) http.HandlerFunc {
+func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbPool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -1475,7 +1476,10 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 			return
 		}
 
-		oauth2Token, err := oauth2Config.Exchange(context.Background(), r.URL.Query().Get("code"), oauth2.VerifierOption(ocd.PKCEVerifier))
+		oauth2Ctx := context.Background()
+		oauth2Ctx = context.WithValue(oauth2Ctx, oauth2.HTTPClient, oauth2HTTPClient)
+
+		oauth2Token, err := oauth2Config.Exchange(oauth2Ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(ocd.PKCEVerifier))
 		if err != nil {
 			logger.Err(err).Msg("unable to exchange code for token")
 			http.Error(w, "bad oauth2 exchange", http.StatusInternalServerError)
@@ -4130,7 +4134,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthD
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, secureCSRF bool, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, secureCSRF bool, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -4181,6 +4185,15 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler())
 	})
 
+	oauth2HTTPClient := &http.Client{}
+	if devMode {
+		logger.Info().Msg("disabling cert validation for oauth2 callback handler due to dev mode")
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- only enabled in --dev mode
+		}
+		oauth2HTTPClient.Transport = tr
+	}
+
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
 		if !secureCSRF {
@@ -4207,7 +4220,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 			}
 
 			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, oauth2Config))
-			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(cookieStore, oauth2Config, idTokenVerifier, dbPool))
+			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbPool))
 		}
 	})
 
@@ -5803,7 +5816,17 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
 
-	provider, err := oidc.NewProvider(context.Background(), conf.OIDC.Issuer)
+	providerCtx := context.Background()
+	if devMode {
+		logger.Info().Msg("disabling cert validation for OIDC discovery due to dev mode")
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- only enabled in --dev mode
+		}
+		client := &http.Client{Transport: tr}
+		providerCtx = oidc.ClientContext(context.Background(), client)
+	}
+
+	provider, err := oidc.NewProvider(providerCtx, conf.OIDC.Issuer)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("setting up OIDC provider failed")
 	}
@@ -5834,7 +5857,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, secureCSRF, provider, vclValidator, confTemplates)
+	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, secureCSRF, provider, vclValidator, confTemplates, devMode)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
