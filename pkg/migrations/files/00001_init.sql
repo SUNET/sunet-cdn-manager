@@ -97,7 +97,7 @@ CREATE TABLE gorilla_session_keys (
 CREATE TABLE auth_provider_keycloak (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    user_id uuid UNIQUE NOT NULL REFERENCES users(id),
+    user_id uuid UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     subject uuid UNIQUE NOT NULL
 );
 
@@ -112,7 +112,7 @@ CREATE UNIQUE INDEX gorilla_csrf_keys_active_only_1_true ON gorilla_csrf_keys (a
 CREATE TABLE user_argon2keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    user_id uuid UNIQUE NOT NULL REFERENCES users(id),
+    user_id uuid UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     key bytea NOT NULL CONSTRAINT non_empty_key CHECK(length(key)>0),
     salt bytea NOT NULL CONSTRAINT non_empty_salt CHECK(length(salt)>0),
     time bigint NOT NULL CONSTRAINT uint32_time CHECK(time >= 0 AND time <= 4294967295),

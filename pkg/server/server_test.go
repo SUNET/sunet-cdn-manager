@@ -167,6 +167,17 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Users
 		// No org, local user
 		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'put-user-1')",
+		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000001', '00000014-0000-0000-0000-000000000001', '\\x00', '\\x00', 3, 65536, 4, 32)",
+		// No org, local users, used to test DELETE
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000002', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-1')",
+		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000002', '00000014-0000-0000-0000-000000000002', '\\x00', '\\x00', 3, 65536, 4, 32)",
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000003', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-2')",
+		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000003', '00000014-0000-0000-0000-000000000003', '\\x00', '\\x00', 3, 65536, 4, 32)",
+		// No org, keycloak users, used to test DELETE
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000004', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-1')",
+		"INSERT INTO auth_provider_keycloak (id, user_id, subject) VALUES ('00000018-0000-0000-0000-000000000001', '00000014-0000-0000-0000-000000000004', '00000019-0000-0000-0000-000000000001')",
+		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000005', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-2')",
+		"INSERT INTO auth_provider_keycloak (id, user_id, subject) VALUES ('00000018-0000-0000-0000-000000000002', '00000014-0000-0000-0000-000000000005', '00000019-0000-0000-0000-000000000002')",
 
 		// Cache nodes
 		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000015-0000-0000-0000-000000000001', 'cache-node1', 'A cache node, cache-node1.example.com', '127.0.0.100', '::1337')",
@@ -1114,6 +1125,137 @@ func TestPutUser(t *testing.T) {
 		}
 
 		fmt.Printf("%s\n", jsonData)
+	}
+}
+
+func TestDeleteUser(t *testing.T) {
+	ts, dbPool, err := prepareServer(false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description        string
+		username           string
+		password           string
+		expectedStatus     int
+		targetUserIDorName string
+	}{
+		{
+			description:        "successful superuser request with IDs",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			targetUserIDorName: "00000014-0000-0000-0000-000000000002",
+		},
+		{
+			description:        "successful superuser request with name",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			targetUserIDorName: "delete-local-user-2",
+		},
+		{
+			description:        "successful superuser request with IDs for keycloak",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			targetUserIDorName: "00000014-0000-0000-0000-000000000004",
+		},
+		{
+			description:        "successful superuser request with name for keycloak",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusNoContent,
+			targetUserIDorName: "delete-keycloak-user-2",
+		},
+		{
+			description:        "failed superuser request trying to remove itself with ID",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusForbidden,
+			targetUserIDorName: "00000006-0000-0000-0000-000000000001",
+		},
+		{
+			description:        "failed superuser request trying to remove itself with name",
+			username:           "admin",
+			password:           "adminpass1",
+			expectedStatus:     http.StatusForbidden,
+			targetUserIDorName: "admin",
+		},
+		{
+			description:        "failed non-superuser request with name",
+			username:           "username1",
+			password:           "password1",
+			expectedStatus:     http.StatusForbidden,
+			targetUserIDorName: "admin",
+		},
+	}
+
+	for _, test := range tests {
+		// Verify uses exists prior to deletion
+		var testQuery string
+		if isUUID(test.targetUserIDorName) {
+			testQuery = "SELECT name, id FROM users WHERE id = $1"
+		} else {
+			testQuery = "SELECT name, id FROM users WHERE name = $1"
+		}
+
+		var name string
+		var id pgtype.UUID
+		err := dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserIDorName, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: DELETE user unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fmt.Printf("%s\n", jsonData)
+
+		// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
+		err = dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
+		if err == nil {
+			if test.expectedStatus == http.StatusNoContent {
+				// The delete seemed successful, why are they still in the db
+				t.Fatalf("user is not deleted as expected, name: '%s', id: '%s'", name, id)
+			}
+		} else {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("user deleted pre-check unexpected error: '%s', id: '%s', %s", name, id, err)
+			}
+			if test.expectedStatus != http.StatusNoContent {
+				t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", name, id, err)
+			}
+		}
+
 	}
 }
 

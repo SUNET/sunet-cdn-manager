@@ -2241,6 +2241,40 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 	}, nil
 }
 
+func deleteUser(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad types.AuthData, userNameOrID string) (pgtype.UUID, error) {
+	if !ad.Superuser {
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
+	}
+
+	var userID pgtype.UUID
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(tx, userNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("unable to look up user identifier")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// A user can not delete itself to protect against locking
+		// yourself out of the system
+		if ad.UserID == userIdent.id {
+			return cdnerrors.ErrForbidden
+		}
+
+		err = tx.QueryRow(context.Background(), "DELETE FROM users WHERE id = $1 RETURNING id", userIdent.id).Scan(&userID)
+		if err != nil {
+			return fmt.Errorf("unable to DELETE user: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("deleteUser transaction failed")
+		return pgtype.UUID{}, fmt.Errorf("deleteUser transaction failed: %w", err)
+	}
+
+	return userID, nil
+}
+
 func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
 	var userID pgtype.UUID
 	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
@@ -2724,6 +2758,12 @@ func newRoleIdentifier(tx pgx.Tx, input string) (roleIdentifier, error) {
 			id:   id,
 		},
 	}, nil
+}
+
+func isUUID(input string) bool {
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	return err == nil
 }
 
 func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
@@ -4373,6 +4413,31 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, err
 			}
 			return &userOutput{Body: user}, nil
+		})
+
+		huma.Delete(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
+			User string `path:"user" example:"username" doc:"user ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from user DELETE handler")
+			}
+
+			_, err := deleteUser(logger, dbPool, ad, input.User)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("user not found")
+				} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("access to this user is not allowed")
+				}
+				logger.Err(err).Msg("unable to delete user")
+				return nil, err
+			}
+
+			return nil, nil
 		})
 
 		huma.Get(api, "/v1/orgs", func(ctx context.Context, _ *struct{},
