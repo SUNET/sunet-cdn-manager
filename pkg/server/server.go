@@ -1553,12 +1553,17 @@ func oauth2CallbackHandler(cookieStore *sessions.CookieStore, oauth2Config oauth
 		ad, err := keycloakUser(dbPool, logger, idToken.Subject, kcc)
 		if err != nil {
 			logger.Err(err).Msg("unable to get keycloak user")
-			if errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified) {
+			switch {
+			case errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified):
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
+			case errors.Is(err, cdnerrors.ErrKeyCloakUserExists):
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			default:
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
 			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
 		}
 
 		session.Values["ad"] = ad
@@ -1591,6 +1596,12 @@ func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, p
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(context.Background(), "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				if pgErr.Code == pgUniqueViolation {
+					return cdnerrors.ErrKeyCloakUserExists
+				}
+			}
 			return fmt.Errorf("unable to INSERT user from keycloak data: %w", err)
 		}
 
@@ -1631,7 +1642,7 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 			// User does not exist, add to database
 			userID, keycloakProviderID, err = addKeycloakUser(dbPool, subject, kcc.PreferredUsername)
 			if err != nil {
-				return types.AuthData{}, fmt.Errorf("unable to add keycloak user to database: %w", err)
+				return types.AuthData{}, fmt.Errorf("unable to add keycloak user '%s' to database: %w", kcc.PreferredUsername, err)
 			}
 			username = kcc.PreferredUsername
 			logger.Info().Str("user_id", userID.String()).Str("keycloak_provider_id", keycloakProviderID.String()).Msg("created user based on keycloak credentials")

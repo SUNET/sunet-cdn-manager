@@ -15,6 +15,7 @@ var (
 	ErrExclutionViolation      = errors.New("conflicting data in database")
 	ErrBadPassword             = errors.New("bad password")
 	ErrKeyCloakEmailUnverified = errors.New("keycloak user email is not verified")
+	ErrKeyCloakUserExists      = errors.New("keycloak username already exists with other UUID")
 	ErrBadOldPassword          = errors.New("old password is invalid")
 	ErrUnableToParseNameOrID   = errors.New("unable to parse name or ID")
 	ErrInvalidFormData         = errors.New("invalid form data")
