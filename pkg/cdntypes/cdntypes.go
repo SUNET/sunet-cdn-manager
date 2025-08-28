@@ -1,4 +1,4 @@
-package types
+package cdntypes
 
 import (
 	"net/netip"

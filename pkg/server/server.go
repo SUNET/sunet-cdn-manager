@@ -29,10 +29,10 @@ import (
 	"unicode"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
-	"github.com/SUNET/sunet-cdn-manager/pkg/types"
 	"github.com/a-h/templ"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/danielgtaylor/huma/v2"
@@ -57,7 +57,7 @@ import (
 )
 
 func init() {
-	gob.Register(types.AuthData{})
+	gob.Register(cdntypes.AuthData{})
 	gob.Register(oidcCallbackData{})
 
 	// Withouth this the decoder will fail on "error":"schema: invalid path \"gorilla.csrf.Token\""" when using gorilla/csrf
@@ -126,7 +126,7 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, confTemplates configTemplates, orgNameOrID string, serviceNameOrID string, iSvc types.InputServiceVersion) error {
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, confTemplates configTemplates, orgNameOrID string, serviceNameOrID string, iSvc cdntypes.InputServiceVersion) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
 		return fmt.Errorf("unable to validate input svc struct: %w", err)
@@ -225,7 +225,7 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		err := renderConsolePage(w, r, ad, "Dashboard", components.Dashboard(ad.Username))
 		if err != nil {
@@ -260,7 +260,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		domains, err := selectDomains(dbPool, ad, "")
 		if err != nil {
@@ -309,7 +309,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		domainName := chi.URLParam(r, "domain")
 		if domainName == "" {
@@ -357,7 +357,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
@@ -412,7 +412,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		services, err := selectServices(dbPool, ad)
 		if err != nil {
@@ -463,7 +463,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		switch r.Method {
 		case "GET":
@@ -566,7 +566,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		switch r.Method {
 		case "GET":
@@ -651,7 +651,7 @@ func consoleNewOriginFieldsetHandler() http.HandlerFunc {
 				return
 			}
 		}
-		component := components.OriginFieldSet(index, index+1, types.Origin{}, true)
+		component := components.OriginFieldSet(index, index+1, cdntypes.Origin{}, true)
 		err := component.Render(r.Context(), w)
 		if err != nil {
 			logger.Error().Msg("console: unable to render origin fieldset")
@@ -690,7 +690,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		serviceVersions, err := selectServiceVersions(dbPool, ad, serviceName, orgName)
 		if err != nil {
@@ -751,7 +751,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		svc, err := getServiceVersionConfig(dbPool, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
@@ -760,7 +760,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 			return
 		}
 
-		vclKeyToConf := types.VclStepsToMap(svc.VclSteps)
+		vclKeyToConf := cdntypes.VclStepsToMap(svc.VclSteps)
 
 		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
@@ -790,19 +790,19 @@ func camelCaseToSnakeCase(s string) string {
 	return b.String()
 }
 
-func getServiceVersionCloneData(tx pgx.Tx, ad types.AuthData, orgName string, serviceName string, cloneVersion int64) (types.ServiceVersionCloneData, error) {
+func getServiceVersionCloneData(tx pgx.Tx, ad cdntypes.AuthData, orgName string, serviceName string, cloneVersion int64) (cdntypes.ServiceVersionCloneData, error) {
 	orgIdent, err := newOrgIdentifier(tx, orgName)
 	if err != nil {
-		return types.ServiceVersionCloneData{}, err
+		return cdntypes.ServiceVersionCloneData{}, err
 	}
 
 	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-		return types.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
+		return cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
 	}
 
 	serviceIdent, err := newServiceIdentifier(tx, serviceName, orgIdent.id)
 	if err != nil {
-		return types.ServiceVersionCloneData{}, err
+		return cdntypes.ServiceVersionCloneData{}, err
 	}
 
 	rows, err := tx.Query(
@@ -840,12 +840,12 @@ func getServiceVersionCloneData(tx pgx.Tx, ad types.AuthData, orgName string, se
 		cloneVersion,
 	)
 	if err != nil {
-		return types.ServiceVersionCloneData{}, fmt.Errorf("unable to query for version config data for cloning: %w", err)
+		return cdntypes.ServiceVersionCloneData{}, fmt.Errorf("unable to query for version config data for cloning: %w", err)
 	}
 
-	cloneData, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[types.ServiceVersionCloneData])
+	cloneData, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.ServiceVersionCloneData])
 	if err != nil {
-		return types.ServiceVersionCloneData{}, fmt.Errorf("unable to collect service version clone data into struct: %w", err)
+		return cdntypes.ServiceVersionCloneData{}, fmt.Errorf("unable to collect service version clone data into struct: %w", err)
 	}
 
 	return cloneData, nil
@@ -880,9 +880,9 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
-		vclSK := types.NewVclStepKeys()
+		vclSK := cdntypes.NewVclStepKeys()
 
 		domains, err := selectDomains(dbPool, ad, orgName)
 		if err != nil {
@@ -893,7 +893,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		switch r.Method {
 		case "GET":
-			var cloneData types.ServiceVersionCloneData
+			var cloneData cdntypes.ServiceVersionCloneData
 			cloneVersionStr := r.URL.Query().Get("clone-version")
 			if cloneVersionStr != "" {
 				cloneVersion, err := strconv.ParseInt(cloneVersionStr, 10, 64)
@@ -965,7 +965,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
-				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, types.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -974,9 +974,9 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			origins := []types.Origin{}
+			origins := []cdntypes.Origin{}
 			for _, formOrigin := range formData.Origins {
-				origins = append(origins, types.Origin{
+				origins = append(origins, cdntypes.Origin{
 					Host:      formOrigin.OriginHost,
 					Port:      formOrigin.OriginPort,
 					TLS:       formOrigin.OriginTLS,
@@ -992,7 +992,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, types.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1057,7 +1057,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			return
 		}
 
-		ad := adRef.(types.AuthData)
+		ad := adRef.(cdntypes.AuthData)
 
 		switch r.Method {
 		case "GET":
@@ -1124,7 +1124,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 	}
 }
 
-func renderConsolePage(w http.ResponseWriter, r *http.Request, ad types.AuthData, title string, contents templ.Component) error {
+func renderConsolePage(w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, contents templ.Component) error {
 	component := components.ConsolePage(title, ad, contents)
 	return component.Render(r.Context(), w)
 }
@@ -1181,8 +1181,8 @@ type createServiceVersionOrigin struct {
 }
 
 type createServiceVersionForm struct {
-	types.VclSteps
-	Domains []types.DomainString         `schema:"domains" validate:"dive,min=1,max=253"`
+	cdntypes.VclSteps
+	Domains []cdntypes.DomainString      `schema:"domains" validate:"dive,min=1,max=253"`
 	Origins []createServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
 }
 
@@ -1199,7 +1199,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 		case "GET":
 			q := r.URL.Query()
 			returnTo := q.Get(returnToKey)
-			_, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			_, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if ok {
 				switch returnTo {
 				case "":
@@ -1250,7 +1250,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 				return
 			}
 
-			var ad types.AuthData
+			var ad cdntypes.AuthData
 			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
 				if err != nil {
@@ -1324,7 +1324,7 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 		q := r.URL.Query()
 		returnTo := q.Get(returnToKey)
 
-		_, ok := ctx.Value(authDataKey{}).(types.AuthData)
+		_, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if ok {
 			switch returnTo {
 			case "":
@@ -1619,7 +1619,7 @@ func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, p
 	return userID, keycloakProviderID, nil
 }
 
-func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, kcc keycloakClaims) (types.AuthData, error) {
+func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, kcc keycloakClaims) (cdntypes.AuthData, error) {
 	// We keep track of keycloak users via the sub value returned in the ID
 	// token. For keycloak this is a UUID, e.g.
 	// "ab809abb-5bac-4db1-8088-3d340ea23de8" which is the actual user ID in keycloak which
@@ -1642,12 +1642,12 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 			// User does not exist, add to database
 			userID, keycloakProviderID, err = addKeycloakUser(dbPool, subject, kcc.PreferredUsername)
 			if err != nil {
-				return types.AuthData{}, fmt.Errorf("unable to add keycloak user '%s' to database: %w", kcc.PreferredUsername, err)
+				return cdntypes.AuthData{}, fmt.Errorf("unable to add keycloak user '%s' to database: %w", kcc.PreferredUsername, err)
 			}
 			username = kcc.PreferredUsername
 			logger.Info().Str("user_id", userID.String()).Str("keycloak_provider_id", keycloakProviderID.String()).Msg("created user based on keycloak credentials")
 		} else {
-			return types.AuthData{}, fmt.Errorf("keycloak user lookup failed: %w", err)
+			return cdntypes.AuthData{}, fmt.Errorf("keycloak user lookup failed: %w", err)
 		}
 	}
 
@@ -1655,7 +1655,7 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 		logger.Info().Str("from", username).Str("to", kcc.PreferredUsername).Msg("keycloak username out of sync, updating local username")
 		_, err := dbPool.Exec(context.Background(), "UPDATE users SET name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
 		if err != nil {
-			return types.AuthData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
+			return cdntypes.AuthData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
 		}
 
 		username = kcc.PreferredUsername
@@ -1689,10 +1689,10 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 		&superuser,
 	)
 	if err != nil {
-		return types.AuthData{}, err
+		return cdntypes.AuthData{}, err
 	}
 
-	return types.AuthData{
+	return cdntypes.AuthData{
 		Username:  username,
 		UserID:    userID,
 		OrgID:     orgID,
@@ -1797,7 +1797,7 @@ func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expect
 	return hashedCacheKey
 }
 
-func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (types.AuthData, error) {
+func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (cdntypes.AuthData, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
@@ -1843,7 +1843,7 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 		&argon2TagSize,
 	)
 	if err != nil {
-		return types.AuthData{}, err
+		return cdntypes.AuthData{}, err
 	}
 
 	hashedCacheKey := createLoginCacheKey(userID, argon2Key, argon2Salt, password)
@@ -1880,12 +1880,12 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	}
 
 	if !validLogin {
-		return types.AuthData{}, cdnerrors.ErrBadPassword
+		return cdntypes.AuthData{}, cdnerrors.ErrBadPassword
 	}
 
 	logger.Info().Msgf("successful login for userID '%s', username '%s'", userID.String(), username)
 
-	return types.AuthData{
+	return cdntypes.AuthData{
 		Username:  username,
 		UserID:    userID,
 		OrgID:     orgID,
@@ -1900,7 +1900,7 @@ const (
 	cookieName = "sunet-cdn-manager"
 )
 
-func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, r *http.Request) *types.AuthData {
+func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, r *http.Request) *cdntypes.AuthData {
 	session := getSession(r, cookieStore)
 
 	adInt, ok := session.Values["ad"]
@@ -1909,7 +1909,7 @@ func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, 
 	}
 
 	logger.Info().Msg("using authentication data from session")
-	ad := adInt.(types.AuthData)
+	ad := adInt.(cdntypes.AuthData)
 	return &ad
 }
 
@@ -1937,7 +1937,7 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Han
 	}
 }
 
-func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad types.AuthData) ([]user, error) {
+func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad cdntypes.AuthData) ([]user, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -1964,7 +1964,7 @@ func selectUsers(dbPool *pgxpool.Pool, logger *zerolog.Logger, ad types.AuthData
 	return users, nil
 }
 
-func selectUser(dbPool *pgxpool.Pool, userNameOrID string, ad types.AuthData) (user, error) {
+func selectUser(dbPool *pgxpool.Pool, userNameOrID string, ad cdntypes.AuthData) (user, error) {
 	u := user{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -2042,7 +2042,7 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 	return keyID, nil
 }
 
-func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -2118,7 +2118,7 @@ func setLocalPassword(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool
 	return keyID, nil
 }
 
-func setCacheNodeMaintenance(ad types.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, maintenance bool) error {
+func setCacheNodeMaintenance(ad cdntypes.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, maintenance bool) error {
 	if !ad.Superuser {
 		return cdnerrors.ErrForbidden
 	}
@@ -2143,7 +2143,7 @@ func setCacheNodeMaintenance(ad types.AuthData, dbPool *pgxpool.Pool, cacheNodeN
 	return nil
 }
 
-func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNode, error) {
+func selectCacheNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.CacheNode, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -2156,7 +2156,7 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNod
 		return nil, fmt.Errorf("unable to query for all cache nodes: %w", err)
 	}
 
-	cacheNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.CacheNode])
+	cacheNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.CacheNode])
 	if err != nil {
 		return nil, fmt.Errorf("unable to CollectRows for cache nodes: %w", err)
 	}
@@ -2164,9 +2164,9 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.CacheNod
 	return cacheNodes, nil
 }
 
-func createCacheNode(dbPool *pgxpool.Pool, ad types.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (types.CacheNode, error) {
+func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (cdntypes.CacheNode, error) {
 	if !ad.Superuser {
-		return types.CacheNode{}, cdnerrors.ErrForbidden
+		return cdntypes.CacheNode{}, cdnerrors.ErrForbidden
 	}
 
 	var err error
@@ -2182,10 +2182,10 @@ func createCacheNode(dbPool *pgxpool.Pool, ad types.AuthData, name string, descr
 		return nil
 	})
 	if err != nil {
-		return types.CacheNode{}, fmt.Errorf("createCacheNode: transaction failed: %w", err)
+		return cdntypes.CacheNode{}, fmt.Errorf("createCacheNode: transaction failed: %w", err)
 	}
 
-	return types.CacheNode{
+	return cdntypes.CacheNode{
 		ID:          cacheNodeID,
 		Description: description,
 		IPv4Address: ipv4Address,
@@ -2204,7 +2204,7 @@ func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *
 	return cacheNodeID, nil
 }
 
-func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad types.AuthData) (user, error) {
+func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad cdntypes.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -2252,7 +2252,7 @@ func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad 
 	}, nil
 }
 
-func deleteUser(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad types.AuthData, userNameOrID string) (pgtype.UUID, error) {
+func deleteUser(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthData, userNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser {
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
@@ -2320,7 +2320,7 @@ func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID
 	return nil
 }
 
-func updateUser(dbPool *pgxpool.Pool, ad types.AuthData, nameOrID string, org *string, role string) (user, error) {
+func updateUser(dbPool *pgxpool.Pool, ad cdntypes.AuthData, nameOrID string, org *string, role string) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -2366,7 +2366,7 @@ func updateUser(dbPool *pgxpool.Pool, ad types.AuthData, nameOrID string, org *s
 	return u, nil
 }
 
-func selectOrgs(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Org, error) {
+func selectOrgs(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Org, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -2383,7 +2383,7 @@ func selectOrgs(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Org, error) {
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Org])
+	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Org])
 	if err != nil {
 		return nil, fmt.Errorf("unable to CollectRows for orgs: %w", err)
 	}
@@ -2391,8 +2391,8 @@ func selectOrgs(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Org, error) {
 	return orgs, nil
 }
 
-func selectDomains(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string) ([]types.Domain, error) {
-	domains := []types.Domain{}
+func selectDomains(dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Domain, error) {
+	domains := []cdntypes.Domain{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var err error
@@ -2440,7 +2440,7 @@ func selectDomains(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string) 
 			}
 		}
 
-		domains, err = pgx.CollectRows(rows, pgx.RowToStructByName[types.Domain])
+		domains, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Domain])
 		if err != nil {
 			return fmt.Errorf("unable to CollectRows for org domains: %w", err)
 		}
@@ -2454,7 +2454,7 @@ func selectDomains(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string) 
 	return domains, nil
 }
 
-func deleteDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad types.AuthData, domainNameOrID string) (pgtype.UUID, error) {
+func deleteDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthData, domainNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
@@ -2488,7 +2488,7 @@ func deleteDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad types.AuthDat
 	return domainID, nil
 }
 
-func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad types.AuthData) (serviceAddresses, error) {
+func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
 	sAddrs := serviceAddresses{}
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
@@ -2535,8 +2535,8 @@ func selectServiceIPs(dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID 
 	return sAddrs, nil
 }
 
-func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad types.AuthData) (types.Org, error) {
-	o := types.Org{}
+func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad cdntypes.AuthData) (cdntypes.Org, error) {
+	o := cdntypes.Org{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
@@ -2554,13 +2554,13 @@ func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad types.AuthData) (typ
 		return nil
 	})
 	if err != nil {
-		return types.Org{}, fmt.Errorf("selectOrg: transaction failed: %w", err)
+		return cdntypes.Org{}, fmt.Errorf("selectOrg: transaction failed: %w", err)
 	}
 
 	return o, nil
 }
 
-func insertOrg(dbPool *pgxpool.Pool, name string, ad types.AuthData) (pgtype.UUID, error) {
+func insertOrg(dbPool *pgxpool.Pool, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
@@ -2573,7 +2573,7 @@ func insertOrg(dbPool *pgxpool.Pool, name string, ad types.AuthData) (pgtype.UUI
 	return id, nil
 }
 
-func selectServices(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Service, error) {
+func selectServices(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Service, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
@@ -2590,7 +2590,7 @@ func selectServices(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Service, e
 		return nil, cdnerrors.ErrForbidden
 	}
 
-	services, err := pgx.CollectRows(rows, pgx.RowToStructByName[types.Service])
+	services, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Service])
 	if err != nil {
 		return nil, fmt.Errorf("unable to collect rows for services in API GET: %w", err)
 	}
@@ -2598,8 +2598,8 @@ func selectServices(dbPool *pgxpool.Pool, ad types.AuthData) ([]types.Service, e
 	return services, nil
 }
 
-func selectService(dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad types.AuthData) (types.Service, error) {
-	s := types.Service{}
+func selectService(dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (cdntypes.Service, error) {
+	s := cdntypes.Service{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
@@ -2632,7 +2632,7 @@ func selectService(dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID str
 		return nil
 	})
 	if err != nil {
-		return types.Service{}, fmt.Errorf("selectService: transaction failed: %w", err)
+		return cdntypes.Service{}, fmt.Errorf("selectService: transaction failed: %w", err)
 	}
 
 	return s, nil
@@ -2990,7 +2990,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	return allocatedIPs, nil
 }
 
-func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad types.AuthData) (types.Domain, error) {
+func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
 
@@ -3001,11 +3001,11 @@ func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, org
 	var err error
 
 	if !ad.Superuser && ad.OrgID == nil {
-		return types.Domain{}, cdnerrors.ErrForbidden
+		return cdntypes.Domain{}, cdnerrors.ErrForbidden
 	}
 
 	if orgNameOrID == nil {
-		return types.Domain{}, cdnerrors.ErrUnprocessable
+		return cdntypes.Domain{}, cdnerrors.ErrUnprocessable
 	}
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -3058,13 +3058,13 @@ func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, org
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == pgUniqueViolation {
-				return types.Domain{}, cdnerrors.ErrAlreadyExists
+				return cdntypes.Domain{}, cdnerrors.ErrAlreadyExists
 			}
 		}
-		return types.Domain{}, fmt.Errorf("insertDomain transaction failed: %w", err)
+		return cdntypes.Domain{}, fmt.Errorf("insertDomain transaction failed: %w", err)
 	}
 
-	d := types.Domain{
+	d := cdntypes.Domain{
 		ID:                domainID,
 		Name:              name,
 		Verified:          false,
@@ -3074,7 +3074,7 @@ func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, org
 	return d, nil
 }
 
-func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad types.AuthData) (pgtype.UUID, error) {
+func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
 	var orgIdent orgIdentifier
@@ -3157,7 +3157,7 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 	return serviceID, nil
 }
 
-func deleteService(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad types.AuthData) (pgtype.UUID, error) {
+func deleteService(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
@@ -3211,9 +3211,9 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
 }
 
-func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplates configTemplates) (types.CacheNodeConfig, error) {
+func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTemplates configTemplates) (cdntypes.CacheNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
-		return types.CacheNodeConfig{}, cdnerrors.ErrForbidden
+		return cdntypes.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
 	// Usage of JOIN with subqueries based on
@@ -3267,11 +3267,11 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
                        ORDER BY orgs.name`,
 	)
 	if err != nil {
-		return types.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config as superuser: %w", err)
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config as superuser: %w", err)
 	}
 
-	cnc := types.CacheNodeConfig{
-		Orgs: map[string]types.OrgWithServices{},
+	cnc := cdntypes.CacheNodeConfig{
+		Orgs: map[string]cdntypes.OrgWithServices{},
 	}
 
 	var orgID, serviceID, serviceVersionID pgtype.UUID
@@ -3280,8 +3280,8 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 	var serviceVersion int64
 	var serviceVersionActive bool
 	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
-	var domains []types.DomainString
-	var origins []types.Origin
+	var domains []cdntypes.DomainString
+	var origins []cdntypes.Origin
 	_, err = pgx.ForEachRow(
 		rows,
 		[]any{
@@ -3309,19 +3309,19 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 		},
 		func() error {
 			if _, orgExists := cnc.Orgs[orgID.String()]; !orgExists {
-				cnc.Orgs[orgID.String()] = types.OrgWithServices{
+				cnc.Orgs[orgID.String()] = cdntypes.OrgWithServices{
 					ID:       orgID,
-					Services: map[string]types.ServiceWithVersions{},
+					Services: map[string]cdntypes.ServiceWithVersions{},
 				}
 			}
 
 			if _, serviceExists := cnc.Orgs[orgID.String()].Services[serviceID.String()]; !serviceExists {
-				cnc.Orgs[orgID.String()].Services[serviceID.String()] = types.ServiceWithVersions{
+				cnc.Orgs[orgID.String()].Services[serviceID.String()] = cdntypes.ServiceWithVersions{
 					ID:              serviceID,
 					IPAddresses:     serviceIPAddresses,
 					UIDRangeFirst:   serviceUIDRange.Lower.Int64,
 					UIDRangeLast:    serviceUIDRange.Upper.Int64,
-					ServiceVersions: map[int64]types.ServiceVersionWithConfig{},
+					ServiceVersions: map[int64]cdntypes.ServiceVersionWithConfig{},
 				}
 			}
 
@@ -3335,7 +3335,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 				serviceIPAddresses,
 				origins,
 				domains,
-				types.VclSteps{
+				cdntypes.VclSteps{
 					VclRecv:            vclRecv,
 					VclPipe:            vclPipe,
 					VclPass:            vclPass,
@@ -3366,7 +3366,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 				}
 			}
 
-			cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion] = types.ServiceVersionWithConfig{
+			cnc.Orgs[orgID.String()].Services[serviceID.String()].ServiceVersions[serviceVersion] = cdntypes.ServiceVersionWithConfig{
 				ID:            serviceVersionID,
 				Version:       serviceVersion,
 				Active:        serviceVersionActive,
@@ -3380,7 +3380,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData, confTemplate
 		},
 	)
 	if err != nil {
-		return types.CacheNodeConfig{}, fmt.Errorf("ForEachRow of cache node config failed: %w", err)
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("ForEachRow of cache node config failed: %w", err)
 	}
 
 	return cnc, nil
@@ -3392,14 +3392,14 @@ type serviceIPInfo struct {
 	OriginTLSStatus    []bool
 }
 
-func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNodeConfig, error) {
+func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData) (cdntypes.L4LBNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
-		return types.L4LBNodeConfig{}, cdnerrors.ErrForbidden
+		return cdntypes.L4LBNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
 	serviceIPInfos := []serviceIPInfo{}
 
-	cacheNodes := []types.CacheNode{}
+	cacheNodes := []cdntypes.CacheNode{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes ORDER BY ipv4_address, ipv6_address")
@@ -3407,7 +3407,7 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNo
 			return fmt.Errorf("unable to select cache node information: %w", err)
 		}
 
-		cacheNodes, err = pgx.CollectRows(rows, pgx.RowToStructByName[types.CacheNode])
+		cacheNodes, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.CacheNode])
 		if err != nil {
 			return fmt.Errorf("unable to collect cache node rows: %w", err)
 		}
@@ -3444,19 +3444,19 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNo
 		return nil
 	})
 	if err != nil {
-		return types.L4LBNodeConfig{}, fmt.Errorf("l4lb node config transaction failed: %w", err)
+		return cdntypes.L4LBNodeConfig{}, fmt.Errorf("l4lb node config transaction failed: %w", err)
 	}
 
-	lnc := types.L4LBNodeConfig{
+	lnc := cdntypes.L4LBNodeConfig{
 		CacheNodes: cacheNodes,
 	}
 
 	for _, sii := range serviceIPInfos {
 		if len(sii.OriginTLSStatus) < 1 {
-			return types.L4LBNodeConfig{}, fmt.Errorf("we expect at least one origin in the set, this is odd, serviceID: %s", sii.ServiceID)
+			return cdntypes.L4LBNodeConfig{}, fmt.Errorf("we expect at least one origin in the set, this is odd, serviceID: %s", sii.ServiceID)
 		}
 
-		sConn := types.ServiceConnectivity{
+		sConn := cdntypes.ServiceConnectivity{
 			ServiceID:          sii.ServiceID,
 			ServiceIPAddresses: sii.ServiceIPAddresses,
 		}
@@ -3484,11 +3484,11 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad types.AuthData) (types.L4LBNo
 	return lnc, nil
 }
 
-func selectServiceVersions(dbPool *pgxpool.Pool, ad types.AuthData, serviceNameOrID string, orgNameOrID string) ([]types.ServiceVersion, error) {
+func selectServiceVersions(dbPool *pgxpool.Pool, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, error) {
 	var rows pgx.Rows
 
 	var err error
-	serviceVersions := []types.ServiceVersion{}
+	serviceVersions := []cdntypes.ServiceVersion{}
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
 
@@ -3524,7 +3524,7 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad types.AuthData, serviceNameO
 		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &orgName}, func() error {
 			serviceVersions = append(
 				serviceVersions,
-				types.ServiceVersion{
+				cdntypes.ServiceVersion{
 					ID:          id,
 					ServiceID:   serviceIdent.id,
 					ServiceName: serviceIdent.name,
@@ -3550,16 +3550,16 @@ func selectServiceVersions(dbPool *pgxpool.Pool, ad types.AuthData, serviceNameO
 	return serviceVersions, nil
 }
 
-func getServiceVersionConfig(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrID string, serviceNameOrID string, version int64) (types.ServiceVersionConfig, error) {
+func getServiceVersionConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string, serviceNameOrID string, version int64) (cdntypes.ServiceVersionConfig, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
 		if ad.OrgID == nil {
-			return types.ServiceVersionConfig{}, cdnerrors.ErrForbidden
+			return cdntypes.ServiceVersionConfig{}, cdnerrors.ErrForbidden
 		}
 	}
 
-	var svc types.ServiceVersionConfig
+	var svc cdntypes.ServiceVersionConfig
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
 		if err != nil {
@@ -3630,7 +3630,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrI
 			return fmt.Errorf("unable to query for service version config: %w", err)
 		}
 
-		svc, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[types.ServiceVersionConfig])
+		svc, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.ServiceVersionConfig])
 		if err != nil {
 			return fmt.Errorf("unable to collect service version config into struct: %w", err)
 		}
@@ -3638,7 +3638,7 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad types.AuthData, orgNameOrI
 		return nil
 	})
 	if err != nil {
-		return types.ServiceVersionConfig{}, fmt.Errorf("getServiceVersionConfig transaction failed: %w", err)
+		return cdntypes.ServiceVersionConfig{}, fmt.Errorf("getServiceVersionConfig transaction failed: %w", err)
 	}
 
 	return svc, nil
@@ -3684,7 +3684,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -3829,7 +3829,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad types.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []types.DomainString, origins []types.Origin, active bool, vcls types.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -3844,7 +3844,7 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 		confTemplates,
 		orgNameOrID,
 		serviceNameOrID,
-		types.InputServiceVersion{
+		cdntypes.InputServiceVersion{
 			VclSteps: vcls,
 			Origins:  origins,
 			Domains:  domains,
@@ -3891,7 +3891,7 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 	return serviceVersionResult, nil
 }
 
-func activateServiceVersion(logger *zerolog.Logger, ad types.AuthData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, version int64) error {
+func activateServiceVersion(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, version int64) error {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -3956,14 +3956,14 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 type varnishVCLInput struct {
 	VCLVersion   string
 	Modules      []string
-	Domains      []types.DomainString
+	Domains      []cdntypes.DomainString
 	HTTPSEnabled bool
 	HTTPEnabled  bool
 	ServiceIPv4  netip.Addr
-	VCLSteps     types.VclSteps
+	VCLSteps     cdntypes.VclSteps
 }
 
-func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin, domains []types.DomainString, vclSteps types.VclSteps) (string, error) {
+func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclSteps cdntypes.VclSteps) (string, error) {
 	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
 	if err != nil {
 		return "", errors.New("no IPv4 address allocated to service")
@@ -4014,13 +4014,13 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 }
 
 type haproxyConfInput struct {
-	Origins        []types.Origin
+	Origins        []cdntypes.Origin
 	HTTPSEnabled   bool
 	HTTPEnabled    bool
 	AddressStrings []string
 }
 
-func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []types.Origin) (string, error) {
+func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []cdntypes.Origin) (string, error) {
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
@@ -4072,7 +4072,7 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	return b.String(), nil
 }
 
-func selectNetworks(dbPool *pgxpool.Pool, ad types.AuthData, family int) ([]ipNetwork, error) {
+func selectNetworks(dbPool *pgxpool.Pool, ad cdntypes.AuthData, family int) ([]ipNetwork, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -4103,7 +4103,7 @@ func selectNetworks(dbPool *pgxpool.Pool, ad types.AuthData, family int) ([]ipNe
 	return ipNetworks, nil
 }
 
-func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad types.AuthData) (ipNetwork, error) {
+func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthData) (ipNetwork, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
 		return ipNetwork{}, cdnerrors.ErrForbidden
@@ -4246,7 +4246,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 			return
 		}
 
-		var ad types.AuthData
+		var ad cdntypes.AuthData
 		var err error
 		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 			ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
@@ -4300,7 +4300,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*usersOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				logger.Error().Msg("unable to read auth data from users handler")
 				return nil, errors.New("unable to read auth data from users handler")
@@ -4327,7 +4327,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from user GET handler")
 			}
@@ -4362,7 +4362,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			func(ctx context.Context, input *userPostInput) (*userOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
@@ -4390,7 +4390,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
@@ -4408,7 +4408,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		huma.Put(api, "/v1/users/{user}", func(ctx context.Context, input *userPutInput) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from user PATCH handler")
 			}
@@ -4432,7 +4432,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from user DELETE handler")
 			}
@@ -4455,7 +4455,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*orgsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from orgs GET handler")
 			}
@@ -4481,7 +4481,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*orgOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
@@ -4508,7 +4508,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*orgDomainsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
@@ -4534,7 +4534,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from domain DELETE handler")
 			}
@@ -4580,7 +4580,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, huma.Error422UnprocessableEntity("the DNS name is not valid")
 				}
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from organization POST handler: %w")
 				}
@@ -4611,7 +4611,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*orgIPsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
@@ -4650,7 +4650,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			) (*orgOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from organization POST handler: %w")
 				}
@@ -4674,7 +4674,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*servicesOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from services GET handler")
 			}
@@ -4701,7 +4701,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*serviceOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service GET handler")
 			}
@@ -4730,7 +4730,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service DELETE handler")
 			}
@@ -4768,7 +4768,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			) (*orgOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from service POST handler")
 				}
@@ -4802,7 +4802,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*serviceVersionsOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
@@ -4838,17 +4838,17 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			func(ctx context.Context, input *struct {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
-					types.VclSteps
-					Org     string               `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
-					Domains []types.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins []types.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active  bool                 `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					cdntypes.VclSteps
+					Org     string                  `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Domains []cdntypes.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins []cdntypes.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active  bool                    `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
@@ -4894,7 +4894,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service version active PUT handler")
 			}
@@ -4924,7 +4924,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*serviceVersionVCLOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
@@ -4951,7 +4951,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, err
 			}
 
-			rBody := types.ServiceVersionVCL{
+			rBody := cdntypes.ServiceVersionVCL{
 				ServiceVersion: svc.ServiceVersion,
 				VCL:            vcl,
 			}
@@ -4966,7 +4966,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*cacheNodeConfigOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
 			}
@@ -4992,7 +4992,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*l4lbNodeConfigOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from l4lb-node-configs GET handler")
 			}
@@ -5020,7 +5020,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		) (*ipNetworksOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from networks GET handler")
 			}
@@ -5068,7 +5068,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			) (*ipNetworkOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from networks POST handler")
 				}
@@ -5096,7 +5096,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		huma.Get(api, "/v1/cache-nodes", func(ctx context.Context, _ *struct{}) (*cacheNodesOutput, error) {
 			logger := zlog.Ctx(ctx)
 
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from cache-nodes GET handler")
 			}
@@ -5129,7 +5129,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			func(ctx context.Context, input *cacheNodePostInput) (*cacheNodeOutput, error) {
 				logger := zlog.Ctx(ctx)
 
-				ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
 					return nil, errors.New("unable to read auth data from cache-node POST handler")
 				}
@@ -5162,7 +5162,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			}
 		},
 		) (*struct{}, error) {
-			ad, ok := ctx.Value(authDataKey{}).(types.AuthData)
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from cache-nodes maintenance PUT handler")
 			}
@@ -5220,11 +5220,11 @@ type cacheNodePostInput struct {
 }
 
 type cacheNodeOutput struct {
-	Body types.CacheNode
+	Body cdntypes.CacheNode
 }
 
 type cacheNodesOutput struct {
-	Body []types.CacheNode
+	Body []cdntypes.CacheNode
 }
 
 type usersOutput struct {
@@ -5241,11 +5241,11 @@ type serviceAddress struct {
 }
 
 type orgOutput struct {
-	Body types.Org
+	Body cdntypes.Org
 }
 
 type orgsOutput struct {
-	Body []types.Org
+	Body []cdntypes.Org
 }
 
 type orgIPsOutput struct {
@@ -5253,39 +5253,39 @@ type orgIPsOutput struct {
 }
 
 type orgDomainOutput struct {
-	Body types.Domain
+	Body cdntypes.Domain
 }
 
 type orgDomainsOutput struct {
-	Body []types.Domain
+	Body []cdntypes.Domain
 }
 
 type serviceOutput struct {
-	Body types.Service
+	Body cdntypes.Service
 }
 
 type servicesOutput struct {
-	Body []types.Service
+	Body []cdntypes.Service
 }
 
 type serviceVersionOutput struct {
-	Body types.ServiceVersion
+	Body cdntypes.ServiceVersion
 }
 
 type serviceVersionVCLOutput struct {
-	Body types.ServiceVersionVCL
+	Body cdntypes.ServiceVersionVCL
 }
 
 type l4lbNodeConfigOutput struct {
-	Body types.L4LBNodeConfig
+	Body cdntypes.L4LBNodeConfig
 }
 
 type cacheNodeConfigOutput struct {
-	Body types.CacheNodeConfig
+	Body cdntypes.CacheNodeConfig
 }
 
 type serviceVersionsOutput struct {
-	Body []types.ServiceVersion
+	Body []cdntypes.ServiceVersion
 }
 
 type ipNetwork struct {

@@ -12,11 +12,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
-	"github.com/SUNET/sunet-cdn-manager/pkg/types"
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"strconv"
 )
 
-func ConsolePage(title string, ad types.AuthData, contents templ.Component) templ.Component {
+func ConsolePage(title string, ad cdntypes.AuthData, contents templ.Component) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -364,7 +364,7 @@ func flashMessagesComponent(flashMessages []string) templ.Component {
 	})
 }
 
-func DomainsContent(domains []types.Domain, verificationTag string, tagSeparator string, flashMessages []string) templ.Component {
+func DomainsContent(domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -529,7 +529,7 @@ func DomainsContent(domains []types.Domain, verificationTag string, tagSeparator
 	})
 }
 
-func ServicesContent(services []types.Service, flashMessages []string) templ.Component {
+func ServicesContent(services []cdntypes.Service, flashMessages []string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -648,7 +648,7 @@ func ServicesContent(services []types.Service, flashMessages []string) templ.Com
 	})
 }
 
-func ServiceContent(orgName string, serviceName string, serviceVersions []types.ServiceVersion) templ.Component {
+func ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -945,7 +945,7 @@ func CreateServiceContent(err error) templ.Component {
 	})
 }
 
-func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vclKeyToConf map[string]string) templ.Component {
+func ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -1157,7 +1157,7 @@ func ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vc
 	})
 }
 
-func OriginFieldSet(index int, numFields int, cloneOrigin types.Origin, htmxRequest bool) templ.Component {
+func OriginFieldSet(index int, numFields int, cloneOrigin cdntypes.Origin, htmxRequest bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -1520,7 +1520,7 @@ func deleteOriginButton(index string, disabled bool) templ.Component {
 	})
 }
 
-func CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) templ.Component {
+func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -1656,7 +1656,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 			return templ_7745c5c3_Err
 		}
 		if len(cloneData.Origins) == 0 {
-			templ_7745c5c3_Err = OriginFieldSet(0, 1, types.Origin{}, false).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = OriginFieldSet(0, 1, cdntypes.Origin{}, false).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1684,7 +1684,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK types
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps)
+		cloneVclStepsMap := cdntypes.VclStepsToMap(cloneData.VclSteps)
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 135, "<article><fieldset><legend>VCL steps</legend> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err

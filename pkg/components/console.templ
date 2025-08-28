@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
-	"github.com/SUNET/sunet-cdn-manager/pkg/types"
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"strconv"
 )
 
-templ ConsolePage(title string, ad types.AuthData, contents templ.Component) {
+templ ConsolePage(title string, ad cdntypes.AuthData, contents templ.Component) {
 	<!DOCTYPE html>
 	<html>
 		@consoleHeadComponent(title)
@@ -87,7 +87,7 @@ templ flashMessagesComponent(flashMessages []string) {
 	}
 }
 
-templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
+templ DomainsContent(domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(domains) == 0 {
 		<div>No domains added</div>
@@ -125,7 +125,7 @@ templ DomainsContent(domains []types.Domain, verificationTag string, tagSeparato
 	<a href={ templ.URL("/console/create/domain") }>Add domain</a>
 }
 
-templ ServicesContent(services []types.Service, flashMessages []string) {
+templ ServicesContent(services []cdntypes.Service, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(services) == 0 {
 		<div>No services created</div>
@@ -155,7 +155,7 @@ templ ServicesContent(services []types.Service, flashMessages []string) {
 	<a href={ templ.URL("/console/create/service") }>Create service</a>
 }
 
-templ ServiceContent(orgName string, serviceName string, serviceVersions []types.ServiceVersion) {
+templ ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) {
 	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
@@ -234,7 +234,7 @@ templ CreateServiceContent(err error) {
 	}
 }
 
-templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, vclKeyToConf map[string]string) {
+templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string) {
 	<table>
 		<tr>
 			<th>ID</th>
@@ -276,7 +276,7 @@ templ ServiceVersionContent(serviceName string, sv types.ServiceVersionConfig, v
 	</table>
 }
 
-templ OriginFieldSet(index int, numFields int, cloneOrigin types.Origin, htmxRequest bool) {
+templ OriginFieldSet(index int, numFields int, cloneOrigin cdntypes.Origin, htmxRequest bool) {
 	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
 		<fieldset>
 			<legend>Origin</legend>
@@ -341,7 +341,7 @@ templ deleteOriginButton(index string, disabled bool) {
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK types.VclStepKeys, domains []types.Domain, cloneData types.ServiceVersionCloneData, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
 		@CSRF()
 		<article>
@@ -398,7 +398,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 			"
 		>
 			if len(cloneData.Origins) == 0 {
-				@OriginFieldSet(0, 1, types.Origin{}, false)
+				@OriginFieldSet(0, 1, cdntypes.Origin{}, false)
 			} else {
 				for i, cloneOrigin := range cloneData.Origins {
 					@OriginFieldSet(i, len(cloneData.Origins), cloneOrigin, false)
@@ -415,7 +415,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK type
 			}
 		}}
 		@addOriginButton(nextOriginIndexStr, false)
-		{{ cloneVclStepsMap := types.VclStepsToMap(cloneData.VclSteps) }}
+		{{ cloneVclStepsMap := cdntypes.VclStepsToMap(cloneData.VclSteps) }}
 		<article>
 			<fieldset>
 				<legend>VCL steps</legend>
