@@ -5,13 +5,13 @@
   "standardFlowEnabled":true,
   "directAccessGrantsEnabled":false,
   "attributes":{
-    "post.logout.redirect.uris":"http://localhost:8081/*",
+    "post.logout.redirect.uris":"http://manager.sunet-cdn.localhost:8081/*",
     "pkce.code.challenge.method": "S256"
   },
   "redirectUris":[
-    "http://localhost:8081/*"
+    "http://manager.sunet-cdn.localhost:8081/*"
   ],
   "webOrigins":[
-    "http://localhost:8081/*"
+    "http://manager.sunet-cdn.localhost:8081/*"
   ]
 }

@@ -2,3 +2,11 @@ sunet-cdn-manager
 sunet-cdn-manager.toml
 sunet-cdn-manager-dev.toml
 local-dev/sample-json/*.json.tmp
+local-dev/keycloak/certs
+local-dev/keycloak/keycloak-satosa-idp-mapper-first-name.json
+local-dev/keycloak/keycloak-satosa-idp-mapper-last-name.json
+local-dev/keycloak/keycloak-satosa-idp-mapper-email.json
+local-dev/keycloak/keycloak-satosa-idp-mapper-subject-id.json
+local-dev/keycloak/keycloak-satosa-idp.json
+local-dev/satosa/sunet-cdn-satosa-metadata.xml
+local-dev/satosa/config

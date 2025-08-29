@@ -18,8 +18,13 @@ services:
       - KC_DB_PASSWORD=keycloak
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KC_HTTPS_CERTIFICATE_FILE=/certs/keycloak.crt
+      - KC_HTTPS_CERTIFICATE_KEY_FILE=/certs/keycloak.key
+    volumes:
+      - ./keycloak/certs:/certs
     ports:
       - "8080:8080"
+      - "8443:8443"
     depends_on:
       - db
     command: "start-dev"
@@ -27,5 +32,13 @@ services:
     image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547"
     ports:
       - "8888:8888"
+  satosa:
+    image: "docker.sunet.se/satosa:8.5.1"
+    environment:
+      - METADATA_DIR=/etc/satosa/metadata
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./satosa/config:/etc/satosa
 volumes:
   postgres_data:

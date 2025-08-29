@@ -1,0 +1,12 @@
+{
+  "name": "subject-id",
+  "config": {
+    "syncMode": "INHERIT",
+    "attribute.name": "urn:oasis:names:tc:SAML:attribute:subject-id",
+    "attribute.friendly.name": "subject-id",
+    "attribute.name.format": "ATTRIBUTE_FORMAT_BASIC",
+    "user.attribute": "username"
+  },
+  "identityProviderMapper": "saml-user-attribute-idp-mapper",
+  "identityProviderAlias": "%%IDP_ALIAS%%"
+}

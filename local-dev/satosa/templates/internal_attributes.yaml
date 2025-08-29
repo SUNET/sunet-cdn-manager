@@ -1,0 +1,14 @@
+---
+attributes:
+  subject-id:
+    saml:
+    - subject-id
+  mail:
+    saml:
+    - mail
+  name:
+    saml:
+    - givenName
+  surname:
+    saml:
+    - sn

@@ -1,0 +1,12 @@
+{
+  "name": "first name",
+  "config": {
+    "syncMode": "INHERIT",
+    "attribute.name": "urn:oid:2.5.4.42",
+    "attribute.friendly.name": "givenName",
+    "attribute.name.format": "ATTRIBUTE_FORMAT_BASIC",
+    "user.attribute": "firstName"
+  },
+  "identityProviderMapper": "saml-user-attribute-idp-mapper",
+  "identityProviderAlias": "%%IDP_ALIAS%%"
+}

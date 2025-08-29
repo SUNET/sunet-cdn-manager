@@ -28,21 +28,73 @@ Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
 means you also need to be able to run containers for these tests to work.
 
 ### Setting up a local dev enviroment
-Start database, keycloak and sunet-vcl-validator:
+#### Initialize infrastructure
+Generate SATOSA config and certs:
 ```
-docker compose -p sunet-cdn-manager -f local-dev/docker-compose.yml up
+local-dev/satosa/setup.sh
 ```
 
-Initialize the sunet-cdn-manager realm in keycloak:
+Generate Keycloak JSON and certs:
+```
+local-dev/keycloak/init-files.sh
+```
+
+Start only database and keycloak to begin with (we need to configure keycloak and supply its metadata to SATOSA before SATOSA can start):
+```
+docker compose -p sunet-cdn-manager -f local-dev/docker-compose.yml up db keycloak
+```
+
+Initialize the sunet-cdn-manager realm and SATOSA IdP setup in keycloak:
 ```
 local-dev/keycloak/setup.sh
 ```
 
+This will output the OIDC Client ID and secret at the end, e.g.:
+```
+server OIDC client_id: sunet-cdn-manager-server
+server OIDC client_secret: some-secret-string
+```
+
+#### Configure sunet-cdn-manager
 Create a config file for connecting insecurely to the local PostgreSQL database:
 ```
 sed -e 's/"verify-full"/"disable"/' -e 's/"password"/"cdn"/' sunet-cdn-manager.toml.sample > sunet-cdn-manager-dev.toml
 ```
 
+The the client_secret and insert it into the `sunet-cdn-manager-dev.toml`:
+```
+[oidc]
+[...]
+client_secret = "some-secret-string"
+[...]
+```
+
+#### Start complete infrastructure
+Now you can start the full Docker compose file, stop the running db+keycloak command and start again:
+```
+docker compose -p sunet-cdn-manager -f local-dev/docker-compose.yml up
+```
+
+#### SAML QA
+For testing federated logins to `sunet-cdn-manager` a SAML connection to SWAMID is
+needed. The login flow looks like this:
+```
+sunet-cdn-manager -> OIDC -> Keycloak -> SAML -> SATOSA -> SAML -> SWAMID
+```
+
+To test this locally you can upload the generated SATOSA metadata to
+SWAMID QA.
+
+Get metadata suitable for SWAMID (requires that you have `xmlstarlet` installed):
+```
+MAILTO=your-email@example.se local-dev/satosa/satosa-to-swamid.sh
+```
+
+Now you will get a prepared metadata file you can upload to
+https://metadata.qa.swamid.se, for `Select Organization for entity` choose
+`Sunet` and click `Connect`.
+
+#### Setup sunet-cdn-manager
 Initialize the sunet-cdn-manager database (this will print out a superuser username and password):
 ```
 go run . --config sunet-cdn-manager-dev.toml init
@@ -51,6 +103,11 @@ go run . --config sunet-cdn-manager-dev.toml init
 Start the server in development mode (disables cookie requirements for HTTPS):
 ```
 go run . --config sunet-cdn-manager-dev.toml server --dev
+```
+
+Fill in the generated superuser password:
+```
+admin_password=some-secret-string
 ```
 
 Add some networks for allocating service addresses from:
@@ -69,7 +126,9 @@ Assign a domain to the org (this will make the manager start looking for a verif
 curl -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-domain.json -H "content-type: application/json" 'http://localhost:8081/api/v1/domains?org=testorg'
 ```
 
-Given that a user called `testuser` exists (either a local user created via API or automatically created via keycloak login), assign it to the the org:
+At this point you can log in to the system by browsing to http://manager.sunet-cdn.localhost:8081 choosing "Login with Keycloak" and using user `testuser` and password `testuser`.
+
+After logging in as `testuser` for the first time assign it to the organization:
 ```
 curl -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" http://localhost:8081/api/v1/users/testuser
 ```

@@ -1,0 +1,31 @@
+BASE: %%BASE_URL%%
+INTERNAL_ATTRIBUTES: "internal_attributes.yaml"
+BACKEND_MODULES:
+- plugins/saml2_backend.yaml
+FRONTEND_MODULES:
+- plugins/saml2_frontend.yaml
+LOGGING:
+  version: 1
+  formatters:
+    default:
+      format: "%(asctime)s [%(process)d] [%(levelname)s] %(message)s"
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: DEBUG
+      formatter: default
+      stream: ext://sys.stdout
+  loggers:
+    satosa:
+      level: DEBUG
+      handlers:
+      - console
+    saml2:
+      level: DEBUG
+      handlers:
+      - console
+STATE_ENCRYPTION_KEY: %%STATE_ENCRYPTION_KEY%%
+USER_ID_HASH_SALT: %%USER_ID_HASH_SALT%%
+CUSTOM_PLUGIN_MODULE_PATHS:
+- plugins
+COOKIE_STATE_NAME: SATOSA_STATE
