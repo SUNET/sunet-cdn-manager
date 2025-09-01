@@ -12,9 +12,7 @@ templ ConsolePage(title string, ad cdntypes.AuthData, contents templ.Component) 
 	<!DOCTYPE html>
 	<html>
 		@consoleHeadComponent(title)
-		// hx-headers used to include CSRF token in AJAX requests
-		// https://htmx.org/docs/#csrf-prevention
-		<body hx-boost="true" hx-headers={ jsonHxHeaders(ctx.Value("gorilla.csrf.Token").(string)) }>
+		<body hx-boost="true">
 			<div class="console-grid">
 				<header>
 					<span>
@@ -203,7 +201,6 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 templ CreateDomainContent(dData DomainData) {
 	<span class="error">{ dData.Errors.ServerError }</span>
 	<form method="post" action={ templ.URL("/console/create/domain") }>
-		@CSRF()
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
@@ -215,7 +212,6 @@ templ CreateDomainContent(dData DomainData) {
 
 templ CreateServiceContent(err error) {
 	<form method="post" action={ templ.URL("/console/create/service") }>
-		@CSRF()
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..."/>
@@ -343,7 +339,6 @@ templ deleteOriginButton(index string, disabled bool) {
 
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
-		@CSRF()
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -447,7 +442,6 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", serviceName, version, orgName)) }>
-		@CSRF()
 		<label for="confirmation">
 			Yes I am sure
 			<input type="checkbox" id="confirmation" name="confirmation"/>
@@ -475,7 +469,6 @@ templ LoginPage(returnTo string, loginFailed bool) {
 			<div class="login-form">
 				<h2>Local</h2>
 				<form method="post" action={ templ.URL("/auth/login") }>
-					@CSRF()
 					if returnTo != "" {
 						<input type="hidden" name="return_to" value={ returnTo }/>
 					}
@@ -496,9 +489,4 @@ templ LoginPage(returnTo string, loginFailed bool) {
 			</div>
 		</div>
 	</html>
-}
-
-// https://templ.guide/integrations/web-frameworks/#githubcomgorillacsrf
-templ CSRF() {
-	<input type="hidden" name="gorilla.csrf.Token" value={ ctx.Value("gorilla.csrf.Token").(string) }/>
 }

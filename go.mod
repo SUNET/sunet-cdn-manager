@@ -9,7 +9,6 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.34.1
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-playground/validator/v10 v10.27.0
-	github.com/gorilla/csrf v1.7.3
 	github.com/gorilla/schema v1.4.1
 	github.com/gorilla/sessions v1.4.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7

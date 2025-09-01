@@ -375,19 +375,9 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 		}
 
-		gorillaCSRFKey, err := generateRandomKey(32)
-		if err != nil {
-			return fmt.Errorf("unable to create random gorilla CSRF key: %w", err)
-		}
-
 		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT user session key: %w", err)
-		}
-
-		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFKey, true)
-		if err != nil {
-			return fmt.Errorf("unable to INSERT CSRF key: %w", err)
 		}
 
 		return nil
@@ -437,11 +427,6 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		return nil, nil, err
 	}
 
-	csrfMiddleware, err := getCSRFMiddleware(dbPool)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
-	}
-
 	confTemplates := configTemplates{}
 
 	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
@@ -461,7 +446,7 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates, false)
+	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, vclValidator, confTemplates, false)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
@@ -500,54 +485,6 @@ func TestServerInit(t *testing.T) {
 
 	if len(u.Password) != expectedPasswordLength {
 		t.Fatalf("expected initial user password length %d, got: %d", expectedPasswordLength, len(u.Password))
-	}
-}
-
-func TestGorillaCSRFKey(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
-	if dbPool != nil {
-		defer dbPool.Close()
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Close()
-
-	tests := []struct {
-		description string
-		active      bool
-	}{
-		{
-			description: "insert new active key",
-			active:      true,
-		},
-		{
-			description: "insert another active key",
-			active:      true,
-		},
-		{
-			description: "insert new inactive key",
-			active:      false,
-		},
-	}
-
-	for _, test := range tests {
-		gorillaCSRFAuthKey, err := generateRandomKey(32)
-		if err != nil {
-			t.Fatalf("unable to create random gorilla CSRF key: %s", err)
-		}
-
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, test.active)
-			if err != nil {
-				return fmt.Errorf("unable to INSERT CSRF key: %w", err)
-			}
-
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("transaction failed: %s", err)
-		}
 	}
 }
 

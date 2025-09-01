@@ -41,7 +41,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/gorilla/csrf"
 	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -62,9 +61,6 @@ import (
 func init() {
 	gob.Register(cdntypes.AuthData{})
 	gob.Register(oidcCallbackData{})
-
-	// Withouth this the decoder will fail on "error":"schema: invalid path \"gorilla.csrf.Token\""" when using gorilla/csrf
-	schemaDecoder.IgnoreUnknownKeys(true)
 }
 
 //go:embed templates
@@ -4185,7 +4181,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthD
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -4210,9 +4206,11 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Handle("/css/*", http.FileServerFS(components.CSSFS))
 	router.Handle("/js/*", http.FileServerFS(components.JsFS))
 
+	antiCSRF := http.NewCrossOriginProtection()
+
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
-		r.Use(csrfMiddleware)
+		r.Use(antiCSRF.Handler)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
 		r.Get("/domains", consoleDomainsHandler(dbPool, cookieStore))
@@ -4244,7 +4242,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
-		r.Use(csrfMiddleware)
+		r.Use(antiCSRF.Handler)
 		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Get("/logout", logoutHandler(cookieStore))
@@ -5463,11 +5461,6 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		}
 	}
 
-	gorillaCSRFAuthKey, err := generateRandomKey(32)
-	if err != nil {
-		return InitUser{}, fmt.Errorf("unable to create random gorilla CSRF key: %w", err)
-	}
-
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		// Verify there are no roles present
 		var rolesExists bool
@@ -5530,11 +5523,6 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
 		}
 
-		_, _, err = insertGorillaCSRFKey(tx, gorillaCSRFAuthKey, true)
-		if err != nil {
-			return fmt.Errorf("unable to INSERT initial CSRF key: %w", err)
-		}
-
 		return nil
 	})
 	if err != nil {
@@ -5572,31 +5560,6 @@ func insertGorillaSessionKey(tx pgx.Tx, authKey []byte, encKey []byte) (pgtype.U
 	return sessionKeyID, nil
 }
 
-func insertGorillaCSRFKey(tx pgx.Tx, authKey []byte, active bool) (pgtype.UUID, pgtype.UUID, error) {
-	var prevCSRFKeyID, csrfKeyID pgtype.UUID
-
-	if active {
-		err := tx.QueryRow(context.Background(), "UPDATE gorilla_csrf_keys SET active = false WHERE active = TRUE RETURNING id").Scan(&prevCSRFKeyID)
-		if err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("unable to deactivate previous gorilla CSRF key: %w", err)
-			}
-		}
-	}
-
-	err := tx.QueryRow(
-		context.Background(),
-		"INSERT INTO gorilla_csrf_keys (active, auth_key) VALUES ($1, $2) RETURNING id",
-		active,
-		authKey,
-	).Scan(&csrfKeyID)
-	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("unable to INSERT gorilla csrf key: %w", err)
-	}
-
-	return csrfKeyID, prevCSRFKeyID, nil
-}
-
 type sessionKey struct {
 	TimeCreated time.Time `db:"time_created"`
 	AuthKey     []byte    `db:"auth_key"`
@@ -5619,16 +5582,6 @@ func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
 	}
 
 	return sessionKeys, nil
-}
-
-func getCSRFKey(dbPool *pgxpool.Pool) ([]byte, error) {
-	var csrfKey []byte
-	err := dbPool.QueryRow(context.Background(), "SELECT auth_key FROM gorilla_csrf_keys WHERE active = TRUE").Scan(&csrfKey)
-	if err != nil {
-		return nil, fmt.Errorf("unable to query for CSRF key: %w", err)
-	}
-
-	return csrfKey, nil
 }
 
 func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
@@ -5656,17 +5609,6 @@ func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.Coo
 	}
 
 	return sessionStore, nil
-}
-
-func getCSRFMiddleware(dbPool *pgxpool.Pool) (func(http.Handler) http.Handler, error) {
-	csrfKey, err := getCSRFKey(dbPool)
-	if err != nil {
-		return nil, fmt.Errorf("unable to find CSRF key in database, make sure the database is initialized via the 'init' command: %w", err)
-	}
-
-	csrfMiddleware := csrf.Protect(csrfKey, csrf.Path("/"))
-
-	return csrfMiddleware, nil
 }
 
 type domainVerifyData struct {
@@ -5844,11 +5786,6 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("getSessionStore failed")
 	}
 
-	csrfMiddleware, err := getCSRFMiddleware(dbPool)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
-	}
-
 	providerCtx := context.Background()
 	if devMode {
 		logger.Info().Msg("disabling cert validation for OIDC discovery due to dev mode")
@@ -5890,7 +5827,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates, devMode)
+	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
