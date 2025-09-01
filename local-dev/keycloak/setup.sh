@@ -97,13 +97,6 @@ curl -ksi -X POST \
   -d @keycloak-satosa-idp-mapper-email.json \
   "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
-echo "Creating subject-id mapper"
-curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-satosa-idp-mapper-subject-id.json \
-  "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
-
 # Make metadata available to SATOSA
 #
 # Use xmlstarlet to strip out the AttributeConsumingService added by the
