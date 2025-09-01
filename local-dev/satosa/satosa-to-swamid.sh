@@ -15,14 +15,14 @@ DISPLAY_NAME="SUNET CDN - dev"
 INFORMATION_URL="https://github.com/SUNET/sunet-cdn-manager"
 PRIVACY_STATEMENT_URL="https://www.vr.se/om-webbplatsen/behandling-av-personuppgifter.html"
 
-satosa_metadata_file="config/metadata/backend.xml"
+satosa_metadata_file="generated/config/metadata/backend.xml"
 
 if ! [ -f "$satosa_metadata_file" ]; then
     echo "$satosa_metadata_file does not exist, it will be created when satosa is started"
     exit 1
 fi
 
-output_xml_file="sunet-cdn-satosa-metadata.xml"
+output_xml_file="generated/sunet-cdn-satosa-metadata.xml"
 
 # Most of the expressions (e.g. $prev) in this file is not supposed to be
 # expanded by the shell but has meaning to xmlstarlet.

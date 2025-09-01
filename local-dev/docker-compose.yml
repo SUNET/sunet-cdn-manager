@@ -21,7 +21,7 @@ services:
       - KC_HTTPS_CERTIFICATE_FILE=/certs/keycloak.crt
       - KC_HTTPS_CERTIFICATE_KEY_FILE=/certs/keycloak.key
     volumes:
-      - ./keycloak/certs:/certs
+      - ./keycloak/generated/certs:/certs
     ports:
       - "8080:8080"
       - "8443:8443"
@@ -39,6 +39,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./satosa/config:/etc/satosa
+      - ./satosa/generated/config:/etc/satosa
 volumes:
   postgres_data:

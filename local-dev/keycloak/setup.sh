@@ -7,11 +7,13 @@ cd "$(dirname "$0")"
 
 . settings.sh
 
+gen_dir="generated"
+
 base_url="https://$domain:8443"
 
 realm=$(jq -r .realm keycloak-realm.json)
 user=$(jq -r .username keycloak-user.json)
-idp_alias=$(jq -r .alias keycloak-satosa-idp.json)
+idp_alias=$(jq -r .alias "$gen_dir/keycloak-satosa-idp.json")
 
 # Get access token from username/password
 access_token=$(curl -ks \
@@ -42,7 +44,7 @@ echo "Creating identity provider"
 curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
-  -d @keycloak-satosa-idp.json \
+  -d "@$gen_dir/keycloak-satosa-idp.json" \
   "$base_url/admin/realms/$realm/identity-provider/instances"
 
 # We need to create attribute mappers for email, first name and last name for
@@ -80,21 +82,21 @@ echo "Creating first name mapper"
 curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
-  -d @keycloak-satosa-idp-mapper-first-name.json \
+  -d "@$gen_dir/keycloak-satosa-idp-mapper-first-name.json" \
   "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 echo "Creating last name mapper"
 curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
-  -d @keycloak-satosa-idp-mapper-last-name.json \
+  -d "@$gen_dir/keycloak-satosa-idp-mapper-last-name.json" \
   "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 echo "Creating email mapper"
 curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
-  -d @keycloak-satosa-idp-mapper-email.json \
+  -d "@$gen_dir/keycloak-satosa-idp-mapper-email.json" \
   "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 # Make metadata available to SATOSA

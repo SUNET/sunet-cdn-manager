@@ -5,7 +5,8 @@ set -eu
 # Make it so we can run the script from anywhere
 cd "$(dirname "$0")"
 
-target_dir="config"
+gen_dir="generated"
+target_dir="$gen_dir/config"
 plugins_dir="$target_dir/plugins"
 metadata_dir="$target_dir/metadata"
 

@@ -6,13 +6,15 @@ cd "$(dirname "$0")"
 
 . settings.sh
 
-cert_dir="certs"
+gen_dir="generated"
+
+cert_dir="$gen_dir/certs"
 mkdir -p $cert_dir
 if ! [ -f $cert_dir/keycloak.key ]; then
     openssl req -x509 -newkey rsa:4096 -days 3650 -noenc -keyout $cert_dir/keycloak.key -out $cert_dir/keycloak.crt -subj "/CN=$domain" -addext "subjectAltName=DNS:$domain"
 fi
 
-satosa_frontend_cert_file="../satosa/config/frontend.crt"
+satosa_frontend_cert_file="../satosa/generated/config/frontend.crt"
 if ! [ -f "$satosa_frontend_cert_file" ]; then
     echo "SATOSA not yet initialized ($satosa_frontend_cert_file does not exist): run ../satosa/setup.sh first"
     exit 1
@@ -21,24 +23,24 @@ idp_metadata_signing_cert=$(grep -v ' CERTIFICATE-----$' "$satosa_frontend_cert_
 
 sed \
     -e "s,%%SIGNING_CERT%%,$idp_metadata_signing_cert," \
-    keycloak-satosa-idp.json.in > keycloak-satosa-idp.json
+    keycloak-satosa-idp.json.in > $gen_dir/keycloak-satosa-idp.json
 
-idp_alias=$(jq -r .alias keycloak-satosa-idp.json)
-
-sed \
-    -e "s,%%IDP_ALIAS%%,$idp_alias," \
-    keycloak-satosa-idp-mapper-first-name.json.in > keycloak-satosa-idp-mapper-first-name.json
+idp_alias=$(jq -r .alias $gen_dir/keycloak-satosa-idp.json)
 
 sed \
     -e "s,%%IDP_ALIAS%%,$idp_alias," \
-    keycloak-satosa-idp-mapper-last-name.json.in > keycloak-satosa-idp-mapper-last-name.json
+    keycloak-satosa-idp-mapper-first-name.json.in > $gen_dir/keycloak-satosa-idp-mapper-first-name.json
 
 sed \
     -e "s,%%IDP_ALIAS%%,$idp_alias," \
-    keycloak-satosa-idp-mapper-email.json.in > keycloak-satosa-idp-mapper-email.json
+    keycloak-satosa-idp-mapper-last-name.json.in > $gen_dir/keycloak-satosa-idp-mapper-last-name.json
 
 sed \
     -e "s,%%IDP_ALIAS%%,$idp_alias," \
-    keycloak-satosa-idp-mapper-subject-id.json.in > keycloak-satosa-idp-mapper-subject-id.json
+    keycloak-satosa-idp-mapper-email.json.in > $gen_dir/keycloak-satosa-idp-mapper-email.json
 
-echo "files generated"
+sed \
+    -e "s,%%IDP_ALIAS%%,$idp_alias," \
+    keycloak-satosa-idp-mapper-subject-id.json.in > $gen_dir/keycloak-satosa-idp-mapper-subject-id.json
+
+echo "files generated under $(dirname "$0")/$gen_dir"
