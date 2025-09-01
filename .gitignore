@@ -4,5 +4,4 @@ sunet-cdn-manager-dev.toml
 local-dev/sample-json/*.json.tmp
 local-dev/keycloak/generated
 local-dev/satosa/generated
-local-dev/satosa/generated
 local-dev/generated
