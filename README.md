@@ -112,52 +112,19 @@ ACME so we can test things locally:
 go run . --config sunet-cdn-manager-dev.toml server --dev --disable-acme --tls-cert-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.crt --tls-key-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.key
 ```
 
-Fill in the generated superuser password:
+Use the generated password to fill in some sample entities:
+```
+admin_password=some-secret-string ./local-dev/add-sample-entities.sh
+```
+
+At this point you can log in to the system by browsing to
+https://manager.sunet-cdn.localhost:8444 choosing "Login with Keycloak" and
+using user `testuser` and password `testuser`.
+
+After logging in as `testuser` for the first time assign it to the sample organization:
 ```
 admin_password=some-secret-string
-```
-
-Add some networks for allocating service addresses from:
-```
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-ipv4-network.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/ip-networks
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-ipv6-network.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/ip-networks
-```
-
-Create an organisation:
-```
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/create-org.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/orgs
-```
-
-Assign a domain to the org (this will make the manager start looking for a verification TXT record for that name):
-```
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-domain.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/domains?org=testorg'
-```
-
-At this point you can log in to the system by browsing to https://manager.sunet-cdn.localhost:8444 choosing "Login with Keycloak" and using user `testuser` and password `testuser`.
-
-After logging in as `testuser` for the first time assign it to the organization:
-```
 curl -k -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users/testuser
-```
-
-Create a local "node-user-1" user with the "node" role used by nodes fetching config:
-```
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-node-user.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users
-```
-
-Set a password for the user with "node" role:
-```
-curl -k -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-node-user-password.json -H "content-type: application/json" http://manager.sunet-cdn.localhost:8444/api/v1/users/node-user-1/local-password
-```
-
-Add a cache node to the system:
-```
-curl -k -i -u admin:$admin_password -X POST -d @local-dev/sample-json/add-cache-node.json -H "content-type: application/json" http://manager.sunet-cdn.localhost:8444/api/v1/cache-nodes
-```
-
-A cache node will be added in maintenance mode by default (can be overriden in JSON on creation), to disable maintenance mode:
-```
-curl -k -i -s -u admin:$admin_password -X PUT -d @local-dev/sample-json/disable-maintenance.json -H "content-type: application/json" http://manager.sunet-cdn.localhost:8444/api/v1/cache-nodes/example-name-for-cache-node/maintenance
 ```
 
 ### Formatting and linting
