@@ -216,6 +216,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 const (
 	consoleMissingAuthData    = "console: session missing AuthData"
 	consoleMissingServicePath = "console: missing service path in URL"
+	consoleMissingOrgParam    = "console: missing org parameter in URL"
 	unableToSetFlashMessage   = "unable to set flash message"
 	consoleServiceOrgRedirect = "/console/services/%s?org=%s"
 )
@@ -297,7 +298,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		err = renderConsolePage(w, r, ad, "Domains", components.DomainsContent(domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
 		if err != nil {
-			logger.Err(err).Msg("unable to render services page")
+			logger.Err(err).Msg("unable to render domains page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -369,7 +370,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
-			logger.Error().Msg("console: missing org parameter in URL")
+			logger.Error().Msg(consoleMissingOrgParam)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -580,7 +581,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 		case "GET":
 			err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(nil))
 			if err != nil {
-				logger.Err(err).Msg("unable to render services page")
+				logger.Err(err).Msg("GET: unable to render service creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
@@ -606,7 +607,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				logger.Err(err).Msg("unable to validate POST create-service form data")
 				err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(cdnerrors.ErrInvalidFormData))
 				if err != nil {
-					logger.Err(err).Msg("unable to render service creation page")
+					logger.Err(err).Msg("POST: unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
@@ -618,7 +619,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceContent(err))
 					if err != nil {
-						logger.Err(err).Msg("unable to render service creation page")
+						logger.Err(err).Msg("service already exists: unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 						return
 					}
@@ -682,7 +683,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
-			logger.Error().Msg("console: missing org parameter in URL")
+			logger.Error().Msg(consoleMissingOrgParam)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -709,7 +710,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		err = renderConsolePage(w, r, ad, title, components.ServiceContent(orgName, serviceName, serviceVersions))
 		if err != nil {
-			logger.Err(err).Msg("unable to render services page")
+			logger.Err(err).Msg("unable to render service page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -743,7 +744,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
-			logger.Error().Msg("console: missing org parameter in URL")
+			logger.Error().Msg(consoleMissingOrgParam)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -772,7 +773,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		err = renderConsolePage(w, r, ad, title, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
-			logger.Err(err).Msg("unable to render services page")
+			logger.Err(err).Msg("unable to render service version page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -865,7 +866,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
-			logger.Error().Msg("console: missing org parameter in URL")
+			logger.Error().Msg(consoleMissingOrgParam)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -927,7 +928,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cloneData, nil, ""))
 			if err != nil {
-				logger.Err(err).Msg("unable to render services page")
+				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
@@ -975,7 +976,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 				err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
-					logger.Err(err).Msg("unable to render service creation page")
+					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
@@ -1002,13 +1003,13 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					}
 					err := renderConsolePage(w, r, ad, title, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
-						logger.Err(err).Msg("unable to render service creation page")
+						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 						return
 					}
 					return
 				}
-				logger.Err(err).Msg("unable to insert service")
+				logger.Err(err).Msg("unable to insert service version")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
@@ -1049,7 +1050,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 		// Query parameters
 		orgName := r.URL.Query().Get("org")
 		if orgName == "" {
-			logger.Error().Msg("console: missing org parameter in URL")
+			logger.Error().Msg(consoleMissingOrgParam)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -4646,7 +4647,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("service not found")
+					return nil, huma.Error404NotFound("service IPs not found")
 				}
 				logger.Err(err).Msg("unable to query organization ips")
 				return nil, err
