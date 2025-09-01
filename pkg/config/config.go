@@ -13,10 +13,12 @@ import (
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
-	Server  serverSettings
-	DB      dbSettings
-	OIDC    oidcSettings
-	Domains domainSettings
+	Server    serverSettings
+	DB        dbSettings
+	OIDC      oidcSettings
+	Domains   domainSettings
+	CertMagic certmagicSettings
+	AcmeDNS   acmeDNSConfig
 }
 
 type serverSettings struct {
@@ -43,6 +45,22 @@ type oidcSettings struct {
 type domainSettings struct {
 	ResolverAddr   string        `mapstructure:"resolver_address" validate:"required"`
 	VerifyInterval time.Duration `mapstructure:"verify_interval" validate:"required"`
+}
+
+type certmagicSettings struct {
+	LetsEncryptProd bool     `mapstructure:"letsencrypt_prod"`
+	Email           string   `mapstructure:"email"`
+	Domains         []string `mapstructure:"domains"`
+}
+
+type acmeDNSConfig map[string]acmeDNSDomainSettings
+
+type acmeDNSDomainSettings struct {
+	Username   string
+	Password   string
+	Subdomain  string
+	FullDomain string `mapstructure:"full_domain"`
+	ServerURL  string `mapstructure:"server_url"`
 }
 
 func GetConfig() (Config, error) {

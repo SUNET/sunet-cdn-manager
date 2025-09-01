@@ -1,5 +1,5 @@
 [server]
-addr = "127.0.0.1:8081"
+addr = "127.0.0.1:8444"
 vcl_validation_url = "http://localhost:8888/validate-vcl"
 
 [db]
@@ -14,8 +14,20 @@ sslmode = "verify-full"
 issuer = "https://keycloak.sunet-cdn.localhost:8443/realms/sunet-cdn-manager"
 client_id = "server-client-id"
 client_secret = "server-client-secret"
-redirect_url = "http://localhost:8081/auth/oidc/keycloak/callback"
+redirect_url = "https://manager.sunet-cdn.localhost:8444/auth/oidc/keycloak/callback"
 
 [domains]
 resolver_address = "127.0.0.1:53"
 verify_interval = "2m"
+
+[certmagic]
+letsencrypt_prod = false
+email = "someone@example.com"
+domains = ["manager.cdn.example.com"]
+
+[acmedns."manager.cdn.example.com"]
+username = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+password = "changeme"
+subdomain = "eeeeeeee-dddd-cccc-bbbb-aaaaaaaaaaaa"
+full_domain = "eeeeeeee-dddd-cccc-bbbb-aaaaaaaaaaaa.acme-dns.example.com"
+server_url = "https://acme-dns.example.com"

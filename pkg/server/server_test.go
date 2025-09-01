@@ -432,12 +432,12 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		return nil, nil, err
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool, true)
+	cookieStore, err := getSessionStore(logger, dbPool)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	csrfMiddleware, err := getCSRFMiddleware(dbPool, false)
+	csrfMiddleware, err := getCSRFMiddleware(dbPool)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
@@ -461,7 +461,7 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, false, nil, vclValidator, confTemplates, false)
+	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, nil, vclValidator, confTemplates, false)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {

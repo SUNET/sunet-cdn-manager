@@ -19,6 +19,21 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
+		disableAcme, err := cmd.Flags().GetBool("disable-acme")
+		if err != nil {
+			return err
+		}
+
+		tlsCertFile, err := cmd.Flags().GetString("tls-cert-file")
+		if err != nil {
+			return err
+		}
+
+		tlsKeyFile, err := cmd.Flags().GetString("tls-key-file")
+		if err != nil {
+			return err
+		}
+
 		shutdownDelay, err := cmd.Flags().GetDuration("shutdown-delay")
 		if err != nil {
 			return err
@@ -29,7 +44,7 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
-		err = server.Run(cdnLogger, devMode, shutdownDelay, disableDomainVerification)
+		err = server.Run(cdnLogger, devMode, shutdownDelay, disableDomainVerification, disableAcme, tlsCertFile, tlsKeyFile)
 		return err
 	},
 }
@@ -47,6 +62,9 @@ func init() {
 	// is called directly, e.g.:
 	// serverCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	serverCmd.Flags().Bool("dev", false, "run server in development mode")
+	serverCmd.Flags().Bool("disable-acme", false, "disable ACME, reads TLS cert and key from files instead")
+	serverCmd.Flags().String("tls-cert-file", "server.crt", "cert file used for TLS if ACME is disabled")
+	serverCmd.Flags().String("tls-key-file", "server.key", "key file used for TLS if ACME is disabled")
 	serverCmd.Flags().Duration("shutdown-delay", time.Second*5, "how long to wait before stopping http request handling on shutdown")
 	serverCmd.Flags().Bool("disable-domain-verification", false, "disable domain verification DNS lookups")
 }

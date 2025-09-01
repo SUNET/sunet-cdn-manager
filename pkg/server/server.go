@@ -35,6 +35,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/a-h/templ"
+	"github.com/caddyserver/certmagic"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -48,6 +49,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/libdns/acmedns"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
@@ -196,6 +198,48 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgx
 	}
 
 	return nil
+}
+
+func setupACME(logger zerolog.Logger, conf config.Config) *tls.Config {
+	acmednsProvider := &acmedns.Provider{Configs: map[string]acmedns.DomainConfig{}}
+
+	for domain, domainSettings := range conf.AcmeDNS {
+		logger.Info().Msgf("configuring acme-dns settings for domain '%s'", domain)
+		acmednsProvider.Configs[domain] = acmedns.DomainConfig{
+			Username:   domainSettings.Username,
+			Password:   domainSettings.Password,
+			Subdomain:  domainSettings.Subdomain,
+			FullDomain: domainSettings.FullDomain,
+			ServerURL:  domainSettings.ServerURL,
+		}
+	}
+
+	// Enable DNS challenge
+	certmagic.DefaultACME.DNS01Solver = &certmagic.DNS01Solver{
+		DNSManager: certmagic.DNSManager{
+			DNSProvider: acmednsProvider,
+		},
+	}
+
+	if !conf.CertMagic.LetsEncryptProd {
+		logger.Info().Msg("using LetsEncrypt Staging CA, TLS certificates will not be trusted")
+		certmagic.DefaultACME.CA = certmagic.LetsEncryptStagingCA
+	}
+
+	// read and agree to your CA's legal documents
+	certmagic.DefaultACME.Agreed = true
+
+	// provide an email address
+	certmagic.DefaultACME.Email = conf.CertMagic.Email
+
+	tlsConfig, err := certmagic.TLS(conf.CertMagic.Domains)
+	if err != nil {
+		logger.Fatal().
+			Err(err).
+			Msgf("cannot create tlsconfig")
+	}
+
+	return tlsConfig
 }
 
 // Small struct that implements io.Writer so we can pass it to net/http server
@@ -4141,7 +4185,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthD
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, secureCSRF bool, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, csrfMiddleware func(http.Handler) http.Handler, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -4168,9 +4212,6 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
-		if !secureCSRF {
-			r.Use(csrfPlainText)
-		}
 		r.Use(csrfMiddleware)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
@@ -4203,9 +4244,6 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
-		if !secureCSRF {
-			r.Use(csrfPlainText)
-		}
 		r.Use(csrfMiddleware)
 		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
@@ -5593,7 +5631,7 @@ func getCSRFKey(dbPool *pgxpool.Pool) ([]byte, error) {
 	return csrfKey, nil
 }
 
-func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool, devMode bool) (*sessions.CookieStore, error) {
+func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
 	sessionKeys, err := getSessionKeys(dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
@@ -5617,34 +5655,18 @@ func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool, devMode bool) 
 		HttpOnly: true,
 	}
 
-	// Allow development without HTTPS
-	if devMode {
-		sessionStore.Options.Secure = false
-	}
-
 	return sessionStore, nil
 }
 
-func getCSRFMiddleware(dbPool *pgxpool.Pool, secure bool) (func(http.Handler) http.Handler, error) {
+func getCSRFMiddleware(dbPool *pgxpool.Pool) (func(http.Handler) http.Handler, error) {
 	csrfKey, err := getCSRFKey(dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find CSRF key in database, make sure the database is initialized via the 'init' command: %w", err)
 	}
 
-	csrfMiddleware := csrf.Protect(csrfKey, csrf.Secure(secure), csrf.Path("/"))
+	csrfMiddleware := csrf.Protect(csrfKey, csrf.Path("/"))
 
 	return csrfMiddleware, nil
-}
-
-// Workaround for gorilla/csrf v1.7.3 change that will fail any non-HTTPS
-// requests. This is problematic when running unencrypted HTTP for local
-// development.
-// https://github.com/gorilla/csrf/issues/186
-func csrfPlainText(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = csrf.PlaintextHTTPRequest(r)
-		h.ServeHTTP(w, r)
-	})
 }
 
 type domainVerifyData struct {
@@ -5773,7 +5795,7 @@ type configTemplates struct {
 	haproxy *template.Template
 }
 
-func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool) error {
+func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -5817,14 +5839,12 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Msg("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool, devMode)
+	cookieStore, err := getSessionStore(logger, dbPool)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("getSessionStore failed")
 	}
 
-	secureCSRF := !devMode
-
-	csrfMiddleware, err := getCSRFMiddleware(dbPool, secureCSRF)
+	csrfMiddleware, err := getCSRFMiddleware(dbPool)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("getCSRFMiddleware failed")
 	}
@@ -5870,7 +5890,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, secureCSRF, provider, vclValidator, confTemplates, devMode)
+	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, csrfMiddleware, provider, vclValidator, confTemplates, devMode)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
@@ -5886,7 +5906,25 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		go domainVerifier(ctx, &wg, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
 	}
 
+	var tlsConfig *tls.Config
+
+	if disableAcme {
+		logger.Info().Str("cert_file", tlsCertFile).Str("key_file", tlsCertFile).Msg("ACME is disabled, using files for TLS")
+		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to load key pair")
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	} else {
+		logger.Info().Msg("using ACME for TLS cert")
+		tlsConfig = setupACME(logger, conf)
+	}
+
 	srv := &http.Server{
+		TLSConfig:    tlsConfig,
 		Addr:         conf.Server.Addr,
 		Handler:      router,
 		ReadTimeout:  time.Second * 10,
@@ -5909,10 +5947,10 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		close(idleConnsClosed)
 	}(ctx, logger, shutdownDelay)
 
-	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTP listener")
+	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTPS listener")
 
-	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-		logger.Fatal().Err(err).Msg("HTTP server ListenAndServe failed")
+	if err := srv.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
+		logger.Fatal().Err(err).Msg("HTTPS server ListenAndServe failed")
 	}
 
 	<-idleConnsClosed
