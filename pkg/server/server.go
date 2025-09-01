@@ -213,6 +213,13 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	validatedRedirect(consolePath, w, r, http.StatusFound)
 }
 
+const (
+	consoleMissingAuthData    = "console: session missing AuthData"
+	consoleMissingServicePath = "console: missing service path in URL"
+	unableToSetFlashMessage   = "unable to set flash message"
+	consoleServiceOrgRedirect = "/console/services/%s?org=%s"
+)
+
 func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -221,7 +228,7 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -256,7 +263,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -305,7 +312,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -334,7 +341,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 		session.AddFlash(fmt.Sprintf("Domain '%s' deleted!", domainName), flashMessageKeys.domains)
 		err = session.Save(r, w)
 		if err != nil {
-			http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
 
@@ -353,7 +360,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -389,7 +396,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 		session.AddFlash(fmt.Sprintf("Service '%s' deleted!", serviceName), flashMessageKeys.services)
 		err = session.Save(r, w)
 		if err != nil {
-			http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
 
@@ -408,7 +415,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -459,7 +466,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -539,7 +546,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			session.AddFlash(fmt.Sprintf("Domain '%s' added!", formData.Name), flashMessageKeys.domains)
 			err = session.Save(r, w)
 			if err != nil {
-				http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
 
@@ -562,7 +569,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -625,7 +632,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			session.AddFlash(fmt.Sprintf("Service '%s' added!", formData.Name), flashMessageKeys.services)
 			err = session.Save(r, w)
 			if err != nil {
-				http.Error(w, "unable to set flash message", http.StatusInternalServerError)
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
 
@@ -668,7 +675,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service path in URL")
+			logger.Error().Msg(consoleMissingServicePath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -686,7 +693,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -715,7 +722,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service path in URL")
+			logger.Error().Msg(consoleMissingServicePath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -747,7 +754,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -865,7 +872,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service path in URL")
+			logger.Error().Msg(consoleMissingServicePath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -876,7 +883,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1006,7 +1013,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
+			validatedRedirect(fmt.Sprintf(consoleServiceOrgRedirect, serviceName, orgName), w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for create-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -1021,7 +1028,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service path in URL")
+			logger.Error().Msg(consoleMissingServicePath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -1053,7 +1060,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 		adRef, ok := session.Values["ad"]
 		if !ok {
-			logger.Error().Msg("console: session missing AuthData")
+			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1098,7 +1105,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			}
 
 			if !formData.Confirmation {
-				validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
+				validatedRedirect(fmt.Sprintf(consoleServiceOrgRedirect, serviceName, orgName), w, r, http.StatusFound)
 				return
 			}
 
@@ -1116,7 +1123,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 				}
 			}
 
-			validatedRedirect(fmt.Sprintf("/console/services/%s?org=%s", serviceName, orgName), w, r, http.StatusFound)
+			validatedRedirect(fmt.Sprintf(consoleServiceOrgRedirect, serviceName, orgName), w, r, http.StatusFound)
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for activate-service-version handler")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -1558,10 +1565,7 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 		if err != nil {
 			logger.Err(err).Msg("unable to get keycloak user")
 			switch {
-			case errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified):
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			case errors.Is(err, cdnerrors.ErrKeyCloakUserExists):
+			case errors.Is(err, cdnerrors.ErrKeyCloakEmailUnverified), errors.Is(err, cdnerrors.ErrKeyCloakUserExists):
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			default:
@@ -2675,9 +2679,11 @@ type domainIdentifier struct {
 	orgID pgtype.UUID
 }
 
+var errEmptyInputIdentifier = errors.New("input identifier is empty")
+
 func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 	if input == "" {
-		return orgIdentifier{}, errors.New("input identifier is empty")
+		return orgIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id pgtype.UUID
@@ -2745,7 +2751,7 @@ func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serv
 
 func newRoleIdentifier(tx pgx.Tx, input string) (roleIdentifier, error) {
 	if input == "" {
-		return roleIdentifier{}, errors.New("input identifier is empty")
+		return roleIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id pgtype.UUID
@@ -2783,7 +2789,7 @@ func isUUID(input string) bool {
 
 func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
 	if input == "" {
-		return userIdentifier{}, errors.New("input identifier is empty")
+		return userIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id pgtype.UUID
@@ -2819,7 +2825,7 @@ func newUserIdentifier(tx pgx.Tx, input string) (userIdentifier, error) {
 
 func newCacheNodeIdentifier(tx pgx.Tx, input string) (cacheNodeIdentifier, error) {
 	if input == "" {
-		return cacheNodeIdentifier{}, errors.New("input identifier is empty")
+		return cacheNodeIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id pgtype.UUID
@@ -2851,7 +2857,7 @@ func newCacheNodeIdentifier(tx pgx.Tx, input string) (cacheNodeIdentifier, error
 
 func newDomainIdentifier(tx pgx.Tx, input string) (domainIdentifier, error) {
 	if input == "" {
-		return domainIdentifier{}, errors.New("input identifier is empty")
+		return domainIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id pgtype.UUID
@@ -4287,6 +4293,12 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 	}
 }
 
+const (
+	v1User                  = "/v1/users/{user}"
+	userNotFound            = "user not found"
+	notAllowedToAddResource = "not allowed to add resource"
+)
+
 func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
@@ -4334,7 +4346,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
+		huma.Get(api, v1User, func(ctx context.Context, input *struct {
 			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*userOutput, error) {
@@ -4350,7 +4362,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("user not found")
+					return nil, huma.Error404NotFound(userNotFound)
 				}
 				logger.Err(err).Msg("unable to query users")
 				return nil, err
@@ -4383,7 +4395,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				user, err := createUser(dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
-						return nil, huma.Error403Forbidden("not allowed to add resource")
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					}
 					logger.Err(err).Msg("unable to add user")
 					return nil, err
@@ -4418,7 +4430,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			return nil, nil
 		})
 
-		huma.Put(api, "/v1/users/{user}", func(ctx context.Context, input *userPutInput) (*userOutput, error) {
+		huma.Put(api, v1User, func(ctx context.Context, input *userPutInput) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
 
 			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
@@ -4431,7 +4443,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("user not found")
+					return nil, huma.Error404NotFound(userNotFound)
 				}
 				logger.Err(err).Msg("unable to update user")
 				return nil, err
@@ -4439,7 +4451,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			return &userOutput{Body: user}, nil
 		})
 
-		huma.Delete(api, "/v1/users/{user}", func(ctx context.Context, input *struct {
+		huma.Delete(api, v1User, func(ctx context.Context, input *struct {
 			User string `path:"user" example:"username" doc:"user ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*struct{}, error) {
@@ -4453,7 +4465,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			_, err := deleteUser(logger, dbPool, ad, input.User)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("user not found")
+					return nil, huma.Error404NotFound(userNotFound)
 				} else if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("access to this user is not allowed")
 				}
@@ -4523,7 +4535,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from organization GET handler")
+				return nil, errors.New("unable to read auth data from domains GET handler")
 			}
 
 			domains, err := selectDomains(dbPool, ad, input.Org)
@@ -4531,7 +4543,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("organization not found")
+					return nil, huma.Error404NotFound("domain not found")
 				}
 				logger.Err(err).Msg("unable to query organization")
 				return nil, err
@@ -4602,7 +4614,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden("not allowed to add resource")
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("domain already exists")
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -4626,7 +4638,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from organization GET handler")
+				return nil, errors.New("unable to read auth data from services GET handler")
 			}
 
 			oAddrs, err := selectServiceIPs(dbPool, input.Service, input.Org, ad)
@@ -4634,7 +4646,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("organization not found")
+					return nil, huma.Error404NotFound("service not found")
 				}
 				logger.Err(err).Msg("unable to query organization ips")
 				return nil, err
@@ -4671,7 +4683,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				id, err := insertOrg(dbPool, input.Body.Name, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
-						return nil, huma.Error403Forbidden("not allowed to add resource")
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					}
 					logger.Err(err).Msg("unable to add organization")
 					return nil, err
@@ -5157,7 +5169,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				cacheNode, err := createCacheNode(dbPool, ad, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
-						return nil, huma.Error403Forbidden("not allowed to add resource")
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					}
 					logger.Err(err).Msg("unable to add cache node")
 					return nil, err
@@ -5441,13 +5453,13 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		// Add role used by ordinary users
 		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "user")
 		if err != nil {
-			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+			return fmt.Errorf("unable to INSERT initial user role '%s': %w", u.Role, err)
 		}
 
 		// Add role used by cache and l4lb nodes to fetch config
 		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "node")
 		if err != nil {
-			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+			return fmt.Errorf("unable to INSERT initial node role '%s': %w", u.Role, err)
 		}
 
 		var localAuthProviderID pgtype.UUID
