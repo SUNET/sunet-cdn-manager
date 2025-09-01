@@ -1,8 +1,22 @@
 -- +goose up
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION is_valid_dns_label(name text)
+RETURNS boolean AS $$
+BEGIN
+  RETURN (
+    length(name) >= 1
+    AND length(name) <= 63
+    AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'
+  );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
+-- +goose StatementEnd
+
 CREATE TABLE orgs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
+    name text UNIQUE NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
     service_quota bigint NOT NULL DEFAULT 1,
     domain_quota bigint NOT NULL DEFAULT 5
 );
@@ -11,7 +25,7 @@ CREATE TABLE services (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES orgs(id),
-    name text NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
+    name text NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
     version_counter bigint DEFAULT 0 NOT NULL,
     uid_range int8range NOT NULL CHECK(uid_range <@ int8range(1000010000, NULL)),
     UNIQUE(org_id, name),
@@ -66,14 +80,14 @@ EXECUTE FUNCTION validate_ip_in_network();
 CREATE TABLE roles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label_name CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
+    name text UNIQUE NOT NULL CONSTRAINT valid_dns_label_name CHECK(is_valid_dns_label(name)),
     superuser boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE auth_providers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label_name CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$')
+    name text UNIQUE NOT NULL CONSTRAINT valid_dns_label_name CHECK(is_valid_dns_label(name))
 );
 
 CREATE TABLE users (
@@ -183,7 +197,7 @@ CREATE TABLE service_vcls (
 CREATE TABLE cache_nodes (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
-    name text UNIQUE NOT NULL CONSTRAINT non_empty_dns_label CHECK(length(name)>=1 AND length(name)<=63 AND name ~ '^[a-z]([-a-z0-9]*[a-z0-9])?$'),
+    name text UNIQUE NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
     description text NOT NULL,
     maintenance bool NOT NULL DEFAULT true,
     ipv4_address inet UNIQUE CONSTRAINT valid_ipv4_address CHECK(family(ipv4_address) = 4 AND masklen(ipv4_address) = 32),
