@@ -10,8 +10,8 @@ target_dir="$gen_dir/config"
 plugins_dir="$target_dir/plugins"
 metadata_dir="$target_dir/metadata"
 
-if [ -d "$target_dir" ]; then
-    echo "directory '$(dirname "$0")/$target_dir' already exists, exiting"
+if [ -d "$gen_dir" ]; then
+    echo "directory '$(dirname "$0")/$gen_dir' already exists, exiting"
     exit 1
 fi
 
@@ -66,3 +66,5 @@ for cert_name in backend frontend metadata https; do
         openssl req -x509 -newkey rsa:4096 -days 3650 -noenc -keyout $target_dir/$cert_name.key -out $target_dir/$cert_name.crt -subj "/CN=$domain" -addext "subjectAltName=DNS:$domain"
     fi
 done
+
+echo "files generated under $(dirname "$0")/$gen_dir"
