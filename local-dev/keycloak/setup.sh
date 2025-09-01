@@ -49,30 +49,33 @@ curl -ksi -X POST \
 # Keycloak to fill these in when creating users based on logins.
 # A side effect of creating such mappers is that they are also added to the
 # generated SAML metadata e.g.:
+# ===
 # <md:AttributeConsumingService index="0" isDefault="true">
 #   <md:ServiceName xml:lang="en">sunet-cdn-manager</md:ServiceName>
 #   <md:RequestedAttribute FriendlyName="mail" Name="urn:oid:0.9.2342.19200300.100.1.3" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic"/>
 #   <md:RequestedAttribute FriendlyName="sn" Name="urn:oid:2.5.4.4" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic"/>
 #   <md:RequestedAttribute FriendlyName="givenName" Name="urn:oid:2.5.4.42" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic"/>
 # </md:AttributeConsumingService>
+# ===
 # ... and by default SATOSA will automatically filter out attributes that are
 # not part of this list. Importantly it means it will filter out the configured
 # "Principal attribute" subject-id which stops logins from working with an error like:
 # ===
 # 2025-08-29 21:23:16,670 ERROR [org.keycloak.broker.saml.SAMLEndpoint] (executor-thread-5) no principal in assertion; expected: ATTRIBUTE(urn:oasis:names:tc:SAML:attribute:subject-id)
 # ===
-# So to keep this working also add a mapper for subject-id even if it is not
-# needed for populating the username from Keycloaks point of view. Another
-# thing I noticed is that if you omit the "Attribute Name" and only set the
-# "Friendly name" this is enough for keycloak to fill things in, but then the
-# Name field is missing in the metadata, and this breaks SATOSA making it print
+# Another thing I noticed is that if you omit the "Attribute Name" and only set
+# the "Friendly name" this is enough for keycloak to fill things in, but then
+# the Name field is missing in the metadata, and this breaks SATOSA making it print
 # stack traces ending with:
 # ===
 #    File "/usr/local/lib/python3.9/site-packages/saml2/assertion.py", line 87, in _match_attr_name
 #      name = attr["name"].lower()
 #  KeyError: 'name'
 # ===
-# ... so fill in the "Attribute Name" field with the OID as well.
+# ... so fill in the "Attribute Name" field with the OID as well. Even if the
+# AttributeConsumingService is now stripped with xmlstarlet below lets keep
+# making sure the unstripped metadata is valid for SATOSA in case we want to
+# use it like that in the future.
 echo "Creating first name mapper"
 curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
@@ -102,7 +105,13 @@ curl -ksi -X POST \
   "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 # Make metadata available to SATOSA
-curl -ks "$base_url/realms/$realm/broker/$idp_alias/endpoint/descriptor" | xmllint --format - > ../satosa/config/metadata/keycloak_sp_metadata.xml
+#
+# Use xmlstarlet to strip out the AttributeConsumingService added by the
+# mappers created above so we do not need to care about updating these. As
+# "what attributes the application will get" is controlled by the
+# entity-category applied to the SATOSA metadata in SWAMID having a second
+# place to limit these via SATOSA just seems confusing.
+curl -ks "$base_url/realms/$realm/broker/$idp_alias/endpoint/descriptor" | xmlstarlet ed -d '/md:EntityDescriptor/md:SPSSODescriptor/md:AttributeConsumingService' > "../satosa/$gen_dir/config/metadata/keycloak_sp_metadata.xml"
 
 echo "Creating user '$user'"
 # The sed is needed to strip out a \r character present in the header printed by
