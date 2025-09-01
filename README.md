@@ -66,7 +66,8 @@ Generate certs so you do not need to deal with ACME:
 local-dev/setup.sh
 ```
 
-The the client_secret and insert it into the `sunet-cdn-manager-dev.toml`:
+Take the client_secret that was outputted above and insert it into
+`sunet-cdn-manager-dev.toml`:
 ```
 [oidc]
 [...]
