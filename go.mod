@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/a-h/templ v0.3.943
+	github.com/caddyserver/certmagic v0.24.0
 	github.com/coreos/go-oidc/v3 v3.15.0
 	github.com/danielgtaylor/huma/v2 v2.34.1
 	github.com/go-chi/chi/v5 v5.2.2
@@ -13,6 +14,7 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.7.5
+	github.com/libdns/acmedns v0.4.0
 	github.com/miekg/dns v1.1.68
 	github.com/pressly/goose/v3 v3.24.3
 	github.com/rs/zerolog v1.34.0
@@ -29,7 +31,6 @@ require (
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/caddyserver/certmagic v0.24.0 // indirect
 	github.com/caddyserver/zerossl v0.1.3 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/containerd/containerd v1.7.18 // indirect
@@ -61,7 +62,6 @@ require (
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
-	github.com/libdns/acmedns v0.4.0 // indirect
 	github.com/libdns/libdns v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
