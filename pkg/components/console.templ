@@ -22,7 +22,32 @@ templ ConsolePage(title string, ad cdntypes.AuthData, contents templ.Component) 
 						{ ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
 					</span>
 				</header>
-				@NavBar()
+				<main>
+					<h1>{ title }</h1>
+					<div id="contents">
+						@contents
+					</div>
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+templ OrgConsolePage(title string, ad cdntypes.AuthData, orgName string, contents templ.Component) {
+	<!DOCTYPE html>
+	<html>
+		@consoleHeadComponent(title)
+		<body hx-boost="true">
+			<div class="console-grid">
+				<header>
+					<span>
+						SUNET CDN manager
+					</span>
+					<span class="place-end">
+						{ ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+					</span>
+				</header>
+				@NavBar(orgName)
 				<main>
 					<h1>{ title }</h1>
 					<div id="contents">
@@ -59,14 +84,14 @@ templ Dashboard(username string) {
 	<div>Hello { username }!</div>
 }
 
-templ NavBar() {
+templ NavBar(orgName string) {
 	<div class="sidebar">
 		<aside>
 			<nav>
 				<ul>
-					<li><a href={ templ.URL("/console") }>Dashboard</a></li>
-					<li><a href={ templ.URL("/console/domains") }>Domains</a></li>
-					<li><a href={ templ.URL("/console/services") }>Services</a></li>
+					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s", orgName)) }>Dashboard</a></li>
+					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/domains", orgName)) }>Domains</a></li>
+					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) }>Services</a></li>
 				</ul>
 			</nav>
 		</aside>
@@ -85,7 +110,7 @@ templ flashMessagesComponent(flashMessages []string) {
 	}
 }
 
-templ DomainsContent(domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
+templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(domains) == 0 {
 		<div>No domains added</div>
@@ -109,7 +134,7 @@ templ DomainsContent(domains []cdntypes.Domain, verificationTag string, tagSepar
 					<td>
 						<button
 							type="button"
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/domains/%s", domain.Name))) }
+							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))) }
 							hx-target="body"
 							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
 						>
@@ -120,10 +145,10 @@ templ DomainsContent(domains []cdntypes.Domain, verificationTag string, tagSepar
 			}
 		</table>
 	}
-	<a href={ templ.URL("/console/create/domain") }>Add domain</a>
+	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>Add domain</a>
 }
 
-templ ServicesContent(services []cdntypes.Service, flashMessages []string) {
+templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(services) == 0 {
 		<div>No services created</div>
@@ -135,11 +160,11 @@ templ ServicesContent(services []cdntypes.Service, flashMessages []string) {
 			</tr>
 			for _, service := range services {
 				<tr>
-					<td><a href={ templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName)) }>{ service.Name }</a></td>
+					<td><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
 					<td>
 						<button
 							type="button"
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/services/%s?org=%s", service.Name, service.OrgName))) }
+							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }
 							hx-target="body"
 							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
 						>
@@ -150,11 +175,11 @@ templ ServicesContent(services []cdntypes.Service, flashMessages []string) {
 			}
 		</table>
 	}
-	<a href={ templ.URL("/console/create/service") }>Create service</a>
+	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) }>Create service</a>
 }
 
 templ ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) {
-	<a href={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>Create service version</a>
+	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>Create service version</a>
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
 	} else {
@@ -169,7 +194,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 				{{ sv := serviceVersions[i] }}
 				<tr>
 					<td>
-						<a href={ templ.URL(fmt.Sprintf("/console/services/%s/%d?org=%s", sv.ServiceName, sv.Version, sv.OrgName)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
+						<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d", sv.OrgName, sv.ServiceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
 					</td>
 					<td>
 						{ strconv.FormatBool(sv.Active) }
@@ -177,7 +202,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 					<td>
 						<button
 							type="button"
-							hx-get={ string(templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", sv.ServiceName, sv.Version, sv.OrgName))) }
+							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, sv.ServiceName, sv.Version))) }
 							hx-target="body"
 							disabled?={ sv.Active }
 						>
@@ -185,7 +210,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 						</button>
 						<button
 							type="button"
-							hx-get={ string(templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s&clone-version=%d", serviceName, orgName, sv.Version))) }
+							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
 							hx-target="body"
 							hx-push-url="true"
 						>
@@ -198,9 +223,9 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 	}
 }
 
-templ CreateDomainContent(dData DomainData) {
+templ CreateDomainContent(orgName string, dData DomainData) {
 	<span class="error">{ dData.Errors.ServerError }</span>
-	<form method="post" action={ templ.URL("/console/create/domain") }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
@@ -210,8 +235,8 @@ templ CreateDomainContent(dData DomainData) {
 	</form>
 }
 
-templ CreateServiceContent(err error) {
-	<form method="post" action={ templ.URL("/console/create/service") }>
+templ CreateServiceContent(orgName string, err error) {
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) }>
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..."/>
@@ -338,7 +363,7 @@ templ deleteOriginButton(index string, disabled bool) {
 }
 
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/create/service-version/%s?org=%s", serviceName, orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -441,7 +466,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/services/%s/%d/activate?org=%s", serviceName, version, orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)) }>
 		<label for="confirmation">
 			Yes I am sure
 			<input type="checkbox" id="confirmation" name="confirmation"/>
