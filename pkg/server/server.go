@@ -2622,26 +2622,63 @@ func insertOrg(dbPool *pgxpool.Pool, name string, ad cdntypes.AuthData) (pgtype.
 	return id, nil
 }
 
-func selectServices(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Service, error) {
-	var rows pgx.Rows
-	var err error
-	if ad.Superuser {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for getServices as superuser: %w", err)
-		}
-	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", *ad.OrgID)
-		if err != nil {
-			return nil, fmt.Errorf("unable to query for getServices as org member: %w", err)
-		}
-	} else {
-		return nil, cdnerrors.ErrForbidden
-	}
+func selectServices(dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
+	var services []cdntypes.Service
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var err error
+		var orgIdent orgIdentifier
+		var lookupOrg pgtype.UUID
 
-	services, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Service])
+		// Must be either superuser or member of an org
+		if !ad.Superuser && ad.OrgID == nil {
+			return cdnerrors.ErrForbidden
+		}
+
+		if orgNameOrID != "" {
+			orgIdent, err = newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+
+			lookupOrg = orgIdent.id
+		}
+
+		// If not superuser and a specific org is requested the user is
+		// only allowed to request it if they are member of the same org
+		if !ad.Superuser && lookupOrg.Valid {
+			if lookupOrg != *ad.OrgID {
+				return cdnerrors.ErrForbidden
+			}
+		}
+
+		// If not superuser and a specific org was not requested, set
+		// it to the org of the user.
+		if !ad.Superuser && !lookupOrg.Valid {
+			lookupOrg = *ad.OrgID
+		}
+
+		var rows pgx.Rows
+		if lookupOrg.Valid {
+			rows, err = tx.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
+			if err != nil {
+				return fmt.Errorf("unable to query for services for specific org: %w", err)
+			}
+		} else {
+			rows, err = tx.Query(context.Background(), "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+			if err != nil {
+				return fmt.Errorf("unable to query for all services: %w", err)
+			}
+		}
+
+		services, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Service])
+		if err != nil {
+			return fmt.Errorf("unable to CollectRows for services: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("unable to collect rows for services in API GET: %w", err)
+		return nil, fmt.Errorf("selectServices: transaction failed: %w", err)
 	}
 
 	return services, nil
@@ -4732,7 +4769,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			},
 		)
 
-		huma.Get(api, "/v1/services", func(ctx context.Context, _ *struct{},
+		huma.Get(api, "/v1/services", func(ctx context.Context, input *struct {
+			Org string `query:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		},
 		) (*servicesOutput, error) {
 			logger := zlog.Ctx(ctx)
 
@@ -4741,7 +4780,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from services GET handler")
 			}
 
-			services, err := selectServices(dbPool, ad)
+			services, err := selectServices(dbPool, ad, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to query for services")

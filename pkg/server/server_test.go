@@ -1885,6 +1885,7 @@ func TestGetServices(t *testing.T) {
 		description    string
 		username       string
 		password       string
+		orgNameOrID    string
 		expectedStatus int
 	}{
 		{
@@ -1894,10 +1895,31 @@ func TestGetServices(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
+			description:    "successful superuser request for specific org",
+			username:       "admin",
+			password:       "adminpass1",
+			orgNameOrID:    "org2",
+			expectedStatus: http.StatusOK,
+		},
+		{
 			description:    "successful org request",
 			username:       "username1",
 			password:       "password1",
 			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org request for same org explicity",
+			username:       "username1",
+			password:       "password1",
+			orgNameOrID:    "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed org request for other org",
+			username:       "username1",
+			password:       "password1",
+			orgNameOrID:    "org2",
+			expectedStatus: http.StatusForbidden,
 		},
 		{
 			description:    "failed org request, bad auth",
@@ -1911,6 +1933,13 @@ func TestGetServices(t *testing.T) {
 			password:       "password3",
 			expectedStatus: http.StatusForbidden,
 		},
+		{
+			description:    "failed user request (not assigned to org), asking for explicit org",
+			username:       "username3-no-org",
+			password:       "password3",
+			orgNameOrID:    "org1",
+			expectedStatus: http.StatusForbidden,
+		},
 	}
 
 	for _, test := range tests {
@@ -1920,6 +1949,12 @@ func TestGetServices(t *testing.T) {
 		}
 
 		req.SetBasicAuth(test.username, test.password)
+
+		if test.orgNameOrID != "" {
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
+		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
