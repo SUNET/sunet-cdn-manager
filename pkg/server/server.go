@@ -1549,7 +1549,6 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 				switch returnTo {
 				case "":
 					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-					// http.Redirect(w, r, consolePath, http.StatusFound)
 					validatedRedirect(consolePath, w, r, http.StatusFound)
 					return
 				default:
@@ -1674,7 +1673,6 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			switch returnTo {
 			case "":
 				logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-				// http.Redirect(w, r, consolePath, http.StatusFound)
 				validatedRedirect(consolePath, w, r, http.StatusFound)
 				return
 			default:
@@ -2124,7 +2122,6 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
 	// Redirect to the login handler
 	redirectURL.Path = "/auth/login"
 
-	// http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 	validatedRedirect(redirectURL.String(), w, r, http.StatusFound)
 
 	return nil
