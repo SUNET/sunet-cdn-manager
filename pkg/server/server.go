@@ -352,6 +352,34 @@ func validateServiceName(logger *zerolog.Logger, dbPool *pgxpool.Pool, orgIdent 
 	return serviceIdent, nil
 }
 
+// We protect against CSRF by using http.CrossOriginProtection middleware. That
+// middleware tries to verify "fetch metadata" present in headers for all browsers
+// since 2023 and potentially falling back to Origin header checks. Since this
+// is an app that does not expect to cater to existing users lets go one step
+// further and outright reject requests that are missing the expected fetch
+// metadata header so an old browser would not work at all rather than possibly
+// allowing a CSRF attack against this app.
+type strictFetchMetadataMiddleware struct{}
+
+func (*strictFetchMetadataMiddleware) Handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET", "HEAD", "OPTIONS":
+			// Safe methods are always allowed the same way
+			// http.CrossOriginProtection does it.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if r.Header.Get("Sec-Fetch-Site") == "" {
+			http.Error(w, "request is missing the Sec-Fetch-Site header, do you need to update your browser?", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -4511,10 +4539,12 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Handle("/css/*", http.FileServerFS(components.CSSFS))
 	router.Handle("/js/*", http.FileServerFS(components.JsFS))
 
+	strictFetch := &strictFetchMetadataMiddleware{}
 	antiCSRF := http.NewCrossOriginProtection()
 
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
+		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
 		r.Use(consoleAuthMiddleware(cookieStore))
 		r.Get("/", consoleDashboardHandler(cookieStore))
@@ -4548,6 +4578,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
+		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
 		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
 		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
