@@ -2107,10 +2107,10 @@ func renderLoginPage(w http.ResponseWriter, r *http.Request, returnTo string, lo
 }
 
 func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
-	redirectURL, err := url.ParseRequestURI(r.RequestURI)
-	if err != nil {
-		return fmt.Errorf("unable to parse RequestURI: %w", err)
-	}
+	// Even if a url.URL contains a pointer it is expected to be immutable
+	// so it should be safe to make a shallow copy:
+	// https://github.com/golang/go/issues/38351
+	redirectURL := *r.URL
 
 	// Remember where we wanted to go, but only overwrite it if it is not already set
 	q := r.URL.Query()
