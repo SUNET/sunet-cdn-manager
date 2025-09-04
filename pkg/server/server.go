@@ -1487,8 +1487,8 @@ func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request, 
 
 	// Make sure the URL does not point to anything outside this server
 	if r.URL.Host != returnToURL.Host {
-		logger.Err(err).Msg("return_to does not point to this service, not redirecting")
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		logger.Err(err).Msg("redirect target does not point to this service, not redirecting")
+		http.Error(w, "redirect target does not point to this service", http.StatusBadRequest)
 		return
 	}
 
@@ -1644,7 +1644,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 					return
 				}
 
-				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form")
+				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form if valid")
 				validatedRedirect(u.String(), w, r, http.StatusFound)
 				return
 			}
