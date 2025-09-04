@@ -33,7 +33,7 @@ templ ConsolePage(title string, ad cdntypes.AuthData, contents templ.Component) 
 	</html>
 }
 
-templ OrgConsolePage(title string, ad cdntypes.AuthData, orgName string, contents templ.Component) {
+templ OrgConsolePage(title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component) {
 	<!DOCTYPE html>
 	<html>
 		@consoleHeadComponent(title)
@@ -47,7 +47,7 @@ templ OrgConsolePage(title string, ad cdntypes.AuthData, orgName string, content
 						{ ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
 					</span>
 				</header>
-				@NavBar(orgName)
+				@NavBar(orgName, availableOrgNames)
 				<main>
 					<h1>{ title }</h1>
 					<div id="contents">
@@ -84,11 +84,20 @@ templ Dashboard(username string) {
 	<div>Hello { username }!</div>
 }
 
-templ NavBar(orgName string) {
+templ NavBar(orgName string, availableOrgNames []string) {
 	<div class="sidebar">
 		<aside>
 			<nav>
 				<ul>
+					<li>
+						<form hx-get={ templ.URL("/console/org-switcher") } hx-trigger="change" hx-target="body" hx-push-url="true">
+							<select name="org">
+								for _, availableOrgName := range availableOrgNames {
+									<option value={ availableOrgName } selected?={ availableOrgName == orgName }>{ availableOrgName }</option>
+								}
+							</select>
+						</form>
+					</li>
 					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s", orgName)) }>Dashboard</a></li>
 					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/domains", orgName)) }>Domains</a></li>
 					<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) }>Services</a></li>

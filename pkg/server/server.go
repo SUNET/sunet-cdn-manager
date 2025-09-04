@@ -410,7 +410,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Superuser {
-			err := renderOrgConsolePage(w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
+			err := renderOrgConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -422,7 +422,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				http.Error(w, "invalid organization name", http.StatusForbidden)
 				return
 			}
-			err := renderOrgConsolePage(w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
+			err := renderOrgConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -494,7 +494,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderOrgConsolePage(w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
+		err = renderOrgConsolePage(dbPool, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render domains page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -692,7 +692,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderOrgConsolePage(w, r, ad, "Services", orgName, components.ServicesContent(orgName, services, flashMessageStrings))
+		err = renderOrgConsolePage(dbPool, w, r, ad, "Services", orgName, components.ServicesContent(orgName, services, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -747,7 +747,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		switch r.Method {
 		case "GET":
-			err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, components.DomainData{}))
+			err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, components.DomainData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render domain creation page in GET")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -789,7 +789,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 					}
 				}
 				logger.Err(err).Msg("unable to validate POST create-domain form data")
-				err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
+				err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render domain creation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -806,7 +806,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 					logger.Err(err).Msg("unable to insert domain")
 					domainData.Errors.ServerError = "unable to insert domain"
 				}
-				err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
+				err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render domain creation page after insert error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -871,7 +871,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		switch r.Method {
 		case "GET":
-			err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, nil))
+			err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, nil))
 			if err != nil {
 				logger.Err(err).Msg("GET: unable to render service creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -897,7 +897,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, cdnerrors.ErrInvalidFormData))
+				err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("POST: unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -909,7 +909,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			_, err = insertService(logger, dbPool, formData.Name, ad.OrgName, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
+					err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
 					if err != nil {
 						logger.Err(err).Msg("service already exists: unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -969,6 +969,66 @@ func consoleNewOriginFieldsetHandler() http.HandlerFunc {
 	}
 }
 
+func consoleOrgSwitcherHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(cdntypes.AuthData)
+
+		orgStr := r.URL.Query().Get("org")
+		if orgStr == "" {
+			logger.Error().Msg("missing 'org' query parameter")
+			http.Error(w, "missing 'org' query paramter", http.StatusBadRequest)
+			return
+		}
+
+		// Use the same error for validateOrgName() as the user
+		// permission check so we dont give away if an org exists or
+		// not if the user is not allowed to use it. Protects against
+		// enumeration of what orgs exists.
+		validationError := "org name validation failed"
+		validationErrorCode := http.StatusBadRequest
+
+		orgIdent, err := validateOrgName(logger, dbPool, orgStr)
+		if err != nil {
+			logger.Err(err).Msg("org name validation failed")
+			http.Error(w, validationError, validationErrorCode)
+			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil {
+				logger.Err(err).Msg("user not allowed to check if org exists")
+				http.Error(w, validationError, validationErrorCode)
+				return
+			}
+			if *ad.OrgName != orgIdent.name {
+				logger.Err(err).Msg("user not member of the correct org for switching to it")
+				http.Error(w, validationError, validationErrorCode)
+				return
+			}
+		}
+
+		orgURL, err := url.JoinPath(consolePath, "org", orgIdent.name)
+		if err != nil {
+			logger.Err(err).Msg("unable to create URL for switching org")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(orgURL, w, r, http.StatusFound)
+	}
+}
+
 func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -1007,7 +1067,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		err = renderOrgConsolePage(w, r, ad, title, orgName, components.ServiceContent(orgName, serviceName, serviceVersions))
+		err = renderOrgConsolePage(dbPool, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1070,7 +1130,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		vclKeyToConf := cdntypes.VclStepsToMap(svc.VclSteps)
 
-		err = renderOrgConsolePage(w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
+		err = renderOrgConsolePage(dbPool, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service version page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1225,7 +1285,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				}
 			}
 
-			err := renderOrgConsolePage(w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cloneData, nil, ""))
+			err := renderOrgConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1291,7 +1351,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				}
 
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
-				err = renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1318,7 +1378,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderOrgConsolePage(w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderOrgConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1401,7 +1461,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 		switch r.Method {
 		case "GET":
-			err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
+			err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render activate-service-version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1427,7 +1487,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST activate-service form data")
-				err := renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, cdnerrors.ErrInvalidFormData))
+				err := renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service version activation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1445,7 +1505,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 				err := activateServiceVersion(logger, ad, dbPool, orgIdent.name, serviceIdent.name, version)
 				if err != nil {
 					logger.Err(err).Msg("service version activation failed")
-					err = renderOrgConsolePage(w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, err))
+					err = renderOrgConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, err))
 					if err != nil {
 						logger.Err(err).Msg("unable to render activate-service-version page on activation failure")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1469,8 +1529,22 @@ func renderRootConsolePage(w http.ResponseWriter, r *http.Request, ad cdntypes.A
 	return component.Render(r.Context(), w)
 }
 
-func renderOrgConsolePage(w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
-	component := components.OrgConsolePage(title, ad, orgName, contents)
+func renderOrgConsolePage(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
+	availableOrgNames := []string{}
+	if !ad.Superuser {
+		availableOrgNames = append(availableOrgNames, orgName)
+	} else {
+		orgs, err := selectOrgs(dbPool, ad)
+		if err != nil {
+			return fmt.Errorf("unable to select orgs: %w", err)
+		}
+
+		for _, org := range orgs {
+			availableOrgNames = append(availableOrgNames, org.Name)
+		}
+	}
+
+	component := components.OrgConsolePage(title, ad, orgName, availableOrgNames, contents)
 	return component.Render(r.Context(), w)
 }
 
@@ -4562,6 +4636,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		// htmx helpers
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler())
+		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbPool, cookieStore))
 	})
 
 	oauth2HTTPClient := &http.Client{}
