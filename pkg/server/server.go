@@ -293,8 +293,8 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 			}
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
-			logger.Error().Msg("user is not superuser or belongs to an org")
-			http.Error(w, "not superuser or belonging to an organization", http.StatusForbidden)
+			logger.Error().Msg("user is not superuser or belonging to an organization")
+			http.Error(w, "you do not have access to any resources", http.StatusForbidden)
 			return
 		}
 	}
