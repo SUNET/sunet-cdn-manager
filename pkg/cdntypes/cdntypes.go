@@ -238,3 +238,7 @@ func (ds DomainString) Schema(_ huma.Registry) *huma.Schema {
 func (ds DomainString) String() string {
 	return string(ds)
 }
+
+// Organization names must be a valid DNS label so this is can not collide
+// with a real name.
+const OrgNotSelected = "-- not selected --"

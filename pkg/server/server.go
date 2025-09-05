@@ -262,7 +262,7 @@ const (
 	consoleServiceOrgRedirect = "/console/org/%s/services/%s"
 )
 
-func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
@@ -278,7 +278,7 @@ func consoleDashboardHandler(cookieStore *sessions.CookieStore) http.HandlerFunc
 		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Superuser {
-			err := renderRootConsolePage(w, r, ad, "Dashboard", components.Dashboard(ad.Username))
+			err := renderOrgConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -991,38 +991,44 @@ func consoleOrgSwitcherHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cooki
 			return
 		}
 
-		// Use the same error for validateOrgName() as the user
-		// permission check so we dont give away if an org exists or
-		// not if the user is not allowed to use it. Protects against
-		// enumeration of what orgs exists.
-		validationError := "org name validation failed"
-		validationErrorCode := http.StatusBadRequest
+		var orgURL string
 
-		orgIdent, err := validateOrgName(logger, dbPool, orgStr)
-		if err != nil {
-			logger.Err(err).Msg("org name validation failed")
-			http.Error(w, validationError, validationErrorCode)
-			return
-		}
+		if orgStr == cdntypes.OrgNotSelected {
+			// The special "not selected" option leads to the root console path.
+			orgURL = consolePath
+		} else {
+			// Use the same error for validateOrgName() as the user
+			// permission check so we dont give away if an org exists or
+			// not if the user is not allowed to use it. Protects against
+			// enumeration of what orgs exists.
+			validationError := "org name validation failed"
+			validationErrorCode := http.StatusBadRequest
 
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Err(err).Msg("user not allowed to check if org exists")
+			orgIdent, err := validateOrgName(logger, dbPool, orgStr)
+			if err != nil {
+				logger.Err(err).Msg("org name validation failed")
 				http.Error(w, validationError, validationErrorCode)
 				return
 			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Err(err).Msg("user not member of the correct org for switching to it")
-				http.Error(w, validationError, validationErrorCode)
+
+			if !ad.Superuser {
+				if ad.OrgName == nil {
+					logger.Err(err).Msg("user not allowed to check if org exists")
+					http.Error(w, validationError, validationErrorCode)
+					return
+				}
+				if *ad.OrgName != orgIdent.name {
+					logger.Err(err).Msg("user not member of the correct org for switching to it")
+					http.Error(w, validationError, validationErrorCode)
+					return
+				}
+			}
+			orgURL, err = url.JoinPath(consolePath, "org", orgIdent.name)
+			if err != nil {
+				logger.Err(err).Msg("unable to create URL for switching org")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		}
-
-		orgURL, err := url.JoinPath(consolePath, "org", orgIdent.name)
-		if err != nil {
-			logger.Err(err).Msg("unable to create URL for switching org")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
 		}
 
 		validatedRedirect(orgURL, w, r, http.StatusFound)
@@ -1524,11 +1530,6 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 	}
 }
 
-func renderRootConsolePage(w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, contents templ.Component) error {
-	component := components.ConsolePage(title, ad, contents)
-	return component.Render(r.Context(), w)
-}
-
 func renderOrgConsolePage(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
 	availableOrgNames := []string{}
 	if !ad.Superuser {
@@ -1544,7 +1545,7 @@ func renderOrgConsolePage(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.R
 		}
 	}
 
-	component := components.OrgConsolePage(title, ad, orgName, availableOrgNames, contents)
+	component := components.ConsolePage(title, ad, orgName, availableOrgNames, contents)
 	return component.Render(r.Context(), w)
 }
 
@@ -4618,7 +4619,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get("/", consoleDashboardHandler(cookieStore))
+		r.Get("/", consoleDashboardHandler(dbPool, cookieStore))
 		r.Get("/org/{org}", consoleOrgDashboardHandler(dbPool, cookieStore))
 		r.Get("/org/{org}/domains", consoleDomainsHandler(dbPool, cookieStore))
 		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbPool, cookieStore))
