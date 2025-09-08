@@ -1,6 +1,6 @@
 module github.com/SUNET/sunet-cdn-manager
 
-go 1.25.0
+go 1.25.1
 
 require (
 	github.com/a-h/templ v0.3.943
