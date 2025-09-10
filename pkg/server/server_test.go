@@ -55,7 +55,7 @@ func TestMain(m *testing.M) {
 	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
 	}
-	logger = zerolog.New(os.Stderr).With().Timestamp().Caller().Logger()
+	logger = zerolog.New(os.Stderr).With().Timestamp().Caller().Logger().Level(zerolog.FatalLevel)
 
 	m.Run()
 }
@@ -389,7 +389,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	return nil
 }
 
-func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (*httptest.Server, *pgxpool.Pool, error) {
+func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclValidatorClient) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -405,7 +405,7 @@ func prepareServer(encryptedSessionKey bool, vclValidator *vclValidatorClient) (
 	// Make sure tests do not hang even if they only have access to a single db connection
 	pgConfig.MaxConns = 1
 
-	fmt.Println(pgConfig.ConnString())
+	t.Log(pgConfig.ConnString())
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
@@ -469,7 +469,7 @@ func TestServerInit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fmt.Println(pgConfig.ConnString())
+	t.Log(pgConfig.ConnString())
 
 	u, err := Init(logger, pgConfig, false)
 	if err != nil {
@@ -489,7 +489,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -527,7 +527,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 	var keyOrder int64
 	var authKey, encKey []byte
 	_, err = pgx.ForEachRow(rows, []any{&id, &timeCreated, &keyOrder, &authKey, &encKey}, func() error {
-		fmt.Printf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
+		t.Logf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
 
 		if authKey == nil {
 			t.Fatal("authKey is nil")
@@ -554,7 +554,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(true, nil)
+	ts, dbPool, err := prepareServer(t, true, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -597,7 +597,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 	var keyOrder int64
 	var authKey, encKey []byte
 	_, err = pgx.ForEachRow(rows, []any{&id, &timeCreated, &keyOrder, &authKey, &encKey}, func() error {
-		fmt.Printf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
+		t.Logf("id: %s, time_created: %s, key_order: %d, auth_key len: %d, enc_key len: %d\n", id, timeCreated, keyOrder, len(authKey), len(encKey))
 
 		if authKey == nil {
 			t.Fatal("authKey is nil")
@@ -624,7 +624,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -698,12 +698,12 @@ func TestGetUsers(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -804,12 +804,12 @@ func TestGetUser(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPostUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -947,12 +947,12 @@ func TestPostUsers(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPutUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1031,7 +1031,7 @@ func TestPutUser(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		fmt.Println(string(b))
+		t.Log(string(b))
 
 		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserIDorName, r)
 		if err != nil {
@@ -1061,12 +1061,12 @@ func TestPutUser(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestDeleteUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1175,7 +1175,7 @@ func TestDeleteUser(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 
 		// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
 		err = dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
@@ -1197,7 +1197,7 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestPutPassword(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1274,7 +1274,7 @@ func TestPutPassword(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		fmt.Println(string(b))
+		t.Log(string(b))
 
 		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserIDorName+"/local-password", r)
 		if err != nil {
@@ -1304,10 +1304,10 @@ func TestPutPassword(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 
 		// Verify old password no longer works
-		statusCode, err := testAuth(ts, test.modifiedUserIDorName, test.oldPassword)
+		statusCode, err := testAuth(t, ts, test.modifiedUserIDorName, test.oldPassword)
 		if err == nil {
 			t.Fatal(errors.New("old password still works, unexpected"))
 		}
@@ -1316,7 +1316,7 @@ func TestPutPassword(t *testing.T) {
 		}
 
 		// Verify new password works
-		statusCode, err = testAuth(ts, test.modifiedUserIDorName, test.newPassword)
+		statusCode, err = testAuth(t, ts, test.modifiedUserIDorName, test.newPassword)
 		if err != nil {
 			if test.shouldSucceed {
 				t.Fatal(err)
@@ -1334,7 +1334,7 @@ func TestPutPassword(t *testing.T) {
 	}
 }
 
-func testAuth(ts *httptest.Server, username string, password string) (int, error) {
+func testAuth(t *testing.T, ts *httptest.Server, username string, password string) (int, error) {
 	req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+username, nil)
 	if err != nil {
 		return 0, err
@@ -1359,13 +1359,13 @@ func testAuth(ts *httptest.Server, username string, password string) (int, error
 		return resp.StatusCode, err
 	}
 
-	fmt.Println(string(b))
+	t.Log(string(b))
 
 	return resp.StatusCode, nil
 }
 
 func TestGetOrgs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1433,12 +1433,12 @@ func TestGetOrgs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetOrg(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1532,12 +1532,12 @@ func TestGetOrg(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1658,12 +1658,12 @@ func TestGetDomains(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetServiceIPs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1760,12 +1760,12 @@ func TestGetServiceIPs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPostOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1867,12 +1867,12 @@ func TestPostOrganizations(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1975,12 +1975,12 @@ func TestGetServices(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetService(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2104,12 +2104,12 @@ func TestGetService(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestDeleteService(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2233,12 +2233,12 @@ func TestDeleteService(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPostServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2411,12 +2411,12 @@ func TestPostServices(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestDeleteDomain(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2521,12 +2521,12 @@ func TestDeleteDomain(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPostDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2615,12 +2615,12 @@ func TestPostDomains(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetServiceVersions(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2724,7 +2724,7 @@ func TestGetServiceVersions(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
@@ -2764,7 +2764,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 	vclValidator := newVclValidator(u)
 
-	ts, dbPool, err := prepareServer(false, vclValidator)
+	ts, dbPool, err := prepareServer(t, false, vclValidator)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3139,7 +3139,7 @@ func TestPostServiceVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Println(string(b))
+		t.Log(string(b))
 
 		r := bytes.NewReader(b)
 
@@ -3169,12 +3169,12 @@ func TestPostServiceVersion(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestActivateServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3277,7 +3277,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Println(string(b))
+		t.Log(string(b))
 
 		r := bytes.NewReader(b)
 
@@ -3311,12 +3311,12 @@ func TestActivateServiceVersion(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetServiceVersionVCL(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3430,12 +3430,12 @@ func TestGetServiceVersionVCL(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3531,12 +3531,12 @@ func TestGetIPNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPostIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3652,12 +3652,12 @@ func TestPostIPNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetCacheNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3737,12 +3737,12 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetL4LBNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3822,7 +3822,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
@@ -3883,7 +3883,7 @@ func TestCamelCaseToSnakeCase(t *testing.T) {
 }
 
 func TestPostCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4020,12 +4020,12 @@ func TestPostCacheNodes(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestGetCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4105,12 +4105,12 @@ func TestGetCacheNodes(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
 
 func TestPutCacheNodeMaintenance(t *testing.T) {
-	ts, dbPool, err := prepareServer(false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4197,7 +4197,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Println(string(b))
+		t.Log(string(b))
 
 		r := bytes.NewReader(b)
 
@@ -4227,6 +4227,6 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("%s\n", jsonData)
+		t.Logf("%s\n", jsonData)
 	}
 }
