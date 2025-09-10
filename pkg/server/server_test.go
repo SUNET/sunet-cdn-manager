@@ -35,10 +35,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-var (
-	pgt    *postgrestest.Server
-	logger zerolog.Logger
-)
+var pgt *postgrestest.Server
 
 func Ptr[T any](v T) *T {
 	return &v
@@ -55,7 +52,6 @@ func TestMain(m *testing.M) {
 	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
 	}
-	logger = zerolog.New(os.Stderr).With().Timestamp().Caller().Logger().Level(zerolog.FatalLevel)
 
 	m.Run()
 }
@@ -412,6 +408,8 @@ func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclVali
 		return nil, nil, errors.New("unable to create database pool")
 	}
 
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
 	err = migrations.Up(logger, pgConfig)
 	if err != nil {
 		return nil, nil, err
@@ -470,6 +468,8 @@ func TestServerInit(t *testing.T) {
 	}
 
 	t.Log(pgConfig.ConnString())
+
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
 
 	u, err := Init(logger, pgConfig, false)
 	if err != nil {
