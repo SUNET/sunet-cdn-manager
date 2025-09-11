@@ -2634,7 +2634,6 @@ func TestGetServiceVersions(t *testing.T) {
 		username        string
 		password        string
 		expectedStatus  int
-		org             string
 		serviceNameOrID string
 		orgNameOrID     string
 	}{
