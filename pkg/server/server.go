@@ -3537,10 +3537,12 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 	var err error
 
 	if !ad.Superuser && ad.OrgID == nil {
+		logger.Error().Msg("insertService: not superuser or member of an org")
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
 	if orgNameOrID == nil {
+		logger.Error().Msg("insertService: missing orgNameOrID")
 		return pgtype.UUID{}, cdnerrors.ErrUnprocessable
 	}
 
