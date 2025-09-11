@@ -906,7 +906,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				return
 			}
 
-			_, err = insertService(logger, dbPool, formData.Name, ad.OrgName, ad)
+			_, err = insertService(logger, dbPool, formData.Name, &orgIdent.name, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					err := renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
