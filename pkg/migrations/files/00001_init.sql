@@ -155,10 +155,21 @@ CREATE TABLE service_domains (
     UNIQUE(service_version_id, domain_id)
 );
 
+CREATE TABLE service_origin_groups (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    time_created timestamptz NOT NULL DEFAULT now(),
+    service_id uuid NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    default_group boolean DEFAULT false NOT NULL,
+    name text NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
+    UNIQUE(service_id, name)
+);
+CREATE UNIQUE INDEX service_origin_groups_default_only_1_true ON service_origin_groups (service_id, default_group) WHERE default_group;
+
 CREATE TABLE service_origins (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     service_version_id uuid NOT NULL REFERENCES service_versions(id) ON DELETE CASCADE,
+    origin_group_id uuid NOT NULL REFERENCES service_origin_groups(id) ON DELETE CASCADE,
     host text NOT NULL CONSTRAINT non_empty_host CHECK(length(host)>=1 AND length(host)<=253),
     port integer NOT NULL CONSTRAINT port_range CHECK(port >= 1 AND port <= 65535),
     tls boolean DEFAULT true NOT NULL,
