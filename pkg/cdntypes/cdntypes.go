@@ -57,6 +57,7 @@ type ServiceVersionConfig struct {
 	VclSteps
 	ServiceIPAddresses []netip.Addr   `json:"service_ip_addresses" doc:"The IP (v4 and v6) addresses allocated to the service" validate:"min=2"`
 	Domains            []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	OriginGroups       []OriginGroup  `json:"origin_groups" doc:"The available origin groups" validate:"min=1"`
 	Origins            []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
@@ -66,7 +67,7 @@ type ServiceVersionCloneData struct {
 	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
-// What data is expected when handling a request to add a version version
+// What data is expected when handling a request to add a service version
 type InputServiceVersion struct {
 	ServiceVersion
 	VclSteps
@@ -74,11 +75,26 @@ type InputServiceVersion struct {
 	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
+type OriginGroup struct {
+	ID           pgtype.UUID `json:"id" doc:"ID of origin group"`
+	DefaultGroup bool        `json:"defaut_group" example:"true" doc:"If the group is the default"`
+	Name         string      `json:"name"`
+}
+
+type InputOrigin struct {
+	OriginGroup string `json:"origin_group" doc:"ID or name of origin group"`
+	Host        string `json:"host" minLength:"1" maxLength:"253"`
+	Port        int    `json:"port" minimum:"1" maximum:"65535"`
+	TLS         bool   `json:"tls"`
+	VerifyTLS   bool   `json:"verify_tls"`
+}
+
 type Origin struct {
-	Host      string `json:"host" minLength:"1" maxLength:"253"`
-	Port      int    `json:"port" minimum:"1" maximum:"65535"`
-	TLS       bool   `json:"tls"`
-	VerifyTLS bool   `json:"verify_tls"`
+	OriginGroupID pgtype.UUID `json:"origin_group_id" doc:"ID of origin group"`
+	Host          string      `json:"host" minLength:"1" maxLength:"253"`
+	Port          int         `json:"port" minimum:"1" maximum:"65535"`
+	TLS           bool        `json:"tls"`
+	VerifyTLS     bool        `json:"verify_tls"`
 }
 
 // The "Client" and "Backend" steps from

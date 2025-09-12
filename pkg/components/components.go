@@ -5,6 +5,7 @@ package components
 
 import (
 	"embed"
+	"encoding/json"
 )
 
 //go:embed css/*.css
@@ -29,4 +30,25 @@ type DomainData struct {
 type DomainErrors struct {
 	DomainFormFields
 	ServerError string
+}
+
+type addButtonVals struct {
+	Org     string `json:"org"`
+	Service string `json:"service"`
+}
+
+// https://htmx.org/attributes/hx-vals/
+func jsonAddButtonVals(orgName string, serviceName string) string {
+	abv := addButtonVals{
+		Org:     orgName,
+		Service: serviceName,
+	}
+
+	b, err := json.Marshal(abv)
+	if err != nil {
+		// Should never happen
+		panic(err)
+	}
+
+	return string(b)
 }

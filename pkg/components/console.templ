@@ -288,10 +288,30 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 	</table>
 }
 
-templ OriginFieldSet(index int, numFields int, cloneOrigin cdntypes.Origin, htmxRequest bool) {
+templ OriginFieldSet(orgName string, serviceName string, index int, numFields int, cloneOrigin cdntypes.Origin, originGroups []cdntypes.OriginGroup, htmxRequest bool) {
 	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
 		<fieldset>
 			<legend>Origin</legend>
+			<label for={ fmt.Sprintf("origins.%d.origin-group", index) }>
+				Origin group
+				<select id={ fmt.Sprintf("origins.%d.origin-group", index) } name={ fmt.Sprintf("origins.%d.origin-group", index) }>
+					{{
+					var originGroupCloneMatch bool
+					for _, originGroup := range originGroups {
+						if originGroup.ID == cloneOrigin.OriginGroupID {
+							originGroupCloneMatch = true
+						}
+					}
+					}}
+					for _, originGroup := range originGroups {
+						if originGroupCloneMatch {
+							<option value={ originGroup.Name } selected?={ originGroup.ID == cloneOrigin.OriginGroupID }>{ originGroup.Name }</option>
+						} else {
+							<option value={ originGroup.Name } selected?={ originGroup.DefaultGroup }>{ originGroup.Name }</option>
+						}
+					}
+				</select>
+			</label>
 			<label for={ fmt.Sprintf("origins.%d.host", index) }>
 				Host
 				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ cloneOrigin.Host }/>
@@ -322,11 +342,11 @@ templ OriginFieldSet(index int, numFields int, cloneOrigin cdntypes.Origin, htmx
 		// If this function is called by http handler (e.g.
 		// because of a hx-get) we also need to replace the "add
 		// button" counter.
-		@addOriginButton(strconv.Itoa(index+1), true)
+		@addOriginButton(orgName, serviceName, strconv.Itoa(index+1), true)
 	}
 }
 
-templ addOriginButton(index string, swap bool) {
+templ addOriginButton(orgName string, serviceName string, index string, swap bool) {
 	<button
 		type="button"
 		id="add-origin-fieldset-button"
@@ -334,6 +354,7 @@ templ addOriginButton(index string, swap bool) {
 		hx-swap="beforeend"
 		hx-target="#origin-fieldsets"
 		name="next-origin-index"
+		hx-vals={ jsonAddButtonVals(orgName, serviceName) }
 		value={ index }
 		if swap {
 			hx-swap-oob="true"
@@ -353,7 +374,7 @@ templ deleteOriginButton(index string, disabled bool) {
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>
 		<article>
 			<fieldset>
@@ -409,10 +430,10 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 			"
 		>
 			if len(cloneData.Origins) == 0 {
-				@OriginFieldSet(0, 1, cdntypes.Origin{}, false)
+				@OriginFieldSet(orgName, serviceName, 0, 1, cdntypes.Origin{}, originGroups, false)
 			} else {
 				for i, cloneOrigin := range cloneData.Origins {
-					@OriginFieldSet(i, len(cloneData.Origins), cloneOrigin, false)
+					@OriginFieldSet(orgName, serviceName, i, len(cloneData.Origins), cloneOrigin, originGroups, false)
 				}
 			}
 		</div>
@@ -425,7 +446,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 				nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
 			}
 		}}
-		@addOriginButton(nextOriginIndexStr, false)
+		@addOriginButton(orgName, serviceName, nextOriginIndexStr, false)
 		{{ cloneVclStepsMap := cdntypes.VclStepsToMap(cloneData.VclSteps) }}
 		<article>
 			<fieldset>

@@ -125,48 +125,37 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(dbPool *pgxpool.Pool, logger *zerolog.Logger, confTemplates configTemplates, orgNameOrID string, serviceNameOrID string, iSvc cdntypes.InputServiceVersion) error {
+func validateInputOrigins(tx pgx.Tx, inputOrigins []cdntypes.InputOrigin, serviceID pgtype.UUID) ([]cdntypes.Origin, error) {
+	origins := []cdntypes.Origin{}
+	for _, inputOrigin := range inputOrigins {
+		originGroupIdent, err := newOriginGroupIdentifier(tx, inputOrigin.OriginGroup, serviceID)
+		if err != nil {
+			return nil, fmt.Errorf("looking up origin group name failed: %w", err)
+		}
+
+		if originGroupIdent.serviceID != serviceID {
+			return nil, fmt.Errorf("users can only reference origin groups belonging to the same service ID")
+		}
+
+		origins = append(origins, cdntypes.Origin{
+			OriginGroupID: originGroupIdent.id,
+			Host:          inputOrigin.Host,
+			Port:          inputOrigin.Port,
+			TLS:           inputOrigin.TLS,
+			VerifyTLS:     inputOrigin.VerifyTLS,
+		})
+	}
+
+	return origins, nil
+}
+
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplates configTemplates, iSvc cdntypes.InputServiceVersion, serviceIPAddrs []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
 		return fmt.Errorf("unable to validate input svc struct: %w", err)
 	}
 
-	// If someone is submitting data to create a new service version it
-	// will not contain what addresses have been allocated to the
-	// service, so we need to enrich the submitted data with this
-	// information in order to be able to construct a complete VCL for
-	// validation.
-	var serviceIPAddrs []netip.Addr
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
-		if err != nil {
-			logger.Err(err).Msg("looking up org failed")
-			return cdnerrors.ErrUnprocessable
-		}
-
-		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
-		if err != nil {
-			logger.Err(err).Msg("looking up service failed")
-			return cdnerrors.ErrUnprocessable
-		}
-
-		err = tx.QueryRow(
-			context.Background(),
-			"SELECT array_agg(address ORDER BY address) AS service_ip_addresses FROM service_ip_addresses WHERE service_id = $1",
-			serviceIdent.id,
-		).Scan(&serviceIPAddrs)
-		if err != nil {
-			logger.Err(err).Msg("looking up service IPs failed")
-			return cdnerrors.ErrUnprocessable
-		}
-
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("service version validation transaction failed: %w", err)
-	}
-
-	vcl, err := generateCompleteVcl(confTemplates.vcl, serviceIPAddrs, iSvc.Origins, iSvc.Domains, iSvc.VclSteps)
+	vcl, err := generateCompleteVcl(confTemplates.vcl, serviceIPAddrs, originGroups, origins, iSvc.Domains, iSvc.VclSteps)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -945,9 +934,81 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 	}
 }
 
-func consoleNewOriginFieldsetHandler() http.HandlerFunc {
+func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(cdntypes.AuthData)
+
+		orgStr := r.URL.Query().Get("org")
+		if orgStr == "" {
+			logger.Error().Msg("missing 'org' query parameter")
+			http.Error(w, "missing 'org' query paramter", http.StatusBadRequest)
+			return
+		}
+
+		serviceStr := r.URL.Query().Get("service")
+		if serviceStr == "" {
+			logger.Error().Msg("missing 'service' query parameter")
+			http.Error(w, "missing 'service' query paramter", http.StatusBadRequest)
+			return
+		}
+
+		// Use the same error for validateOrgName() as the user
+		// permission check so we dont give away if an org exists or
+		// not if the user is not allowed to use it. Protects against
+		// enumeration of what orgs exists.
+		validationError := "org name validation failed"
+		validationErrorCode := http.StatusBadRequest
+
+		orgIdent, err := validateOrgName(logger, dbPool, orgStr)
+		if err != nil {
+			logger.Err(err).Msg("org name validation failed")
+			http.Error(w, validationError, validationErrorCode)
+			return
+		}
+
+		serviceIdent, err := validateServiceName(logger, dbPool, orgIdent, serviceStr)
+		if err != nil {
+			logger.Err(err).Msg("service name validation failed")
+			http.Error(w, validationError, validationErrorCode)
+			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil {
+				logger.Err(err).Msg("user not allowed to get originfieldset")
+				http.Error(w, validationError, validationErrorCode)
+				return
+			}
+			if *ad.OrgName != orgIdent.name {
+				logger.Err(err).Msg("user not member of the requested org")
+				http.Error(w, validationError, validationErrorCode)
+				return
+			}
+			if orgIdent.id != serviceIdent.orgID {
+				logger.Err(err).Msg("requested service is not member of the requested org")
+				http.Error(w, validationError, validationErrorCode)
+				return
+			}
+		}
+
+		originGroups, err := selectOriginGroups(dbPool, ad, serviceIdent.name, orgStr)
+		if err != nil {
+			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: unable to select service groups")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		index := 0
 		indexStr := r.URL.Query().Get("next-origin-index")
 		if indexStr != "" {
@@ -959,8 +1020,8 @@ func consoleNewOriginFieldsetHandler() http.HandlerFunc {
 				return
 			}
 		}
-		component := components.OriginFieldSet(index, index+1, cdntypes.Origin{}, true)
-		err := component.Render(r.Context(), w)
+		component := components.OriginFieldSet(orgIdent.name, serviceIdent.name, index, index+1, cdntypes.Origin{}, originGroups, true)
+		err = component.Render(r.Context(), w)
 		if err != nil {
 			logger.Error().Msg("console: unable to render origin fieldset")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1179,6 +1240,10 @@ func getServiceVersionCloneData(tx pgx.Tx, ad cdntypes.AuthData, orgName string,
 		return cdntypes.ServiceVersionCloneData{}, err
 	}
 
+	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
+		return cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
+	}
+
 	rows, err := tx.Query(
 		context.Background(),
 		`SELECT
@@ -1189,7 +1254,7 @@ func getServiceVersionCloneData(tx pgx.Tx, ad cdntypes.AuthData, orgName string,
 				WHERE domains.verified = true AND service_version_id = service_versions.id
 			) AS domains,
 			(SELECT
-				array_agg((host, port, tls, verify_tls) ORDER BY host, port)
+				array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port)
 				FROM service_origins
 				WHERE service_version_id = service_versions.id
 			) AS origins,
@@ -1265,6 +1330,27 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			return
 		}
 
+		orgIdent, err := validateOrgName(logger, dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up orgName failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		serviceIdent, err := validateServiceName(logger, dbPool, orgIdent, serviceName)
+		if err != nil {
+			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up serviceName failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		originGroups, err := selectOriginGroups(dbPool, ad, serviceIdent.name, orgIdent.name)
+		if err != nil {
+			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: unable to select service groups")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		switch r.Method {
 		case "GET":
 			var cloneData cdntypes.ServiceVersionCloneData
@@ -1291,7 +1377,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				}
 			}
 
-			err := renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cloneData, nil, ""))
+			err = renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1338,26 +1424,9 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 			err = validate.Struct(formData)
 			if err != nil {
-				// serviceName has not been used (validated) at
-				// this point in a POST request, so make sure
-				// it is OK prior to rendering anything, and
-				// for that we also need an orgIdentifier
-				orgIdent, err := validateOrgName(logger, dbPool, orgName)
-				if err != nil {
-					logger.Err(err).Msg("consoleActivateServiceVersionHandler (validate.Struct failed): db request for looking up orgName failed")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
-
-				serviceIdent, err := validateServiceName(logger, dbPool, orgIdent, serviceName)
-				if err != nil {
-					logger.Err(err).Msg("consoleActivateServiceVersionHandler (validate.Struct failed): db request for looking up serviceName failed")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
-
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
-				err = renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+
+				err = renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1366,16 +1435,17 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			origins := []cdntypes.Origin{}
+			inputOrigins := []cdntypes.InputOrigin{}
 			for _, formOrigin := range formData.Origins {
-				origins = append(origins, cdntypes.Origin{
-					Host:      formOrigin.OriginHost,
-					Port:      formOrigin.OriginPort,
-					TLS:       formOrigin.OriginTLS,
-					VerifyTLS: formOrigin.OriginVerifyTLS,
+				inputOrigins = append(inputOrigins, cdntypes.InputOrigin{
+					OriginGroup: formOrigin.OriginGroup,
+					Host:        formOrigin.OriginHost,
+					Port:        formOrigin.OriginPort,
+					TLS:         formOrigin.OriginTLS,
+					VerifyTLS:   formOrigin.OriginVerifyTLS,
 				})
 			}
-			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, origins, false, formData.VclSteps)
+			_, err = insertServiceVersion(logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, inputOrigins, false, formData.VclSteps)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -1384,7 +1454,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1594,6 +1664,7 @@ type createDomainForm struct {
 }
 
 type createServiceVersionOrigin struct {
+	OriginGroup     string `schema:"origin-group" validate:"gte=1,min=1,max=63"`
 	OriginHost      string `schema:"host" validate:"gte=1,min=1,max=253"`
 	OriginPort      int    `schema:"port" validate:"gte=1,min=1,max=65535"`
 	OriginTLS       bool   `schema:"tls"`
@@ -2087,16 +2158,16 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 	err = dbPool.QueryRow(
 		context.Background(),
 		`SELECT
-				users.id,
-				users.org_id,
-				orgs.name,
-				users.role_id,
-				roles.name,
-				roles.superuser
-			FROM users
-			JOIN roles ON users.role_id = roles.id
-			LEFT JOIN orgs ON users.org_id = orgs.id
-			WHERE users.name=$1`,
+			users.id,
+			users.org_id,
+			orgs.name,
+			users.role_id,
+			roles.name,
+			roles.superuser
+		FROM users
+		JOIN roles ON users.role_id = roles.id
+		LEFT JOIN orgs ON users.org_id = orgs.id
+		WHERE users.name=$1`,
 		username,
 	).Scan(
 		&userID,
@@ -2227,23 +2298,23 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	err := tx.QueryRow(
 		context.Background(),
 		`SELECT
-				users.id,
-				users.org_id,
-				orgs.name,
-				users.role_id,
-				roles.name,
-				roles.superuser,
-				user_argon2keys.key,
-				user_argon2keys.salt,
-				user_argon2keys.time,
-				user_argon2keys.memory,
-				user_argon2keys.threads,
-				user_argon2keys.tag_size
-			FROM users
-			JOIN user_argon2keys ON users.id = user_argon2keys.user_id
-			JOIN roles ON users.role_id = roles.id
-			LEFT JOIN orgs ON users.org_id = orgs.id
-			WHERE users.name=$1`,
+			users.id,
+			users.org_id,
+			orgs.name,
+			users.role_id,
+			roles.name,
+			roles.superuser,
+			user_argon2keys.key,
+			user_argon2keys.salt,
+			user_argon2keys.time,
+			user_argon2keys.memory,
+			user_argon2keys.threads,
+			user_argon2keys.tag_size
+		FROM users
+		JOIN user_argon2keys ON users.id = user_argon2keys.user_id
+		JOIN roles ON users.role_id = roles.id
+		LEFT JOIN orgs ON users.org_id = orgs.id
+		WHERE users.name=$1`,
 		username,
 	).Scan(
 		&userID,
@@ -3125,6 +3196,11 @@ type domainIdentifier struct {
 	orgID pgtype.UUID
 }
 
+type originGroupIdentifier struct {
+	resourceIdentifier
+	serviceID pgtype.UUID
+}
+
 var errEmptyInputIdentifier = errors.New("input identifier is empty")
 
 func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
@@ -3161,7 +3237,7 @@ func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 
 func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
 	if input == "" {
-		return serviceIdentifier{}, errors.New("input identfier is empty")
+		return serviceIdentifier{}, errors.New("input identifier is empty")
 	}
 
 	var id, orgID pgtype.UUID
@@ -3335,6 +3411,42 @@ func newDomainIdentifier(tx pgx.Tx, input string) (domainIdentifier, error) {
 	}, nil
 }
 
+func newOriginGroupIdentifier(tx pgx.Tx, input string, inputServiceID pgtype.UUID) (originGroupIdentifier, error) {
+	if input == "" {
+		return originGroupIdentifier{}, errors.New("input identifier is empty")
+	}
+
+	var id, serviceID pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, service_id FROM service_origin_groups WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &serviceID)
+		if err != nil {
+			return originGroupIdentifier{}, err
+		}
+	} else {
+		if !inputServiceID.Valid {
+			return originGroupIdentifier{}, cdnerrors.ErrOriginGroupByNameNeedsService
+		}
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (origin group names are only unique per service)
+		err := tx.QueryRow(context.Background(), "SELECT id, name, service_id FROM service_origin_groups WHERE name = $1 and service_id = $2 FOR SHARE", input, inputServiceID).Scan(&id, &name, &serviceID)
+		if err != nil {
+			return originGroupIdentifier{}, err
+		}
+	}
+
+	return originGroupIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+		serviceID: serviceID,
+	}, nil
+}
+
 type serviceIPAddr struct {
 	networkID pgtype.UUID
 	Address   netip.Addr
@@ -3444,6 +3556,138 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	}
 
 	return allocatedIPs, nil
+}
+
+func insertOriginGroup(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, name string) (cdntypes.OriginGroup, error) {
+	if !ad.Superuser {
+		if ad.OrgID == nil {
+			logger.Error().Msg("insertOriginGroup: not superuser or member of an org")
+			return cdntypes.OriginGroup{}, cdnerrors.ErrForbidden
+		}
+	}
+
+	var originGroup cdntypes.OriginGroup
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			logger.Err(err).Msg("looking up org failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("unable to validate org id")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// If the user is not a superuser they must belong to the same
+		// org as the service they are trying to add a version to
+		if !ad.Superuser {
+			if *ad.OrgID != serviceIdent.orgID {
+				return cdnerrors.ErrForbidden
+			}
+		}
+
+		// We explicitly do not support changing the default origin
+		// group as this could affect the configuration of already
+		// existing service versions.
+		defaultGroup := false
+		originGroupID, err := insertOriginGroupTx(tx, serviceIdent.id, defaultGroup, name)
+		if err != nil {
+			return fmt.Errorf("insertOriginGroup: unable to create default origin group: %w", err)
+		}
+
+		originGroup.ID = originGroupID
+		originGroup.Name = name
+		originGroup.DefaultGroup = defaultGroup
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("insertOriginGroup transaction failed")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return cdntypes.OriginGroup{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return cdntypes.OriginGroup{}, fmt.Errorf("insertOriginGroup transaction failed: %w", err)
+	}
+
+	return originGroup, nil
+}
+
+func insertOriginGroupTx(tx pgx.Tx, serviceID pgtype.UUID, defaultGroup bool, name string) (pgtype.UUID, error) {
+	// As default origin groups affects the content of configuration for
+	// already saved service versions we do not support changing the
+	// default origin group.
+	var originGroupID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO service_origin_groups (service_id, default_group, name) VALUES ($1, $2, $3) returning id", serviceID, defaultGroup, name).Scan(&originGroupID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return pgtype.UUID{}, fmt.Errorf("unable to insert origin group %s into service_origin_groups: %w", name, err)
+	}
+	return originGroupID, nil
+}
+
+func selectOriginGroups(dbPool *pgxpool.Pool, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.OriginGroup, error) {
+	originGroups := []cdntypes.OriginGroup{}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
+			orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			orgID = orgIdent.id
+		}
+
+		// Looking up a service by ID works without supplying an org,
+		// for looking up service by name an org must be included
+		serviceIdent, err := newServiceIdentifier(tx, serviceNameOrID, orgID)
+		if err != nil {
+			return fmt.Errorf("looking up service identifier failed: %w", err)
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
+			return cdnerrors.ErrForbidden
+		}
+
+		originGroups, err = selectOriginGroupsTx(tx, serviceIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to collect origin group rows: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("selectOriginGroups: transaction failed: %w", err)
+	}
+
+	return originGroups, nil
+}
+
+func selectOriginGroupsTx(tx pgx.Tx, serviceID pgtype.UUID) ([]cdntypes.OriginGroup, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		"SELECT id, default_group, name FROM service_origin_groups WHERE service_id = $1 ORDER BY name",
+		serviceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to select origin group rows: %w", err)
+	}
+
+	originGroups, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.OriginGroup])
+	if err != nil {
+		return nil, fmt.Errorf("unable to collect origin group rows: %w", err)
+	}
+
+	return originGroups, nil
 }
 
 func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
@@ -3599,6 +3843,12 @@ func insertService(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, or
 			return fmt.Errorf("unable to allocate service IPs: %w", err)
 		}
 
+		// Create a default origin group, this is the only time it is valid to make it the default group
+		_, err = insertOriginGroupTx(tx, serviceID, true, "default")
+		if err != nil {
+			return fmt.Errorf("insertService: unable to create default origin group: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -3679,50 +3929,56 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 	rows, err := dbPool.Query(
 		context.Background(),
 		`SELECT
-                               orgs.id AS org_id,
-                               services.id AS service_id,
-                               services.uid_range,
-                               service_versions.id AS service_version_id,
-                               service_versions.version,
-                               service_versions.active,
-                               service_vcls.vcl_recv,
-                               service_vcls.vcl_pipe,
-                               service_vcls.vcl_pass,
-                               service_vcls.vcl_hash,
-                               service_vcls.vcl_purge,
-                               service_vcls.vcl_miss,
-                               service_vcls.vcl_hit,
-                               service_vcls.vcl_deliver,
-                               service_vcls.vcl_synth,
-                               service_vcls.vcl_backend_fetch,
-                               service_vcls.vcl_backend_response,
-                               service_vcls.vcl_backend_error,
-                               agg_service_ip_addresses.service_ip_addresses,
-                               agg_domains.domains,
-                               agg_origins.origins
-                       FROM
-                               orgs
-                               JOIN services ON orgs.id = services.org_id
-                               JOIN service_versions ON services.id = service_versions.service_id
-                               JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
-			       JOIN (
-					SELECT service_id, array_agg(address ORDER BY address) as service_ip_addresses
-					FROM service_ip_addresses
-                                        GROUP BY service_id
-				) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
-                               JOIN (
-                                       SELECT service_version_id, array_agg(domains.name ORDER BY domains.name) AS domains
-                                       FROM service_domains
-				       JOIN domains ON service_domains.domain_id = domains.id
-				       WHERE domains.verified = true
-                                       GROUP BY service_version_id
-                               ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
-                               JOIN (
-                                       SELECT service_version_id, array_agg((host, port, tls, verify_tls) ORDER BY host, port) AS origins
-                                       FROM service_origins
-                                       GROUP BY service_version_id
-                               ) AS agg_origins ON agg_origins.service_version_id = service_versions.id
-                       ORDER BY orgs.name`,
+		       orgs.id AS org_id,
+		       services.id AS service_id,
+		       services.uid_range,
+		       service_versions.id AS service_version_id,
+		       service_versions.version,
+		       service_versions.active,
+		       service_vcls.vcl_recv,
+		       service_vcls.vcl_pipe,
+		       service_vcls.vcl_pass,
+		       service_vcls.vcl_hash,
+		       service_vcls.vcl_purge,
+		       service_vcls.vcl_miss,
+		       service_vcls.vcl_hit,
+		       service_vcls.vcl_deliver,
+		       service_vcls.vcl_synth,
+		       service_vcls.vcl_backend_fetch,
+		       service_vcls.vcl_backend_response,
+		       service_vcls.vcl_backend_error,
+		       agg_service_ip_addresses.service_ip_addresses,
+		       agg_domains.domains,
+		       agg_origins.origins,
+		       agg_service_origin_groups.origin_groups
+	       FROM
+		       orgs
+		       JOIN services ON orgs.id = services.org_id
+		       JOIN service_versions ON services.id = service_versions.service_id
+		       JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
+		       JOIN (
+				SELECT service_id, array_agg(address ORDER BY address) as service_ip_addresses
+				FROM service_ip_addresses
+				GROUP BY service_id
+			) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
+		       JOIN (
+			       SELECT service_version_id, array_agg(domains.name ORDER BY domains.name) AS domains
+			       FROM service_domains
+			       JOIN domains ON service_domains.domain_id = domains.id
+			       WHERE domains.verified = true
+			       GROUP BY service_version_id
+		       ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
+		       JOIN (
+			       SELECT service_version_id, array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port) AS origins
+			       FROM service_origins
+			       GROUP BY service_version_id
+		       ) AS agg_origins ON agg_origins.service_version_id = service_versions.id
+		       JOIN (
+				SELECT service_id, array_agg((id, default_group, name) ORDER BY name) as origin_groups
+				FROM service_origin_groups
+				GROUP BY service_id
+			) AS agg_service_origin_groups ON agg_service_origin_groups.service_id = services.id
+	       ORDER BY orgs.name`,
 	)
 	if err != nil {
 		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config as superuser: %w", err)
@@ -3739,6 +3995,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 	var serviceVersionActive bool
 	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
 	var domains []cdntypes.DomainString
+	var originGroups []cdntypes.OriginGroup
 	var origins []cdntypes.Origin
 	_, err = pgx.ForEachRow(
 		rows,
@@ -3764,6 +4021,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 			&serviceIPAddresses,
 			&domains,
 			&origins,
+			&originGroups,
 		},
 		func() error {
 			if _, orgExists := cnc.Orgs[orgID.String()]; !orgExists {
@@ -3791,6 +4049,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 			vcl, err := generateCompleteVcl(
 				confTemplates.vcl,
 				serviceIPAddresses,
+				originGroups,
 				origins,
 				domains,
 				cdntypes.VclSteps{
@@ -3811,7 +4070,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
 
-			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, origins)
+			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, originGroups, origins)
 			if err != nil {
 				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
 			}
@@ -3874,21 +4133,21 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData) (cdntypes.
 		rows, err = tx.Query(
 			context.Background(),
 			`SELECT
-				service_versions.service_id,
-				( SELECT
-					array_agg(address)
-					FROM service_ip_addresses
-					WHERE service_ip_addresses.service_id = service_versions.service_id
-				) AS service_ip_addresses,
-				( SELECT
-					array_agg(tls)
-					FROM service_origins
-					WHERE service_origins.service_version_id = service_versions.id
-				) AS origin_tls_status
-				FROM service_versions
-				WHERE service_versions.active=true
-				ORDER BY service_versions.service_id
-                `,
+			service_versions.service_id,
+			( SELECT
+				array_agg(address)
+				FROM service_ip_addresses
+				WHERE service_ip_addresses.service_id = service_versions.service_id
+			) AS service_ip_addresses,
+			( SELECT
+				array_agg(tls)
+				FROM service_origins
+				WHERE service_origins.service_version_id = service_versions.id
+			) AS origin_tls_status
+			FROM service_versions
+			WHERE service_versions.active=true
+			ORDER BY service_versions.service_id
+	`,
 		)
 		if err != nil {
 			return fmt.Errorf("unable to select active service IP info: %w", err)
@@ -4040,47 +4299,52 @@ func getServiceVersionConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgName
 		rows, err := tx.Query(
 			context.Background(),
 			`SELECT
-				orgs.id AS org_id,
-				orgs.name AS org_name,
-				services.id AS service_id,
-				services.name AS service_name,
-				service_versions.id,
-				service_versions.version,
-				service_versions.active,
-				service_vcls.vcl_recv,
-				service_vcls.vcl_pipe,
-				service_vcls.vcl_pass,
-				service_vcls.vcl_hash,
-				service_vcls.vcl_purge,
-				service_vcls.vcl_miss,
-				service_vcls.vcl_hit,
-				service_vcls.vcl_deliver,
-				service_vcls.vcl_synth,
-				service_vcls.vcl_backend_fetch,
-				service_vcls.vcl_backend_response,
-				service_vcls.vcl_backend_error,
-				(SELECT
-					array_agg(address ORDER BY address)
-					FROM service_ip_addresses
-					WHERE service_id = services.id
-				) AS service_ip_addresses,
-				(SELECT
-					array_agg(domains.name ORDER BY domains.name)
-					FROM domains
-					JOIN service_domains ON service_domains.domain_id = domains.id
-					WHERE domains.verified = true AND service_version_id = service_versions.id
-				) AS domains,
-				(SELECT
-					array_agg((host, port, tls, verify_tls) ORDER BY host, port)
-					FROM service_origins
-					WHERE service_version_id = service_versions.id
-				) AS origins
-			FROM
-				orgs
-				JOIN services ON orgs.id = services.org_id
-				JOIN service_versions ON services.id = service_versions.service_id
-				JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
-			WHERE services.id=$1 AND service_versions.version=$2`,
+			orgs.id AS org_id,
+			orgs.name AS org_name,
+			services.id AS service_id,
+			services.name AS service_name,
+			service_versions.id,
+			service_versions.version,
+			service_versions.active,
+			service_vcls.vcl_recv,
+			service_vcls.vcl_pipe,
+			service_vcls.vcl_pass,
+			service_vcls.vcl_hash,
+			service_vcls.vcl_purge,
+			service_vcls.vcl_miss,
+			service_vcls.vcl_hit,
+			service_vcls.vcl_deliver,
+			service_vcls.vcl_synth,
+			service_vcls.vcl_backend_fetch,
+			service_vcls.vcl_backend_response,
+			service_vcls.vcl_backend_error,
+			(SELECT
+				array_agg(address ORDER BY address)
+				FROM service_ip_addresses
+				WHERE service_id = services.id
+			) AS service_ip_addresses,
+			(SELECT
+				array_agg(domains.name ORDER BY domains.name)
+				FROM domains
+				JOIN service_domains ON service_domains.domain_id = domains.id
+				WHERE domains.verified = true AND service_version_id = service_versions.id
+			) AS domains,
+			(SELECT
+				array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port)
+				FROM service_origins
+				WHERE service_version_id = service_versions.id
+			) AS origins,
+			(SELECT
+				array_agg((id, default_group, name) ORDER BY name)
+				FROM service_origin_groups
+				WHERE service_id = services.id
+			) AS origin_groups
+		FROM
+			orgs
+			JOIN services ON orgs.id = services.org_id
+			JOIN service_versions ON services.id = service_versions.service_id
+			JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
+		WHERE services.id=$1 AND service_versions.version=$2`,
 			serviceIdent.id,
 			version,
 		)
@@ -4120,7 +4384,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	var found bool
 	err := tx.QueryRow(
 		context.Background(),
-		"SELECT TRUE FROM service_versions WHERE service_id=$1 AND active=true",
+		"SELECT TRUE FROM service_versions WHERE service_id=$1 AND active=true FOR UPDATE",
 		serviceIdent.id,
 	).Scan(&found)
 	if err != nil {
@@ -4211,8 +4475,9 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 		var serviceOriginID pgtype.UUID
 		err = tx.QueryRow(
 			context.Background(),
-			"INSERT INTO service_origins (service_version_id, host, port, tls, verify_tls) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+			"INSERT INTO service_origins (service_version_id, origin_group_id, host, port, tls, verify_tls) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
 			serviceVersionID,
+			origin.OriginGroupID,
 			origin.Host,
 			origin.Port,
 			origin.TLS,
@@ -4228,34 +4493,34 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	err = tx.QueryRow(
 		context.Background(),
 		`INSERT INTO service_vcls (
-			service_version_id,
-			vcl_recv,
-			vcl_pipe,
-			vcl_pass,
-			vcl_hash,
-			vcl_purge,
-			vcl_miss,
-			vcl_hit,
-			vcl_deliver,
-			vcl_synth,
-			vcl_backend_fetch,
-			vcl_backend_response,
-			vcl_backend_error
-		) VALUES (
-			$1,
-			$2,
-			$3,
-			$4,
-			$5,
-			$6,
-			$7,
-			$8,
-			$9,
-			$10,
-			$11,
-			$12,
-			$13
-		) RETURNING id`,
+		service_version_id,
+		vcl_recv,
+		vcl_pipe,
+		vcl_pass,
+		vcl_hash,
+		vcl_purge,
+		vcl_miss,
+		vcl_hit,
+		vcl_deliver,
+		vcl_synth,
+		vcl_backend_fetch,
+		vcl_backend_response,
+		vcl_backend_error
+	) VALUES (
+		$1,
+		$2,
+		$3,
+		$4,
+		$5,
+		$6,
+		$7,
+		$8,
+		$9,
+		$10,
+		$11,
+		$12,
+		$13
+	) RETURNING id`,
 		serviceVersionID,
 		vcls.VclRecv,
 		vcls.VclPipe,
@@ -4287,7 +4552,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	return res, nil
 }
 
-func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, inputOrigins []cdntypes.InputOrigin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -4296,25 +4561,9 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 		}
 	}
 
-	err := vclValidator.validateServiceVersionConfig(
-		dbPool,
-		logger,
-		confTemplates,
-		orgNameOrID,
-		serviceNameOrID,
-		cdntypes.InputServiceVersion{
-			VclSteps: vcls,
-			Origins:  origins,
-			Domains:  domains,
-		},
-	)
-	if err != nil {
-		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
-	}
-
 	var serviceVersionResult serviceVersionInsertResult
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
@@ -4330,9 +4579,57 @@ func insertServiceVersion(logger *zerolog.Logger, confTemplates configTemplates,
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying to add a version to
 		if !ad.Superuser {
-			if *ad.OrgID != orgIdent.id {
+			if *ad.OrgID != serviceIdent.orgID {
 				return cdnerrors.ErrForbidden
 			}
+		}
+
+		// If someone is submitting data to create a new service version it
+		// will not contain what addresses have been allocated to the
+		// service, so we need to enrich the submitted data with this
+		// information in order to be able to construct a complete VCL for
+		// validation.
+		var serviceIPAddrs []netip.Addr
+		err = tx.QueryRow(
+			context.Background(),
+			"SELECT array_agg(address ORDER BY address) AS service_ip_addresses FROM service_ip_addresses WHERE service_id = $1",
+			serviceIdent.id,
+		).Scan(&serviceIPAddrs)
+		if err != nil {
+			logger.Err(err).Msg("looking up service IPs failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// We also need to validate/convert input origin groups
+		origins, err := validateInputOrigins(tx, inputOrigins, serviceIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("validating input origins")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		originGroups, err := selectOriginGroupsTx(tx, serviceIdent.id)
+		if err != nil {
+			logger.Err(err).Msg("looking up origin groups failed")
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// It is not optimal to do network connections while holding a
+		// database transaction open, but it is either this or duplicating
+		// lookups to fill in stuff and the idea is that the validator
+		// software is running on the same host as the manager.
+		err = vclValidator.validateServiceVersionConfig(
+			confTemplates,
+			cdntypes.InputServiceVersion{
+				VclSteps: vcls,
+				Origins:  origins,
+				Domains:  domains,
+			},
+			serviceIPAddrs,
+			originGroups,
+			origins,
+		)
+		if err != nil {
+			return fmt.Errorf("VCL validation failed: %w", err)
 		}
 
 		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls)
@@ -4374,7 +4671,7 @@ func activateServiceVersion(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool
 		// If the user is not a superuser they must belong to the same
 		// org as the service they are trying activate a version for
 		if !ad.Superuser {
-			if *ad.OrgID != orgIdent.id {
+			if *ad.OrgID != serviceIdent.orgID {
 				return cdnerrors.ErrForbidden
 			}
 		}
@@ -4412,40 +4709,103 @@ func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version
 }
 
 type varnishVCLInput struct {
-	VCLVersion   string
-	Modules      []string
-	Domains      []cdntypes.DomainString
-	HTTPSEnabled bool
-	HTTPEnabled  bool
-	ServiceIPv4  netip.Addr
-	VCLSteps     cdntypes.VclSteps
+	VCLVersion             string
+	Modules                []string
+	DefaultOriginGroupName string
+	OriginGroups           []enrichedOriginGroup
+	Domains                []cdntypes.DomainString
+	DefaultForHTTPS        bool
+	DefaultForHTTP         bool
+	HTTPSEnabled           bool
+	HTTPEnabled            bool
+	ServiceIPv4            netip.Addr
+	VCLSteps               cdntypes.VclSteps
 }
 
-func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclSteps cdntypes.VclSteps) (string, error) {
+// Make it easier to generate varnish configuration
+type enrichedOriginGroup struct {
+	cdntypes.OriginGroup
+	HTTP  bool
+	HTTPS bool
+}
+
+func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclSteps cdntypes.VclSteps) (string, error) {
 	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
 	if err != nil {
 		return "", errors.New("no IPv4 address allocated to service")
 	}
 
+	// If we blindly add all existing origin groups to the varnish
+	// configuration it will fail to load:
+	// ===
+	// Unused backend haproxy_http_origin-group-2, defined:
+	// ('/tmp/vcl-content2391245548' Line 11 Pos 9)
+	// backend haproxy_http_origin-group-2 {
+	// --------###########################--
+	//
+	// Running VCC-compiler failed, exited with 2
+	// VCL compilation failed
+	// ===
+	// ... so filter out any groups not referenced by origins
+	originGroupIDs := map[pgtype.UUID][]cdntypes.Origin{}
+	for _, origin := range origins {
+		originGroupIDs[origin.OriginGroupID] = append(originGroupIDs[origin.OriginGroupID], origin)
+	}
+
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
-	for _, origin := range origins {
-		// If both have been found we do not need to look at more
-		// backends
-		if haProxyHTTP && haProxyHTTPS {
-			break
-		}
 
-		if origin.TLS {
-			haProxyHTTPS = true
-		} else {
-			haProxyHTTP = true
+	// Detect if there is a default origin group to send requests to
+	// without user having to set explicit req.backend_hint config.
+	defaultForHTTP := false
+	defaultForHTTPS := false
+	referencedOriginGroups := []enrichedOriginGroup{}
+	for _, originGroup := range originGroups {
+		if origins, ok := originGroupIDs[originGroup.ID]; ok {
+			groupHasHTTPS := false
+			groupHasHTTP := false
+			for _, origin := range origins {
+				if origin.TLS {
+					haProxyHTTPS = true
+					groupHasHTTPS = true
+					// We need to know if we should include default VCL for
+					// forwarding, this is only done if the at least one
+					// origin belongs to the default origin group.
+					if originGroup.DefaultGroup {
+						defaultForHTTPS = true
+					}
+				} else {
+					haProxyHTTP = true
+					groupHasHTTP = true
+					if originGroup.DefaultGroup {
+						defaultForHTTP = true
+					}
+				}
+			}
+			referencedOriginGroups = append(
+				referencedOriginGroups,
+				enrichedOriginGroup{
+					OriginGroup: originGroup,
+					HTTP:        groupHasHTTP,
+					HTTPS:       groupHasHTTPS,
+				},
+			)
 		}
 	}
-
 	if !haProxyHTTP && !haProxyHTTPS {
 		return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
+	}
+
+	// Find the name of the default origin group
+	defaultOriginGroup := ""
+	for _, originGroup := range originGroups {
+		if originGroup.DefaultGroup {
+			defaultOriginGroup = originGroup.Name
+		}
+	}
+	if defaultOriginGroup == "" {
+		return "", fmt.Errorf("unable to find default origin group name, this is unexpected")
 	}
 
 	vvc := varnishVCLInput{
@@ -4454,11 +4814,15 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 			"std",
 			"proxy",
 		},
-		Domains:      domains,
-		ServiceIPv4:  serviceIPv4Address,
-		HTTPSEnabled: haProxyHTTPS,
-		HTTPEnabled:  haProxyHTTP,
-		VCLSteps:     vclSteps,
+		OriginGroups:           referencedOriginGroups,
+		DefaultOriginGroupName: defaultOriginGroup,
+		Domains:                domains,
+		ServiceIPv4:            serviceIPv4Address,
+		DefaultForHTTPS:        defaultForHTTPS,
+		DefaultForHTTP:         defaultForHTTP,
+		HTTPSEnabled:           haProxyHTTPS,
+		HTTPEnabled:            haProxyHTTP,
+		VCLSteps:               vclSteps,
 	}
 
 	var b strings.Builder
@@ -4472,30 +4836,71 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 }
 
 type haproxyConfInput struct {
+	OriginGroups   []enrichedOriginGroup
 	Origins        []cdntypes.Origin
 	HTTPSEnabled   bool
 	HTTPEnabled    bool
 	AddressStrings []string
 }
 
-func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, origins []cdntypes.Origin) (string, error) {
+func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) (string, error) {
+	//// Detect what haproxy backends should be present
+	//haProxyHTTP := false
+	//haProxyHTTPS := false
+	//for _, origin := range origins {
+	//	// If both have been found we do not need to look at more
+	//	// backends
+	//	if haProxyHTTP && haProxyHTTPS {
+	//		break
+	//	}
+
+	//	if origin.TLS {
+	//		haProxyHTTPS = true
+	//	} else {
+	//		haProxyHTTP = true
+	//	}
+	//}
+
+	//if !haProxyHTTP && !haProxyHTTPS {
+	//	return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
+	//}
+
+	// Get a list of all origin groups that are actually referenced by
+	// origins, we do the same for varnish where it is required but might
+	// as well do it here so the config only contains exactly what is
+	// needed.
+	originGroupIDs := map[pgtype.UUID][]cdntypes.Origin{}
+	for _, origin := range origins {
+		originGroupIDs[origin.OriginGroupID] = append(originGroupIDs[origin.OriginGroupID], origin)
+	}
+
 	// Detect what haproxy backends should be present
 	haProxyHTTP := false
 	haProxyHTTPS := false
-	for _, origin := range origins {
-		// If both have been found we do not need to look at more
-		// backends
-		if haProxyHTTP && haProxyHTTPS {
-			break
-		}
-
-		if origin.TLS {
-			haProxyHTTPS = true
-		} else {
-			haProxyHTTP = true
+	referencedOriginGroups := []enrichedOriginGroup{}
+	for _, originGroup := range originGroups {
+		if origins, ok := originGroupIDs[originGroup.ID]; ok {
+			groupHasHTTPS := false
+			groupHasHTTP := false
+			for _, origin := range origins {
+				if origin.TLS {
+					haProxyHTTPS = true
+					groupHasHTTPS = true
+				} else {
+					haProxyHTTP = true
+					groupHasHTTP = true
+				}
+			}
+			referencedOriginGroups = append(
+				referencedOriginGroups,
+				enrichedOriginGroup{
+					OriginGroup: originGroup,
+					HTTP:        groupHasHTTP,
+					HTTPS:       groupHasHTTPS,
+				},
+			)
 		}
 	}
-
 	if !haProxyHTTP && !haProxyHTTPS {
 		return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
 	}
@@ -4514,6 +4919,7 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	}
 
 	hci := haproxyConfInput{
+		OriginGroups:   referencedOriginGroups,
 		Origins:        origins,
 		AddressStrings: addressStrings,
 		HTTPSEnabled:   haProxyHTTPS,
@@ -4638,7 +5044,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
 		// htmx helpers
-		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler())
+		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbPool, cookieStore))
 		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbPool, cookieStore))
 	})
 
@@ -5317,7 +5723,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					cdntypes.VclSteps
 					Org     string                  `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
 					Domains []cdntypes.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins []cdntypes.Origin       `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Origins []cdntypes.InputOrigin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 					Active  bool                    `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 				}
 			},
@@ -5421,7 +5827,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.ServiceIPAddresses, svc.Origins, svc.Domains, svc.VclSteps)
+			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.ServiceIPAddresses, svc.OriginGroups, svc.Origins, svc.Domains, svc.VclSteps)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
@@ -5437,6 +5843,80 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			}
 			return resp, nil
 		})
+
+		huma.Get(api, "/v1/services/{service}/origin-groups", func(ctx context.Context, input *struct {
+			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+		},
+		) (*originGroupsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from origin-groups GET handler")
+			}
+
+			originGroups, err := selectOriginGroups(dbPool, ad, input.Service, input.Org)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
+				}
+				logger.Err(err).Msg("unable to query origin-groups")
+				return nil, err
+			}
+
+			resp := &originGroupsOutput{
+				Body: originGroups,
+			}
+			return resp, nil
+		})
+
+		postOriginGroupsPath := "/v1/services/{service}/origin-groups"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postOriginGroupsPath, &originGroupOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postOriginGroupsPath, &originGroupOutput{}),
+				Method:        http.MethodPost,
+				Path:          postOriginGroupsPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
+				Org     string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+				Body    struct {
+					Name string `json:"name" example:"myname" doc:"name of origin group" minLength:"1" maxLength:"63"`
+				}
+			},
+			) (*originGroupOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from origin group POST handler")
+				}
+
+				originGroup, err := insertOriginGroup(logger, ad, dbPool, input.Service, input.Org, input.Body.Name)
+				if err != nil {
+					switch {
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
+						return nil, huma.Error422UnprocessableEntity("unable to parse request to add origin group")
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("origin group already exists")
+					case errors.Is(err, cdnerrors.ErrForbidden):
+						return nil, huma.Error403Forbidden("not allowed to create this origin group")
+					}
+					logger.Err(err).Msg("unable to add origin group")
+					return nil, err
+				}
+				resp := &originGroupOutput{}
+				resp.Body = originGroup
+				return resp, nil
+			},
+		)
 
 		huma.Get(api, "/v1/cache-node-configs", func(ctx context.Context, _ *struct{},
 		) (*cacheNodeConfigOutput, error) {
@@ -5762,6 +6242,14 @@ type cacheNodeConfigOutput struct {
 
 type serviceVersionsOutput struct {
 	Body []cdntypes.ServiceVersion
+}
+
+type originGroupsOutput struct {
+	Body []cdntypes.OriginGroup
+}
+
+type originGroupOutput struct {
+	Body cdntypes.OriginGroup
 }
 
 type ipNetwork struct {

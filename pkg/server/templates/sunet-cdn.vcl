@@ -3,19 +3,27 @@ vcl {{.VCLVersion}};
 import {{.}};
 {{- end }}
 
-{{- if .HTTPSEnabled}}
-backend haproxy_https {
-  .path = "/shared/unix-sockets/haproxy_https";
-  .proxy_header = 2;
-}
-{{ end}}
+# Set default backend to special "none" which will always fail (503). This way
+# we will not accidentally fall back to "first backend found in the vcl" which
+# could lead to confusing results. This requires the VCL to always explicitly
+# set req.backend_hint for things to work.
+backend default none;
 
-{{- if .HTTPEnabled}}
-backend haproxy_http {
-  .path = "/shared/unix-sockets/haproxy_http";
+# Origin group backends
+{{- range $originGroup := $.OriginGroups }}
+{{- if $originGroup.HTTPS }}
+backend {{$originGroup.Name}}_https {
+  .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_https";
   .proxy_header = 2;
 }
-{{ end}}
+{{- end}}
+{{- if $originGroup.HTTP }}
+backend {{$originGroup.Name}}_http {
+  .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_http";
+  .proxy_header = 2;
+}
+{{- end}}
+{{- end}}
 
 sub vcl_recv {
   if ({{ range $index, $domain := $.Domains }}{{if gt $index 0}} && {{end}}req.http.host != "{{$domain}}"{{end}}) {
@@ -24,14 +32,18 @@ sub vcl_recv {
   if (proxy.is_ssl()) {
     {{- if .HTTPSEnabled}}
     set req.http.X-Forwarded-Proto = "https";
-    set req.backend_hint = haproxy_https;
+    {{- if .DefaultForHTTPS}}
+    set req.backend_hint = {{$.DefaultOriginGroupName}}_https;
+    {{- end}}
     {{- else}}
     return(synth(400,"HTTPS request but no HTTPS origin available."));
     {{- end}}
   } else {
     {{- if .HTTPEnabled}}
     set req.http.X-Forwarded-Proto = "http";
-    set req.backend_hint = haproxy_http;
+    {{- if $.DefaultForHTTP}}
+    set req.backend_hint = {{$.DefaultOriginGroupName}}_http;
+    {{- end}}
     {{- else}}
     return(synth(400,"HTTP request but no HTTP origin available."));
     {{- end}}
