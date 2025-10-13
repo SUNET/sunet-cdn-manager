@@ -18,8 +18,8 @@ https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATTERNS
 
 If running macOS the following can be done prior to running tests:
 ```
-brew install postgresql@17
-export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+brew install postgresql@18
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
 ```
 
 Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
