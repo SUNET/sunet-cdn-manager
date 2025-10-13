@@ -14,6 +14,9 @@ curl -k -i -u admin:$admin_password -X POST -d @sample-json/create-org.json -H "
 # Assign a domain to the org (this will make the manager start looking for a verification TXT record for that name):
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-domain.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/domains?org=testorg'
 
+# Create a service in the org
+curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-service.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/services'
+
 # Create a local "node-user-1" user with the "node" role used by nodes fetching config:
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-node-user.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users
 
@@ -25,3 +28,6 @@ curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-cache-node.json 
 
 # A cache node will be added in maintenance mode by default (can be overriden in JSON on creation), to disable maintenance mode:
 curl -k -i -s -u admin:$admin_password -X PUT -d @sample-json/disable-maintenance.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/cache-nodes/example-name-for-cache-node/maintenance
+
+# Add additional origin group, this is used to be able to select different backend groups from varnish VCL
+curl -k -i -s -u admin:$admin_password -X POST -d @sample-json/add-origin-group.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/services/service1/origin-groups?org=testorg'
