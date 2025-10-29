@@ -5,3 +5,4 @@ local-dev/sample-json/*.json.tmp
 local-dev/keycloak/generated
 local-dev/satosa/generated
 local-dev/generated
+dist/
