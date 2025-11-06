@@ -6692,6 +6692,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		pgConfig.ConnConfig.TLSConfig = &tls.Config{
 			RootCAs:    psqlCACertPool,
 			MinVersion: tls.VersionTLS13,
+			ServerName: conf.DB.Host,
 		}
 	}
 
