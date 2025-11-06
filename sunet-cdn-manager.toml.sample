@@ -9,6 +9,7 @@ password = "password"
 host = "127.0.0.1"
 port = 5432
 sslmode = "verify-full"
+ca_cert_filename = ""
 
 [oidc]
 issuer = "https://keycloak.sunet-cdn.localhost:8443/realms/sunet-cdn-manager"
