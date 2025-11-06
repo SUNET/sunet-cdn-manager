@@ -1,7 +1,11 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -79,6 +83,21 @@ func GetConfig() (Config, error) {
 	return conf, nil
 }
 
+func certPoolFromFile(fileName string) (*x509.CertPool, error) {
+	fileName = filepath.Clean(fileName)
+	cert, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("certPoolFromFile: unable to read file: %w", err)
+	}
+	certPool := x509.NewCertPool()
+	ok := certPool.AppendCertsFromPEM(cert)
+	if !ok {
+		return nil, fmt.Errorf("certPoolFromFile: failed to append certs from PEM file '%s'", fileName)
+	}
+
+	return certPool, nil
+}
+
 func (conf Config) PGConfig() (*pgxpool.Config, error) {
 	pgConfigString := fmt.Sprintf(
 		"user=%s password=%s host=%s port=%d dbname=%s sslmode=%s",
@@ -93,6 +112,20 @@ func (conf Config) PGConfig() (*pgxpool.Config, error) {
 	pgConfig, err := pgxpool.ParseConfig(pgConfigString)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse PostgreSQL config string: %w", err)
+	}
+
+	if conf.DB.CACertFilename != "" {
+		// Setup CA cert for validating the postgresql server connection
+		psqlCACertPool, err := certPoolFromFile(conf.DB.CACertFilename)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CA cert pool for PostgreSQL: %w", err)
+		}
+
+		pgConfig.ConnConfig.TLSConfig = &tls.Config{
+			RootCAs:    psqlCACertPool,
+			MinVersion: tls.VersionTLS13,
+			ServerName: conf.DB.Host,
+		}
 	}
 
 	return pgConfig, nil

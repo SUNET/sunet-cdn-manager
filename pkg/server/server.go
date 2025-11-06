@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
-	"crypto/x509"
 	"embed"
 	"encoding/base64"
 	"encoding/gob"
@@ -21,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -6641,21 +6639,6 @@ type configTemplates struct {
 	haproxy *template.Template
 }
 
-func certPoolFromFile(fileName string) (*x509.CertPool, error) {
-	fileName = filepath.Clean(fileName)
-	cert, err := os.ReadFile(fileName)
-	if err != nil {
-		return nil, fmt.Errorf("certPoolFromFile: unable to read file: %w", err)
-	}
-	certPool := x509.NewCertPool()
-	ok := certPool.AppendCertsFromPEM(cert)
-	if !ok {
-		return nil, fmt.Errorf("certPoolFromFile: failed to append certs from PEM file '%s'", fileName)
-	}
-
-	return certPool, nil
-}
-
 func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -6677,23 +6660,6 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 	pgConfig, err := conf.PGConfig()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to parse PostgreSQL config string")
-	}
-
-	// Leaving this nil will use the OS default CA certs
-	var psqlCACertPool *x509.CertPool
-
-	if conf.DB.CACertFilename != "" {
-		// Setup CA cert for validating the postgresql server connection
-		psqlCACertPool, err = certPoolFromFile(conf.DB.CACertFilename)
-		if err != nil {
-			return fmt.Errorf("failed to create CA cert pool for PostgreSQL: %w", err)
-		}
-
-		pgConfig.ConnConfig.TLSConfig = &tls.Config{
-			RootCAs:    psqlCACertPool,
-			MinVersion: tls.VersionTLS13,
-			ServerName: conf.DB.Host,
-		}
 	}
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
