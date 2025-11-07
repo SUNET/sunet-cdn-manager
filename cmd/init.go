@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/server"
 	"github.com/spf13/cobra"
@@ -52,6 +54,10 @@ is present as well as creating an initial admin user and role for managing the c
 
 		u, err := server.Init(cdnLogger, pgConfig, encryptedSessionCookies, passwordText)
 		if err != nil {
+			if errors.Is(err, cdnerrors.ErrDatabaseInitialized) {
+				fmt.Println("database is already initialized, nothing to do")
+				return nil
+			}
 			return err
 		}
 

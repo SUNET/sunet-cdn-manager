@@ -7,6 +7,7 @@ import (
 
 // Errors that can be shared across the other packages
 var (
+	ErrDatabaseInitialized           = errors.New("database is already initialized")
 	ErrForbidden                     = errors.New("access to resource is not allowed")
 	ErrNotFound                      = errors.New("resource not found")
 	ErrUnprocessable                 = errors.New("resource not processable")

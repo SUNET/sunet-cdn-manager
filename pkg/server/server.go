@@ -6373,7 +6373,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		}
 
 		if rolesExists {
-			return fmt.Errorf("we do not expect there to be any roles, is the database already initialized?")
+			return cdnerrors.ErrDatabaseInitialized
 		}
 
 		// Because of the NOT NULL role_id required for users, if there are no
