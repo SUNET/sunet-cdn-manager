@@ -296,12 +296,12 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 				Origin group
 				<select id={ fmt.Sprintf("origins.%d.origin-group", index) } name={ fmt.Sprintf("origins.%d.origin-group", index) }>
 					{{
-					var originGroupCloneMatch bool
-					for _, originGroup := range originGroups {
-						if originGroup.ID == cloneOrigin.OriginGroupID {
-							originGroupCloneMatch = true
+						var originGroupCloneMatch bool
+						for _, originGroup := range originGroups {
+							if originGroup.ID == cloneOrigin.OriginGroupID {
+								originGroupCloneMatch = true
+							}
 						}
-					}
 					}}
 					for _, originGroup := range originGroups {
 						if originGroupCloneMatch {
@@ -319,11 +319,11 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 			<label for={ fmt.Sprintf("origins.%d.port", index) }>
 				Port
 				{{
-			originPortStr := ""
-			if cloneOrigin.Port != 0 {
-				originPortStr = strconv.Itoa(cloneOrigin.Port)
+					originPortStr := ""
+					if cloneOrigin.Port != 0 {
+						originPortStr = strconv.Itoa(cloneOrigin.Port)
 
-			}
+					}
 				}}
 				<input type="text" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr }/>
 			</label>
@@ -387,13 +387,13 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 							<label for={ fmt.Sprintf("domains.%d", i) }>
 								{ domain.Name }
 								{{
-							var precheck bool
-							for _, cloneDomain := range cloneData.Domains {
-								if string(cloneDomain) == domain.Name {
-									precheck = true
-									break
-								}
-							}
+									var precheck bool
+									for _, cloneDomain := range cloneData.Domains {
+										if string(cloneDomain) == domain.Name {
+											precheck = true
+											break
+										}
+									}
 								}}
 								<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
 							</label>
