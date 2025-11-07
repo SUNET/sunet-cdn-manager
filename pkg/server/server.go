@@ -6315,7 +6315,13 @@ type InitUser struct {
 	AuthProvider string
 }
 
-func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey bool) (InitUser, error) {
+func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey bool, password string) (InitUser, error) {
+	// Make some basic requirements of the password
+	minPasswordLen := 15
+	if len(password) < minPasswordLen {
+		return InitUser{}, fmt.Errorf("password too short, must be at least %d characters", minPasswordLen)
+	}
+
 	err := migrations.Up(logger, pgConfig)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to run initial migration: %w", err)
@@ -6326,11 +6332,6 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
-
-	password, err := generatePassword(30)
-	if err != nil {
-		return InitUser{}, fmt.Errorf("unable to generate password: %w", err)
-	}
 
 	// We get away with a local version of the argon2 mutex here because Init() is only called when first initializing the database, so there is no possibility of concurrent calls to argon2 calculations.
 	var initArgon2Mutex sync.Mutex

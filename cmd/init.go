@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/server"
@@ -30,12 +33,29 @@ is present as well as creating an initial admin user and role for managing the c
 			return err
 		}
 
-		u, err := server.Init(cdnLogger, pgConfig, encryptedSessionCookies)
+		initPasswordFile, err := cmd.Flags().GetString("init-password-file")
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("database is initialized\nuser: %s\npassword: %s\nencrypted session cookies: %t\n", u.Name, u.Password, encryptedSessionCookies)
+		initPasswordFile = filepath.Clean(initPasswordFile)
+		if initPasswordFile == "." {
+			return fmt.Errorf("you must supply a filename containing an initial password, see --init-password-file")
+		}
+
+		password, err := os.ReadFile(initPasswordFile)
+		if err != nil {
+			return err
+		}
+
+		passwordText := strings.TrimRight(string(password), "\r\n")
+
+		u, err := server.Init(cdnLogger, pgConfig, encryptedSessionCookies, passwordText)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("database is initialized using password from file '%s'\nuser: '%s'\nencrypted session cookies: %t\n", initPasswordFile, u.Name, encryptedSessionCookies)
 
 		return nil
 	},
@@ -53,4 +73,5 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	initCmd.Flags().BoolP("encrypted-session-cookies", "e", true, "if the initial session cookie key also includes encryption")
+	initCmd.Flags().String("init-password-file", "", "file containing initial password used for admin user, trailing newlines are stripped")
 }

@@ -485,13 +485,15 @@ func TestServerInit(t *testing.T) {
 
 	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
 
-	u, err := Init(logger, pgConfig, false)
+	initPassword := "test-server-init"
+
+	u, err := Init(logger, pgConfig, false, initPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	expectedUsername := "admin"
-	expectedPasswordLength := 30
+	expectedPasswordLength := len(initPassword)
 
 	if u.Name != expectedUsername {
 		t.Fatalf("expected initial user '%s', got: '%s'", expectedUsername, u.Name)
