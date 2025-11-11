@@ -6655,38 +6655,38 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 
 	conf, err := config.GetConfig()
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to get config")
+		return fmt.Errorf("unable to get config: %w", err)
 	}
 
 	pgConfig, err := conf.PGConfig()
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to parse PostgreSQL config string")
+		return fmt.Errorf("unable to parse PostgreSQL config string: %w", err)
 	}
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create database pool")
+		return fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
 
 	err = dbPool.Ping(context.Background())
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to ping database connection")
+		return fmt.Errorf("unable to ping database connection: %w", err)
 	}
 
 	// Verify that the database appears initialized by 'init' command
 	var rolesExists bool
 	err = dbPool.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to check for roles in the database, is it initialized? (see init command)")
+		return fmt.Errorf("unable to check for roles in the database, is it initialized? (see init command): %w", err)
 	}
 	if !rolesExists {
-		logger.Fatal().Msg("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
+		return errors.New("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
 	cookieStore, err := getSessionStore(logger, dbPool)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("getSessionStore failed")
+		return fmt.Errorf("getSessionStore failed: %w", err)
 	}
 
 	providerCtx := context.Background()
@@ -6701,12 +6701,12 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 
 	provider, err := oidc.NewProvider(providerCtx, conf.OIDC.Issuer)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("setting up OIDC provider failed")
+		return fmt.Errorf("setting up OIDC provider failed: %w", err)
 	}
 
 	vclValidationURL, err := url.Parse(conf.Server.VCLValidationURL)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("parsing VCL validation URL failed")
+		return fmt.Errorf("parsing VCL validation URL failed: %w", err)
 	}
 
 	vclValidator := newVclValidator(vclValidationURL)
@@ -6715,26 +6715,26 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 
 	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create varnish template")
+		return fmt.Errorf("unable to create varnish template: %w", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create haproxy template")
+		return fmt.Errorf("unable to create haproxy template: %w", err)
 	}
 
 	var argon2Mutex sync.Mutex
 
 	loginCache, err := lru.New[string, struct{}](128)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
+		return fmt.Errorf("unable to create LRU login cache: %w", err)
 	}
 
 	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to setup Huma API")
+		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
 
 	var wg sync.WaitGroup
@@ -6752,7 +6752,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		logger.Info().Str("cert_file", tlsCertFile).Str("key_file", tlsCertFile).Msg("ACME is disabled, using files for TLS")
 		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
 		if err != nil {
-			logger.Fatal().Err(err).Msg("failed to load key pair")
+			return fmt.Errorf("failed to load key pair: %w", err)
 		}
 		tlsConfig = &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -6790,7 +6790,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTPS listener")
 
 	if err := srv.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
-		logger.Fatal().Err(err).Msg("HTTPS server ListenAndServe failed")
+		return fmt.Errorf("HTTPS server ListenAndServe failed: %w", err)
 	}
 
 	<-idleConnsClosed
