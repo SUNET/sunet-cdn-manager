@@ -50,5 +50,9 @@ func Up(logger zerolog.Logger, pgConfig *pgxpool.Config) error {
 		return err
 	}
 
+	if err := db.Close(); err != nil {
+		return err
+	}
+
 	return nil
 }
