@@ -56,6 +56,7 @@ type certmagicSettings struct {
 	LetsEncryptProd bool     `mapstructure:"letsencrypt_prod"`
 	Email           string   `mapstructure:"email"`
 	Domains         []string `mapstructure:"domains"`
+	DataDir         string   `mapstructure:"data-dir"`
 }
 
 type acmeDNSConfig map[string]acmeDNSDomainSettings

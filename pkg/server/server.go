@@ -217,6 +217,14 @@ func setupACME(logger zerolog.Logger, conf config.Config) *tls.Config {
 	// provide an email address
 	certmagic.DefaultACME.Email = conf.CertMagic.Email
 
+	// Use custom data directory for cert storage if supplied
+	if conf.CertMagic.DataDir != "" {
+		logger.Info().Str("data-dir", conf.CertMagic.DataDir).Msg("using certmagic data dir from config")
+		certmagic.Default.Storage = &certmagic.FileStorage{
+			Path: conf.CertMagic.DataDir,
+		}
+	}
+
 	tlsConfig, err := certmagic.TLS(conf.CertMagic.Domains)
 	if err != nil {
 		logger.Fatal().

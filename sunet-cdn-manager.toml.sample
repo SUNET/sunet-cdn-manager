@@ -25,6 +25,7 @@ verify_interval = "2m"
 letsencrypt_prod = false
 email = "someone@example.com"
 domains = ["manager.cdn.example.com"]
+data-dir = ""
 
 [acmedns."manager.cdn.example.com"]
 username = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
