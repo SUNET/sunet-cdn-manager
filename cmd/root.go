@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	cfgFile   string
-	cdnLogger zerolog.Logger
+	cfgFile    string
+	cdnLogger  zerolog.Logger
+	localViper *viper.Viper
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -51,22 +52,6 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	if cfgFile != "" {
-		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
-	} else {
-		// Find home directory.
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		// Search config in home directory with name ".sunet-cdn-manager" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigType("toml")
-		viper.SetConfigName(".sunet-cdn-manager")
-	}
-
-	viper.AutomaticEnv() // read in environment variables that match
-
 	// We have config such as [acmedns."manager-test.cdn.sunet.se"]
 	// where the expected key is "manager-test.cdn.sunet.se". With the
 	// default viper delimiter of "." the key instead becomes just
@@ -75,12 +60,28 @@ func initConfig() {
 	// Solution to change delimiter found via
 	// https://github.com/spf13/viper/issues/1074, using "::" inspired by
 	// README at https://github.com/spf13/viper
-	viper.KeyDelimiter("::")
+	localViper = viper.NewWithOptions(viper.KeyDelimiter("::"))
+
+	if cfgFile != "" {
+		// Use config file from the flag.
+		localViper.SetConfigFile(cfgFile)
+	} else {
+		// Find home directory.
+		home, err := os.UserHomeDir()
+		cobra.CheckErr(err)
+
+		// Search config in home directory with name ".sunet-cdn-manager" (without extension).
+		localViper.AddConfigPath(home)
+		localViper.SetConfigType("toml")
+		localViper.SetConfigName(".sunet-cdn-manager")
+	}
+
+	localViper.AutomaticEnv() // read in environment variables that match
 
 	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		cdnLogger.Info().Str("filename", viper.ConfigFileUsed()).Msg("using config file")
+	if err := localViper.ReadInConfig(); err == nil {
+		cdnLogger.Info().Str("filename", localViper.ConfigFileUsed()).Msg("using config file")
 	} else {
-		cdnLogger.Fatal().Err(err).Str("filename", viper.ConfigFileUsed()).Msg("unable to read config file")
+		cdnLogger.Fatal().Err(err).Str("filename", localViper.ConfigFileUsed()).Msg("unable to read config file")
 	}
 }

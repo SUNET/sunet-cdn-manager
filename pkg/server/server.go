@@ -53,6 +53,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 	zlog "github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
 	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
@@ -6648,7 +6649,7 @@ type configTemplates struct {
 	haproxy *template.Template
 }
 
-func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
+func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -6661,7 +6662,7 @@ func Run(logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disab
 		cancel()
 	}(logger, cancel)
 
-	conf, err := config.GetConfig()
+	conf, err := config.GetConfig(localViper)
 	if err != nil {
 		return fmt.Errorf("unable to get config: %w", err)
 	}

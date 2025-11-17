@@ -69,9 +69,9 @@ type acmeDNSDomainSettings struct {
 	ServerURL  string `mapstructure:"server_url"`
 }
 
-func GetConfig() (Config, error) {
+func GetConfig(localViper *viper.Viper) (Config, error) {
 	var conf Config
-	err := viper.Unmarshal(&conf)
+	err := localViper.Unmarshal(&conf)
 	if err != nil {
 		return Config{}, fmt.Errorf("viper unable to decode into struct: %w", err)
 	}

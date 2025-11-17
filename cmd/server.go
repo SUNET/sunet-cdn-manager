@@ -44,7 +44,7 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
-		err = server.Run(cdnLogger, devMode, shutdownDelay, disableDomainVerification, disableAcme, tlsCertFile, tlsKeyFile)
+		err = server.Run(localViper, cdnLogger, devMode, shutdownDelay, disableDomainVerification, disableAcme, tlsCertFile, tlsKeyFile)
 		if err != nil {
 			cdnLogger.Fatal().Err(err).Msg("unable to start")
 		}

@@ -20,7 +20,7 @@ var initCmd = &cobra.Command{
 	Long: `Initialize the database for use by the system, making sure the database structure
 is present as well as creating an initial admin user and role for managing the contents.`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		conf, err := config.GetConfig()
+		conf, err := config.GetConfig(localViper)
 		if err != nil {
 			return err
 		}
