@@ -67,6 +67,16 @@ func initConfig() {
 
 	viper.AutomaticEnv() // read in environment variables that match
 
+	// We have config such as [acmedns."manager-test.cdn.sunet.se"]
+	// where the expected key is "manager-test.cdn.sunet.se". With the
+	// default viper delimiter of "." the key instead becomes just
+	// "manager-test".
+	//
+	// Solution to change delimiter found via
+	// https://github.com/spf13/viper/issues/1074, using "::" inspired by
+	// README at https://github.com/spf13/viper
+	viper.KeyDelimiter("::")
+
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
 		cdnLogger.Info().Str("filename", viper.ConfigFileUsed()).Msg("using config file")
