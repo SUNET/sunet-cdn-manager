@@ -70,7 +70,7 @@ xmlstarlet ed \
     -s '$SECURITY_PERSON' -t attr -n 'contactType' -v 'other' \
     -s '$SECURITY_PERSON' -t attr -n 'remd:contactType' -v 'http://refeds.org/metadata/contactType/security' \
     -s '$SECURITY_PERSON' -t elem -n ns0:GivenName -v 'Security' \
-    -s '$SECURITY_PERSON' -t elem -n ns0:EmailAddress -v 'mailto:abuse@sunet.se' \
+    -s '$SECURITY_PERSON' -t elem -n ns0:EmailAddress -v 'mailto:cert@cert.sunet.se' \
     -s /ns0:EntityDescriptor -t attr -n xmlns:mdui -v "urn:oasis:names:tc:SAML:metadata:ui" \
     -s /ns0:EntityDescriptor/ns0:SPSSODescriptor/ns0:Extensions -t elem -n mdui:UIInfo --var UUINFO '$prev' \
     -s '$UUINFO' -t elem -n mdui:Description -v "$DESCRIPTION" \
