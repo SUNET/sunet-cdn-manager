@@ -2,6 +2,10 @@
 This is the SUNET CDN manager server which serves an API and UI for
 configuring the CDN service.
 
+The configuration is picked up by
+[sunet-cdn-agent](https://github.com/SUNET/sunet-cdn-agent) running on actual
+`l4lb` or `cache` machines.
+
 ## Development
 ### Updating the web console
 The project uses [templ](https://templ.guide) for generating HTML.
