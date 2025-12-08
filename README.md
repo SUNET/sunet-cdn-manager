@@ -105,9 +105,10 @@ https://metadata.qa.swamid.se, for `Select Organization for entity` choose
 `Sunet` and click `Connect`.
 
 #### Setup sunet-cdn-manager
-Initialize the sunet-cdn-manager database (this will print out a superuser username and password):
+Initialize the sunet-cdn-manager database by supplying an init secret used for the superuser password:
 ```
-go run . --config sunet-cdn-manager-dev.toml init
+pwgen -s 30 1 > admin.password
+go run . --config sunet-cdn-manager-dev.toml init --init-password-file admin.password
 ```
 
 Start the server in development mode (disables TLS validation etc) and skip
@@ -118,7 +119,7 @@ go run . --config sunet-cdn-manager-dev.toml server --dev --disable-acme --tls-c
 
 Use the generated password to fill in some sample entities:
 ```
-admin_password=some-secret-string ./local-dev/add-sample-entities.sh
+admin_password=$(cat admin.password) ./local-dev/add-sample-entities.sh
 ```
 
 At this point you can log in to the system by browsing to
