@@ -276,7 +276,7 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Superuser {
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -292,7 +292,12 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
 			logger.Error().Str("username", ad.Username).Msg("user is not superuser or belonging to an organization")
-			http.Error(w, "you do not have access to any resources", http.StatusForbidden)
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username, false))
+			if err != nil {
+				logger.Err(err).Msg("unable to render console home page for user without access")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 			return
 		}
 	}
@@ -408,7 +413,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Superuser {
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -420,15 +425,20 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				http.Error(w, "invalid organization name", http.StatusForbidden)
 				return
 			}
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		} else {
-			logger.Error().Msg("user is not superuser or belongs to an org")
-			http.Error(w, "not superuser or belonging to an organization", http.StatusForbidden)
+			logger.Error().Str("username", ad.Username).Msg("user is not superuser or belongs to an org")
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, false))
+			if err != nil {
+				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 			return
 		}
 	}

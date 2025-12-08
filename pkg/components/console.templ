@@ -55,8 +55,11 @@ templ picoCssLinks() {
 	<link rel="stylesheet" href="/css/pico-settings.css"/>
 }
 
-templ Dashboard(username string) {
+templ Dashboard(username string, resourceAccess bool) {
 	<div>Hello { username }!</div>
+	if !resourceAccess {
+		<div>You do not have access to any resources</div>
+	}
 }
 
 templ NavBar(ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
