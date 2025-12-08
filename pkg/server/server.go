@@ -1621,8 +1621,12 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 func renderConsolePage(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
 	availableOrgNames := []string{}
-	if !ad.Superuser && orgName != "" {
-		availableOrgNames = append(availableOrgNames, orgName)
+	if !ad.Superuser {
+		// The orgName can be empty for users that are not belonging to
+		// an org.
+		if orgName != "" {
+			availableOrgNames = append(availableOrgNames, orgName)
+		}
 	} else {
 		orgs, err := selectOrgs(dbPool, ad)
 		if err != nil {
