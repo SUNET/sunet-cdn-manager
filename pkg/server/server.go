@@ -1621,7 +1621,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 func renderConsolePage(dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
 	availableOrgNames := []string{}
-	if !ad.Superuser {
+	if !ad.Superuser && orgName != "" {
 		availableOrgNames = append(availableOrgNames, orgName)
 	} else {
 		orgs, err := selectOrgs(dbPool, ad)
