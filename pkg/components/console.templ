@@ -56,10 +56,12 @@ templ picoCssLinks() {
 }
 
 templ Dashboard(username string, resourceAccess bool) {
-	<div>Hello { username }!</div>
-	if !resourceAccess {
-		<div>You do not have access to any resources</div>
-	}
+	<div>
+		<p>Hello { username }!</p>
+		if !resourceAccess {
+			<p>You do not have access to any resources</p>
+		}
+	</div>
 }
 
 templ NavBar(ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
