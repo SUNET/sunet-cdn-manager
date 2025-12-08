@@ -291,7 +291,7 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 			}
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
-			logger.Error().Msg("user is not superuser or belonging to an organization")
+			logger.Error().Str("username", ad.Username).Msg("user is not superuser or belonging to an organization")
 			http.Error(w, "you do not have access to any resources", http.StatusForbidden)
 			return
 		}
