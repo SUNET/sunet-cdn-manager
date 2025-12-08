@@ -114,7 +114,7 @@ go run . --config sunet-cdn-manager-dev.toml init --init-password-file admin.pas
 Start the server in development mode (disables TLS validation etc) and skip
 ACME so we can test things locally:
 ```
-go run . --config sunet-cdn-manager-dev.toml server --dev --disable-acme --tls-cert-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.crt --tls-key-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.key
+make run-dev
 ```
 
 Use the generated password to fill in some sample entities:
