@@ -4005,7 +4005,7 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 	       ORDER BY orgs.name`,
 	)
 	if err != nil {
-		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config as superuser: %w", err)
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for cache node config: %w", err)
 	}
 
 	cnc := cdntypes.CacheNodeConfig{
