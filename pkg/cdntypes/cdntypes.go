@@ -197,8 +197,9 @@ type ServiceConnectivity struct {
 	HTTP               bool         `json:"http"`
 }
 
-// Nested struct containing complete config for a cache node optimized for easy
-// iteration over the contents and minimal duplication of fields.
+// CacheNodeConfig is a nested struct containing complete config for a cache
+// node optimized for easy iteration over the contents and minimal duplication
+// of fields.
 //
 // Map key is string rather than pgtype.UUID to support JSON marshalling.
 // Trying to use pgtype.UUID directly as a map key leads to
