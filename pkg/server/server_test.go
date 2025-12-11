@@ -4270,6 +4270,21 @@ func TestPostCacheNodes(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		resultData := struct {
+			Name string `json:"name"`
+		}{}
+
+		if test.expectedStatus == http.StatusCreated {
+			err = json.Unmarshal(jsonData, &resultData)
+			if err != nil {
+				t.Fatalf("%s: POST cache-nodes unable to unmarshal response: (%s)", test.description, err)
+			}
+
+			if newCacheNode.Name != resultData.Name {
+				t.Fatalf("%s: POST cache-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+			}
+		}
+
 		t.Logf("%s\n", jsonData)
 	}
 }

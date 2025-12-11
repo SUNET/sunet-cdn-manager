@@ -2697,6 +2697,7 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 	}
 
 	return cdntypes.CacheNode{
+		Name:        name,
 		ID:          cacheNodeID,
 		Description: description,
 		IPv4Address: ipv4Address,
