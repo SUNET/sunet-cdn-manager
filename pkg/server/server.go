@@ -4124,6 +4124,21 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 		return cdntypes.CacheNodeConfig{}, fmt.Errorf("ForEachRow of cache node config failed: %w", err)
 	}
 
+	// Include what service networks have been added to the system so we
+	// can create firewall rules on the cache nodes.
+	rows, err = dbPool.Query(
+		context.Background(),
+		`SELECT network FROM ip_networks ORDER BY network`,
+	)
+	if err != nil {
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for networks for cache node config: %w", err)
+	}
+
+	cnc.IPNetworks, err = pgx.CollectRows(rows, pgx.RowTo[netip.Prefix])
+	if err != nil {
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("pgx.CollectRows of IP networks for cache node config failed: %w", err)
+	}
+
 	return cnc, nil
 }
 

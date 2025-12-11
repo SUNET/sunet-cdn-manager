@@ -207,7 +207,8 @@ type ServiceConnectivity struct {
 // because pgtype.UUID does not implement encoding.TextMarshaler as expected by
 // encoding/json.
 type CacheNodeConfig struct {
-	Orgs map[string]OrgWithServices `json:"orgs"`
+	IPNetworks []netip.Prefix
+	Orgs       map[string]OrgWithServices `json:"orgs"`
 }
 
 type OrgWithServices struct {
