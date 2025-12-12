@@ -81,6 +81,11 @@ type OriginGroup struct {
 	Name         string      `json:"name"`
 }
 
+type NodeGroup struct {
+	ID   pgtype.UUID `json:"id" doc:"ID of node group"`
+	Name string      `json:"name"`
+}
+
 type InputOrigin struct {
 	OriginGroup string `json:"origin_group" doc:"ID or name of origin group"`
 	Host        string `json:"host" minLength:"1" maxLength:"253"`
@@ -176,16 +181,25 @@ type Domain struct {
 	VerificationToken string      `json:"verification_token"`
 }
 
-type CacheNode struct {
-	ID          pgtype.UUID `json:"id" doc:"ID of cache node"`
-	Name        string      `json:"name" doc:"Name of the cache node"`
-	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
+type Node struct {
+	ID          pgtype.UUID `json:"id" doc:"ID of the node"`
+	Name        string      `json:"name" doc:"Name of the node"`
+	Description string      `json:"description" doc:"some identifying info for the node" minLength:"1" maxLength:"100" `
 	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
-	Maintenance bool        `json:"maintenance" doc:"If the cache node is currently in maintenance mode"`
+	Maintenance bool        `json:"maintenance" doc:"If the node is currently in maintenance mode"`
+}
+
+type CacheNode struct {
+	Node
+}
+
+type L4LBNode struct {
+	Node
 }
 
 type L4LBNodeConfig struct {
+	L4LBNode   L4LBNode              `josn:"l4lb_node"`
 	Services   []ServiceConnectivity `json:"service_ip_info"`
 	CacheNodes []CacheNode           `json:"cache_nodes"`
 }
@@ -207,7 +221,9 @@ type ServiceConnectivity struct {
 // because pgtype.UUID does not implement encoding.TextMarshaler as expected by
 // encoding/json.
 type CacheNodeConfig struct {
+	CacheNode  CacheNode
 	IPNetworks []netip.Prefix
+	L4LBNodes  []L4LBNode
 	Orgs       map[string]OrgWithServices `json:"orgs"`
 }
 

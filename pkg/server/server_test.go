@@ -189,9 +189,23 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000005', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-2')",
 		"INSERT INTO auth_provider_keycloak (id, user_id, subject) VALUES ('00000018-0000-0000-0000-000000000002', '00000014-0000-0000-0000-000000000005', '00000019-0000-0000-0000-000000000002')",
 
+		// Node groups
+		"INSERT INTO node_groups (id, name, description) VALUES ('00000021-0000-0000-0000-000000000001', 'node-group-1', 'A node group, number 1')",
+		"INSERT INTO node_groups (id, name, description) VALUES ('00000021-0000-0000-0000-000000000002', 'node-group-2', 'A node group, number 2')",
+
 		// Cache nodes
-		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000015-0000-0000-0000-000000000001', 'cache-node1', 'A cache node, cache-node1.example.com', '127.0.0.100', '::1337')",
-		"INSERT INTO cache_nodes (id, name, description) VALUES ('00000015-0000-0000-0000-000000000002', 'cache-node2', 'A cache node, cache-node2.example.com, no addresses')",
+		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000022-0000-0000-0000-000000000001', 'cache-node1', 'A cache node, cache-node1.example.com', '127.0.0.100', '::1337')",
+		"INSERT INTO cache_nodes (id, name, description) VALUES ('00000022-0000-0000-0000-000000000002', 'cache-node2', 'A cache node, cache-node2.example.com, no addresses')",
+		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000022-0000-0000-0000-000000000003', 'cache-node3', 'A cache node, member of node-group-1', '127.0.0.101', '::1338', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000022-0000-0000-0000-000000000004', 'cache-node4', 'A cache node, also member of node-group-1', '127.0.0.102', '::1339', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000022-0000-0000-0000-000000000005', 'cache-node5-no-group', 'A cache node, not yet member of a node group', '127.0.0.103', '::1340')",
+
+		// L4LB nodes
+		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000016-0000-0000-0000-000000000001', 'l4lb-node1', 'A l4lb node, l4lb-node1.example.com', '127.0.0.200', '::1347')",
+		"INSERT INTO l4lb_nodes (id, name, description) VALUES ('00000016-0000-0000-0000-000000000002', 'l4lb-node2', 'A l4lb node, l4lb-node2.example.com, no addresses')",
+		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000016-0000-0000-0000-000000000003', 'l4lb-node3', 'A l4lb node, member of node-group-1', '127.0.0.201', '::1348', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000016-0000-0000-0000-000000000004', 'l4lb-node4', 'A l4lb node, also member of node-group-1', '127.0.0.202', '::1349', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000016-0000-0000-0000-000000000005', 'l4lb-node5-no-group', 'A l4lb node, not yet member of a node group', '127.0.0.203', '::1350')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -3917,51 +3931,79 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		expectedStatus int
+		description       string
+		username          string
+		password          string
+		cacheNodeNameOrID string
+		expectedStatus    int
 	}{
 		{
-			description:    "successful superuser request",
-			username:       "admin",
-			password:       "adminpass1",
-			expectedStatus: http.StatusOK,
+			description:       "successful superuser request with id",
+			username:          "admin",
+			password:          "adminpass1",
+			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000001",
+			expectedStatus:    http.StatusOK,
 		},
 		{
-			description:    "successful user request with 'node' role",
-			username:       "node-user-1",
-			password:       "nodeuserpass1",
-			expectedStatus: http.StatusOK,
+			description:       "successful superuser request with name",
+			username:          "admin",
+			password:          "adminpass1",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusOK,
 		},
 		{
-			description:    "failed superuser request, bad password",
-			username:       "admin",
-			password:       "badadminpass1",
-			expectedStatus: http.StatusUnauthorized,
+			description:       "successful superuser request with id and node group membership",
+			username:          "admin",
+			password:          "adminpass1",
+			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000003",
+			expectedStatus:    http.StatusOK,
 		},
 		{
-			description:    "failed request, normal user not allowed to request config",
-			username:       "username1",
-			password:       "password1",
-			expectedStatus: http.StatusForbidden,
+			description:       "successful superuser request with name and node group membership",
+			username:          "admin",
+			password:          "adminpass1",
+			cacheNodeNameOrID: "cache-node3",
+			expectedStatus:    http.StatusOK,
 		},
 		{
-			description:    "failed user request, bad password",
-			username:       "username1",
-			password:       "badpassword1",
-			expectedStatus: http.StatusUnauthorized,
+			description:       "successful user request with 'node' role",
+			username:          "node-user-1",
+			password:          "nodeuserpass1",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusOK,
 		},
 		{
-			description:    "failed user request, no password set",
-			username:       "username4-no-pw",
-			password:       "somepassword",
-			expectedStatus: http.StatusUnauthorized,
+			description:       "failed superuser request, bad password",
+			username:          "admin",
+			password:          "badadminpass1",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusUnauthorized,
+		},
+		{
+			description:       "failed request, normal user not allowed to request config",
+			username:          "username1",
+			password:          "password1",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusForbidden,
+		},
+		{
+			description:       "failed user request, bad password",
+			username:          "username1",
+			password:          "badpassword1",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusUnauthorized,
+		},
+		{
+			description:       "failed user request, no password set",
+			username:          "username4-no-pw",
+			password:          "somepassword",
+			cacheNodeNameOrID: "cache-node1",
+			expectedStatus:    http.StatusUnauthorized,
 		},
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4005,48 +4047,83 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 		description    string
 		username       string
 		password       string
+		l4lbNameOrID   string
 		expectedStatus int
 	}{
 		{
-			description:    "successful superuser request",
+			description:    "successful superuser request, with id",
 			username:       "admin",
 			password:       "adminpass1",
+			l4lbNameOrID:   "00000016-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			description:    "successful user request with 'node' role",
+			description:    "successful superuser request, with id that is member of node group",
+			username:       "admin",
+			password:       "adminpass1",
+			l4lbNameOrID:   "00000016-0000-0000-0000-000000000003",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser request, with name",
+			username:       "admin",
+			password:       "adminpass1",
+			l4lbNameOrID:   "l4lb-node1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser request, with name that is member if node group",
+			username:       "admin",
+			password:       "adminpass1",
+			l4lbNameOrID:   "l4lb-node3",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request with 'node' role and id",
 			username:       "node-user-1",
 			password:       "nodeuserpass1",
+			l4lbNameOrID:   "00000016-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful user request with 'node' role and name",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			l4lbNameOrID:   "00000016-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "failed superuser request, bad password",
 			username:       "admin",
 			password:       "badadminpass1",
+			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed request, normal user not allowed to request config",
 			username:       "username1",
 			password:       "password1",
+			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusForbidden,
 		},
 		{
 			description:    "failed user request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
+			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed user request, no password set",
 			username:       "username4-no-pw",
 			password:       "somepassword",
+			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusUnauthorized,
 		},
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs", nil)
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4396,7 +4473,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 			description:       "successful superuser request with ID",
 			username:          "admin",
 			password:          "adminpass1",
-			cacheNodeNameOrID: "00000015-0000-0000-0000-000000000001",
+			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000001",
 			maintenance:       true,
 			expectedStatus:    http.StatusNoContent,
 		},
@@ -4490,6 +4567,779 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 		jsonData, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestPutCacheNodeGroup(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description            string
+		username               string
+		password               string
+		cacheNodeNameOrID      string
+		cacheNodeGroupNameOrID string
+		expectedStatus         int
+	}{
+		{
+			description:            "successful superuser request with ID",
+			username:               "admin",
+			password:               "adminpass1",
+			cacheNodeNameOrID:      "00000022-0000-0000-0000-000000000005",
+			cacheNodeGroupNameOrID: "00000021-0000-0000-0000-000000000002",
+			expectedStatus:         http.StatusNoContent,
+		},
+		{
+			description:            "failed superuser request with nonexistent group ID",
+			username:               "admin",
+			password:               "adminpass1",
+			cacheNodeNameOrID:      "00000022-0000-0000-0000-000000000005",
+			cacheNodeGroupNameOrID: "00000021-0001-0000-0000-000000000002",
+			expectedStatus:         http.StatusUnprocessableEntity,
+		},
+		{
+			description:            "successful superuser request with name",
+			username:               "admin",
+			password:               "adminpass1",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusNoContent,
+		},
+		{
+			description:            "failed superuser request, bad password",
+			username:               "admin",
+			password:               "badadminpass1",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusUnauthorized,
+		},
+		{
+			description:            "failed user request",
+			username:               "username1",
+			password:               "password1",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusForbidden,
+		},
+		{
+			description:            "failed user request, bad password",
+			username:               "username1",
+			password:               "badpassword1",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusUnauthorized,
+		},
+		{
+			description:            "failed user request, no password set",
+			username:               "username4-no-pw",
+			password:               "somepassword",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusUnauthorized,
+		},
+		{
+			description:            "failed node user request",
+			username:               "node-user-1",
+			password:               "nodeuserpass1",
+			cacheNodeNameOrID:      "cache-node5-no-group",
+			cacheNodeGroupNameOrID: "node-group-2",
+			expectedStatus:         http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		maintenance := struct {
+			NodeGroup string `json:"node-group"`
+		}{
+			NodeGroup: test.cacheNodeGroupNameOrID,
+		}
+
+		b, err := json.Marshal(maintenance)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Log(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/node-group", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestGetL4LBNodes(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed user request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed node user request",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-nodes", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestPostL4LBNodes(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		l4lbNodeDescr  string
+		ipv4Address    *netip.Addr
+		ipv6Address    *netip.Addr
+		name           string
+	}{
+		{
+			description:    "successful superuser request with both addresses",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			l4lbNodeDescr:  "l4lb-node-post-1.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.1")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::1")),
+			name:           "l4lb-node-post-1",
+		},
+		{
+			description:    "successful superuser request without addresses",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			l4lbNodeDescr:  "l4lb-node-post-2-no-addrs.example.com",
+			name:           "l4lb-node-post-2",
+		},
+		{
+			description:    "successful superuser request with description right at limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusCreated,
+			l4lbNodeDescr:  strings.Repeat("a", 100),
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			name:           "l4lb-node-post-3",
+		},
+		{
+			description:    "failed superuser request with description above limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			l4lbNodeDescr:  strings.Repeat("a", 101),
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			name:           "l4lb-node-post-4",
+		},
+		{
+			description:    "failed superuser request with description below limit",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusUnprocessableEntity,
+			l4lbNodeDescr:  "",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.3")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::3")),
+			name:           "l4lb-node-post-5",
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       "password1",
+			l4lbNodeDescr:  "l4lb-node-post-6.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.4")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::4")),
+			expectedStatus: http.StatusForbidden,
+			name:           "l4lb-node-post-6",
+		},
+		{
+			description:    "failed node user request",
+			username:       "node-user-1",
+			password:       "nodeuserpass1",
+			l4lbNodeDescr:  "l4lb-node-post-user-1.example.com",
+			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.5")),
+			ipv6Address:    Ptr(netip.MustParseAddr("::5")),
+			expectedStatus: http.StatusForbidden,
+			name:           "l4lb-node-post-user-7",
+		},
+	}
+
+	for _, test := range tests {
+		newCacheNode := struct {
+			Description string      `json:"description"`
+			IPv4Address *netip.Addr `json:"ipv4_address,omitempty"`
+			IPv6Address *netip.Addr `json:"ipv6_address,omitempty"`
+			Name        string      `json:"name"`
+		}{
+			Description: test.l4lbNodeDescr,
+			IPv4Address: test.ipv4Address,
+			IPv6Address: test.ipv6Address,
+			Name:        test.name,
+		}
+
+		b, err := json.Marshal(newCacheNode)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/l4lb-nodes", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resultData := struct {
+			Name string `json:"name"`
+		}{}
+
+		if test.expectedStatus == http.StatusCreated {
+			err = json.Unmarshal(jsonData, &resultData)
+			if err != nil {
+				t.Fatalf("%s: POST l4lb-nodes unable to unmarshal response: (%s)", test.description, err)
+			}
+
+			if newCacheNode.Name != resultData.Name {
+				t.Fatalf("%s: POST l4lb-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+			}
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestPutL4LBNodeMaintenance(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		maintenance      bool
+		l4lbNodeNameOrID string
+		expectedStatus   int
+	}{
+		{
+			description:      "successful superuser request with ID",
+			username:         "admin",
+			password:         "adminpass1",
+			l4lbNodeNameOrID: "00000016-0000-0000-0000-000000000001",
+			maintenance:      true,
+			expectedStatus:   http.StatusNoContent,
+		},
+		{
+			description:      "successful superuser request with name",
+			username:         "admin",
+			password:         "adminpass1",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusNoContent,
+		},
+		{
+			description:      "failed superuser request, bad password",
+			username:         "admin",
+			password:         "badadminpass1",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusUnauthorized,
+		},
+		{
+			description:      "failed user request",
+			username:         "username1",
+			password:         "password1",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusForbidden,
+		},
+		{
+			description:      "failed user request, bad password",
+			username:         "username1",
+			password:         "badpassword1",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusUnauthorized,
+		},
+		{
+			description:      "failed user request, no password set",
+			username:         "username4-no-pw",
+			password:         "somepassword",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusUnauthorized,
+		},
+		{
+			description:      "failed node user request",
+			username:         "node-user-1",
+			password:         "nodeuserpass1",
+			l4lbNodeNameOrID: "l4lb-node1",
+			maintenance:      true,
+			expectedStatus:   http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		maintenance := struct {
+			Maintenance bool `json:"maintenance"`
+		}{
+			Maintenance: test.maintenance,
+		}
+
+		b, err := json.Marshal(maintenance)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Log(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/maintenance", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: PUT l4lb-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestPutL4LBNodeGroup(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description           string
+		username              string
+		password              string
+		l4lbNodeNameOrID      string
+		l4lbNodeGroupNameOrID string
+		expectedStatus        int
+	}{
+		{
+			description:           "successful superuser request with ID",
+			username:              "admin",
+			password:              "adminpass1",
+			l4lbNodeNameOrID:      "00000016-0000-0000-0000-000000000005",
+			l4lbNodeGroupNameOrID: "00000021-0000-0000-0000-000000000002",
+			expectedStatus:        http.StatusNoContent,
+		},
+		{
+			description:           "failed superuser request with nonexistent group ID",
+			username:              "admin",
+			password:              "adminpass1",
+			l4lbNodeNameOrID:      "00000016-0000-0000-0000-000000000005",
+			l4lbNodeGroupNameOrID: "00000021-0001-0000-0000-000000000002",
+			expectedStatus:        http.StatusUnprocessableEntity,
+		},
+		{
+			description:           "successful superuser request with name",
+			username:              "admin",
+			password:              "adminpass1",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusNoContent,
+		},
+		{
+			description:           "failed superuser request, bad password",
+			username:              "admin",
+			password:              "badadminpass1",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusUnauthorized,
+		},
+		{
+			description:           "failed user request",
+			username:              "username1",
+			password:              "password1",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusForbidden,
+		},
+		{
+			description:           "failed user request, bad password",
+			username:              "username1",
+			password:              "badpassword1",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusUnauthorized,
+		},
+		{
+			description:           "failed user request, no password set",
+			username:              "username4-no-pw",
+			password:              "somepassword",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusUnauthorized,
+		},
+		{
+			description:           "failed node user request",
+			username:              "node-user-1",
+			password:              "nodeuserpass1",
+			l4lbNodeNameOrID:      "l4lb-node5-no-group",
+			l4lbNodeGroupNameOrID: "node-group-2",
+			expectedStatus:        http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		maintenance := struct {
+			NodeGroup string `json:"node-group"`
+		}{
+			NodeGroup: test.l4lbNodeGroupNameOrID,
+		}
+
+		b, err := json.Marshal(maintenance)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Log(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/node-group", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestGetNodeGroups(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       "adminpass1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed superuser request with wrong password",
+			username:       "admin",
+			password:       "adminpass1-wrong",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed user request (only superusers allowed)",
+			username:       "username1",
+			password:       "password1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed user request with wrong password",
+			username:       "username1",
+			password:       "password1-wrong",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/node-groups", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET node groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestPostNodeGroups(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		name             string
+		groupDescription string
+	}{
+		{
+			description:      "successful superuser request with ID",
+			username:         "admin",
+			password:         "adminpass1",
+			name:             "node-group-new1",
+			groupDescription: "some node group",
+			expectedStatus:   http.StatusCreated,
+		},
+	}
+
+	for _, test := range tests {
+		newOriginGroup := struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}{
+			Name:        test.name,
+			Description: test.groupDescription,
+		}
+
+		b, err := json.Marshal(newOriginGroup)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Log(string(b))
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/node-groups", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST node group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
 		}
 
 		t.Logf("%s\n", jsonData)

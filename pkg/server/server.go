@@ -2654,6 +2654,36 @@ func setCacheNodeMaintenance(ad cdntypes.AuthData, dbPool *pgxpool.Pool, cacheNo
 	return nil
 }
 
+func setCacheNodeGroup(ad cdntypes.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, nodeGroupNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(tx, cacheNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse cacheNodeIdent node ID for node-group: %w", err)
+		}
+
+		nodeGroupIdent, err := newNodeGroupIdentifier(tx, nodeGroupNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse nodeGroupIdent group ID for cache node-group: %w", err)
+		}
+
+		_, err = tx.Exec(context.Background(), "UPDATE cache_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to set node group for cache node: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setCacheNodeGroup: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
 func selectCacheNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.CacheNode, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
@@ -2697,12 +2727,14 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 	}
 
 	return cdntypes.CacheNode{
-		Name:        name,
-		ID:          cacheNodeID,
-		Description: description,
-		IPv4Address: ipv4Address,
-		IPv6Address: ipv6Address,
-		Maintenance: maintenance,
+		Node: cdntypes.Node{
+			Name:        name,
+			ID:          cacheNodeID,
+			Description: description,
+			IPv4Address: ipv4Address,
+			IPv6Address: ipv6Address,
+			Maintenance: maintenance,
+		},
 	}, nil
 }
 
@@ -2714,6 +2746,125 @@ func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *
 	}
 
 	return cacheNodeID, nil
+}
+
+func setL4LBNodeMaintenance(ad cdntypes.AuthData, dbPool *pgxpool.Pool, l4lbNodeNameOrID string, maintenance bool) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(tx, l4lbNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for maintenance: %w", err)
+		}
+
+		_, err = tx.Exec(context.Background(), "UPDATE l4lb_nodes SET maintenance = $1 WHERE id = $2", maintenance, l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to update maintenance mode for l4lb node: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setL4LBNodeMaintenance: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func setL4LBNodeGroup(ad cdntypes.AuthData, dbPool *pgxpool.Pool, l4lbNodeNameOrID string, nodeGroupNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(tx, l4lbNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for node-group: %w", err)
+		}
+
+		nodeGroupIdent, err := newNodeGroupIdentifier(tx, nodeGroupNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse nodeGroupIdent group ID for l4lb node-group: %w", err)
+		}
+
+		_, err = tx.Exec(context.Background(), "UPDATE l4lb_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to set node group for l4lb node: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setL4LBNodeGroup: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func selectL4LBNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.L4LBNode, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	var rows pgx.Rows
+	var err error
+
+	rows, err = dbPool.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM l4lb_nodes ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for all l4lb nodes: %w", err)
+	}
+
+	l4lbNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.L4LBNode])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for l4lb nodes: %w", err)
+	}
+
+	return l4lbNodes, nil
+}
+
+func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (cdntypes.L4LBNode, error) {
+	if !ad.Superuser {
+		return cdntypes.L4LBNode{}, cdnerrors.ErrForbidden
+	}
+
+	var err error
+
+	var l4lbNodeID pgtype.UUID
+
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		l4lbNodeID, err = insertL4LBNodeTx(tx, name, description, ipv4Address, ipv6Address, maintenance)
+		if err != nil {
+			return fmt.Errorf("createL4LBNode: INSERT failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.L4LBNode{}, fmt.Errorf("createL4LBNode: transaction failed: %w", err)
+	}
+
+	return cdntypes.L4LBNode{
+		Node: cdntypes.Node{
+			Name:        name,
+			ID:          l4lbNodeID,
+			Description: description,
+			IPv4Address: ipv4Address,
+			IPv6Address: ipv6Address,
+			Maintenance: maintenance,
+		},
+	}, nil
+}
+
+func insertL4LBNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (pgtype.UUID, error) {
+	var l4lbNodeID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO l4lb_nodes (name, description, ipv4_address, ipv6_address, maintenance) VALUES ($1, $2, $3, $4, $5) RETURNING id", name, description, ipv4Address, ipv6Address, maintenance).Scan(&l4lbNodeID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node failed: %w", err)
+	}
+
+	return l4lbNodeID, nil
 }
 
 func createUser(dbPool *pgxpool.Pool, name string, role string, org *string, ad cdntypes.AuthData) (user, error) {
@@ -3215,6 +3366,14 @@ type cacheNodeIdentifier struct {
 	resourceIdentifier
 }
 
+type l4lbNodeIdentifier struct {
+	resourceIdentifier
+}
+
+type nodeGroupIdentifier struct {
+	resourceIdentifier
+}
+
 type domainIdentifier struct {
 	resourceIdentifier
 	orgID pgtype.UUID
@@ -3394,6 +3553,70 @@ func newCacheNodeIdentifier(tx pgx.Tx, input string) (cacheNodeIdentifier, error
 	}
 
 	return cacheNodeIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+	}, nil
+}
+
+func newL4LBNodeIdentifier(tx pgx.Tx, input string) (l4lbNodeIdentifier, error) {
+	if input == "" {
+		return l4lbNodeIdentifier{}, errEmptyInputIdentifier
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM l4lb_nodes WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		if err != nil {
+			return l4lbNodeIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (l4lb node names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM l4lb_nodes WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		if err != nil {
+			return l4lbNodeIdentifier{}, err
+		}
+	}
+
+	return l4lbNodeIdentifier{
+		resourceIdentifier: resourceIdentifier{
+			name: name,
+			id:   id,
+		},
+	}, nil
+}
+
+func newNodeGroupIdentifier(tx pgx.Tx, input string) (nodeGroupIdentifier, error) {
+	if input == "" {
+		return nodeGroupIdentifier{}, errEmptyInputIdentifier
+	}
+
+	var id pgtype.UUID
+	var name string
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM node_groups WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		if err != nil {
+			return nodeGroupIdentifier{}, err
+		}
+	} else {
+		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (node group names are globally unique)
+		err := tx.QueryRow(context.Background(), "SELECT id, name FROM node_groups WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		if err != nil {
+			return nodeGroupIdentifier{}, err
+		}
+	}
+
+	return nodeGroupIdentifier{
 		resourceIdentifier: resourceIdentifier{
 			name: name,
 			id:   id,
@@ -3714,6 +3937,93 @@ func selectOriginGroupsTx(tx pgx.Tx, serviceID pgtype.UUID) ([]cdntypes.OriginGr
 	return originGroups, nil
 }
 
+func selectNodeGroups(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.NodeGroup, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	nodeGroups := []cdntypes.NodeGroup{}
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		var err error
+		nodeGroups, err = selectNodeGroupsTx(tx)
+		if err != nil {
+			return fmt.Errorf("selectNodeGroups: unable to collect node group rows: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("selectNodeGroups: transaction failed: %w", err)
+	}
+
+	return nodeGroups, nil
+}
+
+func selectNodeGroupsTx(tx pgx.Tx) ([]cdntypes.NodeGroup, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		"SELECT id, name FROM node_groups ORDER BY name",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("selectNodeGroupsTx: unable to select node group rows: %w", err)
+	}
+
+	nodeGroups, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.NodeGroup])
+	if err != nil {
+		return nil, fmt.Errorf("selectNodeGroupsTx: unable to collect node group rows: %w", err)
+	}
+
+	return nodeGroups, nil
+}
+
+func insertNodeGroup(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, name string, description string) (cdntypes.NodeGroup, error) {
+	if !ad.Superuser {
+		logger.Error().Msg("insertNodeGroup: not superuser")
+		return cdntypes.NodeGroup{}, cdnerrors.ErrForbidden
+	}
+
+	var nodeGroup cdntypes.NodeGroup
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		nodeGroupID, err := insertNodeGroupTx(tx, name, description)
+		if err != nil {
+			return fmt.Errorf("insertNodeGroup: unable to create node group: %w", err)
+		}
+
+		nodeGroup.ID = nodeGroupID
+		nodeGroup.Name = name
+		nodeGroup.Name = description
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("insertNodeGroup transaction failed")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return cdntypes.NodeGroup{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return cdntypes.NodeGroup{}, fmt.Errorf("insertNodeGroup transaction failed: %w", err)
+	}
+
+	return nodeGroup, nil
+}
+
+func insertNodeGroupTx(tx pgx.Tx, name string, description string) (pgtype.UUID, error) {
+	var nodeGroupID pgtype.UUID
+	err := tx.QueryRow(context.Background(), "INSERT INTO node_groups (name, description) VALUES ($1, $2) returning id", name, description).Scan(&nodeGroupID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return pgtype.UUID{}, fmt.Errorf("unable to insert node group %s into node_groups: %w", name, err)
+	}
+	return nodeGroupID, nil
+}
+
 func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
@@ -3943,9 +4253,31 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
 }
 
-func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTemplates configTemplates) (cdntypes.CacheNodeConfig, error) {
+func selectCacheNodeTx(tx pgx.Tx, cacheNodeID pgtype.UUID) (cdntypes.CacheNode, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes WHERE id = $1`,
+		cacheNodeID,
+	)
+	if err != nil {
+		return cdntypes.CacheNode{}, fmt.Errorf("selectCacheNode: unable to select cache node for id '%s': %w", cacheNodeID, err)
+	}
+
+	cacheNode, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.CacheNode])
+	if err != nil {
+		return cdntypes.CacheNode{}, fmt.Errorf("selectCacheNode: unable to collect l4lb node for id '%s': %w", cacheNodeID, err)
+	}
+
+	return cacheNode, nil
+}
+
+func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTemplates configTemplates, cacheNodeNameOrID string) (cdntypes.CacheNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
 		return cdntypes.CacheNodeConfig{}, cdnerrors.ErrForbidden
+	}
+
+	if cacheNodeNameOrID == "" {
+		return cdntypes.CacheNodeConfig{}, cdnerrors.ErrUnprocessable
 	}
 
 	// Usage of JOIN with subqueries based on
@@ -4139,7 +4471,105 @@ func selectCacheNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTempl
 		return cdntypes.CacheNodeConfig{}, fmt.Errorf("pgx.CollectRows of IP networks for cache node config failed: %w", err)
 	}
 
+	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(tx, cacheNodeNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		cnc.L4LBNodes, err = selectL4LBMembersForCacheNode(tx, cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("selectCacheNodeConfig: unable to get L4LB members of same node group: %w", err)
+		}
+
+		cnc.CacheNode, err = selectCacheNodeTx(tx, cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("selectCacheNodeConfig: unable to get cache node: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("selectCacheNodeConfig: transaction failed %w", err)
+	}
+
 	return cnc, nil
+}
+
+func selectL4LBMembersForCacheNode(tx pgx.Tx, cacheNodeID pgtype.UUID) ([]cdntypes.L4LBNode, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT
+			l4lb_nodes.id,
+			l4lb_nodes.name,
+			l4lb_nodes.description,
+			l4lb_nodes.ipv4_address,
+			l4lb_nodes.ipv6_address,
+			l4lb_nodes.maintenance
+		FROM l4lb_nodes
+		JOIN node_groups ON node_groups.id = l4lb_nodes.node_group_id
+		WHERE node_groups.id = (SELECT node_group_id FROM cache_nodes WHERE id = $1)
+		ORDER BY l4lb_nodes.ipv4_address, l4lb_nodes.ipv6_address
+		`,
+		cacheNodeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("selectL4LBMembersForCacheNode: unable to select l4lb nodes for cache node '%s': %w", cacheNodeID, err)
+	}
+
+	l4lbNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.L4LBNode])
+	if err != nil {
+		return nil, fmt.Errorf("selectL4LBMembersForCacheNode unable to collect l4lb node groups: %w", err)
+	}
+
+	return l4lbNodes, nil
+}
+
+func selectCacheMembersForL4LBNode(tx pgx.Tx, l4lbNodeID pgtype.UUID) ([]cdntypes.CacheNode, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT
+				cache_nodes.id,
+				cache_nodes.name,
+				cache_nodes.description,
+				cache_nodes.ipv4_address,
+				cache_nodes.ipv6_address,
+				cache_nodes.maintenance
+			FROM cache_nodes
+			JOIN node_groups ON node_groups.id = cache_nodes.node_group_id
+			WHERE node_groups.id = (SELECT node_group_id FROM l4lb_nodes WHERE id = $1)
+			ORDER BY cache_nodes.ipv4_address, cache_nodes.ipv6_address
+			`,
+		l4lbNodeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("selectCacheMembersForL4LBNode: unable to select cache nodes for l4lb node '%s': %w", l4lbNodeID, err)
+	}
+
+	cacheNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.CacheNode])
+	if err != nil {
+		return nil, fmt.Errorf("selectCacheMembersForL4LBNode: unable to collect cache node groups: %w", err)
+	}
+
+	return cacheNodes, nil
+}
+
+func selectL4LBNodeTx(tx pgx.Tx, l4lbNodeID pgtype.UUID) (cdntypes.L4LBNode, error) {
+	rows, err := tx.Query(
+		context.Background(),
+		`SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM l4lb_nodes WHERE id = $1`,
+		l4lbNodeID,
+	)
+	if err != nil {
+		return cdntypes.L4LBNode{}, fmt.Errorf("selectL4LBNode: unable to select l4lb node for id '%s': %w", l4lbNodeID, err)
+	}
+
+	l4lbNode, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.L4LBNode])
+	if err != nil {
+		return cdntypes.L4LBNode{}, fmt.Errorf("selectL4LBNode: unable to collect l4lb node for id '%s': %w", l4lbNodeID, err)
+	}
+
+	return l4lbNode, nil
 }
 
 type serviceIPInfo struct {
@@ -4148,28 +4578,34 @@ type serviceIPInfo struct {
 	OriginTLSStatus    []bool
 }
 
-func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData) (cdntypes.L4LBNodeConfig, error) {
+func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData, l4lbNodeNameOrID string) (cdntypes.L4LBNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
 		return cdntypes.L4LBNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
 	serviceIPInfos := []serviceIPInfo{}
 
+	l4lbNode := cdntypes.L4LBNode{}
 	cacheNodes := []cdntypes.CacheNode{}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes ORDER BY ipv4_address, ipv6_address")
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(tx, l4lbNodeNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		cacheNodes, err = selectCacheMembersForL4LBNode(tx, l4lbNodeIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to select cache node information: %w", err)
 		}
 
-		cacheNodes, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.CacheNode])
+		l4lbNode, err = selectL4LBNodeTx(tx, l4lbNodeIdent.id)
 		if err != nil {
-			return fmt.Errorf("unable to collect cache node rows: %w", err)
+			return fmt.Errorf("unable to select l4lb node: %w", err)
 		}
 
 		// Collect IP addresses, TLS status and Service ID of every active service version
-		rows, err = tx.Query(
+		rows, err := tx.Query(
 			context.Background(),
 			`SELECT
 			service_versions.service_id,
@@ -4189,7 +4625,7 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData) (cdntypes.
 	`,
 		)
 		if err != nil {
-			return fmt.Errorf("unable to select active service IP info: %w", err)
+			return fmt.Errorf("selectL4LBNodeConfig: unable to select active service IP info: %w", err)
 		}
 
 		serviceIPInfos, err = pgx.CollectRows(rows, pgx.RowToStructByName[serviceIPInfo])
@@ -4204,6 +4640,7 @@ func selectL4LBNodeConfig(dbPool *pgxpool.Pool, ad cdntypes.AuthData) (cdntypes.
 	}
 
 	lnc := cdntypes.L4LBNodeConfig{
+		L4LBNode:   l4lbNode,
 		CacheNodes: cacheNodes,
 	}
 
@@ -5957,7 +6394,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			},
 		)
 
-		huma.Get(api, "/v1/cache-node-configs", func(ctx context.Context, _ *struct{},
+		huma.Get(api, "/v1/cache-node-configs/{node}", func(ctx context.Context, input *struct {
+			CacheNode string `path:"node" doc:"Node name or ID" minLength:"1" maxLength:"63"`
+		},
 		) (*cacheNodeConfigOutput, error) {
 			logger := zlog.Ctx(ctx)
 
@@ -5966,7 +6405,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
 			}
 
-			cnc, err := selectCacheNodeConfig(dbPool, ad, confTemplates)
+			cnc, err := selectCacheNodeConfig(dbPool, ad, confTemplates, input.CacheNode)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -5983,7 +6422,9 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/l4lb-node-configs", func(ctx context.Context, _ *struct{},
+		huma.Get(api, "/v1/l4lb-node-configs/{node}", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"node" doc:"Node name or ID" minLength:"1" maxLength:"63"`
+		},
 		) (*l4lbNodeConfigOutput, error) {
 			logger := zlog.Ctx(ctx)
 
@@ -5992,7 +6433,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from l4lb-node-configs GET handler")
 			}
 
-			lnc, err := selectL4LBNodeConfig(dbPool, ad)
+			lnc, err := selectL4LBNodeConfig(dbPool, ad, input.L4LBNode)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -6167,12 +6608,213 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to modify resource")
 				}
-				return nil, fmt.Errorf("unable to set maintenance: %w", err)
+				return nil, fmt.Errorf("unable to set cache maintenance: %w", err)
 			}
 			return nil, nil
 		})
-	})
 
+		huma.Put(api, "/v1/cache-nodes/{cachenode}/node-group", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
+			Body     struct {
+				NodeGroup string `json:"node-group" example:"some-node-group" doc:"Put the cache node in the given node group by name or ID"`
+			}
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-nodes node group PUT handler")
+			}
+
+			err := setCacheNodeGroup(ad, dbPool, input.L4LBNode, input.Body.NodeGroup)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, pgx.ErrNoRows):
+					return nil, huma.Error422UnprocessableEntity("unable to find resources")
+				}
+				return nil, fmt.Errorf("unable to set cache node group: %w", err)
+			}
+			return nil, nil
+		})
+
+		huma.Get(api, "/v1/l4lb-nodes", func(ctx context.Context, _ *struct{}) (*l4lbNodesOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-nodes GET handler")
+			}
+
+			l4lbNodes, err := selectL4LBNodes(dbPool, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden(api403String)
+				}
+				logger.Err(err).Msg("unable to query for l4lb nodes")
+				return nil, err
+			}
+
+			resp := &l4lbNodesOutput{
+				Body: l4lbNodes,
+			}
+			return resp, nil
+		})
+
+		postL4LBNodesPath := "/v1/l4lb-nodes"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postL4LBNodesPath, &l4lbNodeOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postL4LBNodesPath, &l4lbNodeOutput{}),
+				Method:        http.MethodPost,
+				Path:          postL4LBNodesPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *l4lbNodePostInput) (*l4lbNodeOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from l4lb-node POST handler")
+				}
+
+				var maintenance bool
+				if input.Body.Maintenance == nil {
+					maintenance = true
+				} else {
+					maintenance = *input.Body.Maintenance
+				}
+
+				l4lbNode, err := createL4LBNode(dbPool, ad, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, maintenance)
+				if err != nil {
+					if errors.Is(err, cdnerrors.ErrForbidden) {
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					}
+					logger.Err(err).Msg("unable to add l4lb node")
+					return nil, err
+				}
+				return &l4lbNodeOutput{
+					Body: l4lbNode,
+				}, nil
+			},
+		)
+
+		huma.Put(api, "/v1/l4lb-nodes/{l4lbnode}/maintenance", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"l4lbnode" example:"l4lb-node1" doc:"L4LB node ID or name" minLength:"1" maxLength:"63"`
+			Body     struct {
+				Maintenance bool `json:"maintenance" example:"true" doc:"Put the given l4lb node into maintenance mode"`
+			}
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-nodes maintenance PUT handler")
+			}
+
+			err := setL4LBNodeMaintenance(ad, dbPool, input.L4LBNode, input.Body.Maintenance)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				}
+				return nil, fmt.Errorf("unable to set l4lb maintenance: %w", err)
+			}
+			return nil, nil
+		})
+
+		huma.Put(api, "/v1/l4lb-nodes/{l4lbnode}/node-group", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"l4lbnode" example:"l4lb-node1" doc:"L4LB node ID or name" minLength:"1" maxLength:"63"`
+			Body     struct {
+				NodeGroup string `json:"node-group" example:"some-node-group" doc:"Put the given l4lb node in the given node group by name or ID"`
+			}
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-nodes node group PUT handler")
+			}
+
+			err := setL4LBNodeGroup(ad, dbPool, input.L4LBNode, input.Body.NodeGroup)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, pgx.ErrNoRows):
+					return nil, huma.Error422UnprocessableEntity("unable to find resources")
+				}
+				return nil, fmt.Errorf("unable to set l4lb node group: %w", err)
+			}
+			return nil, nil
+		})
+
+		huma.Get(api, "/v1/node-groups", func(ctx context.Context, _ *struct{},
+		) (*nodeGroupsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from node-groups GET handler")
+			}
+
+			nodeGroups, err := selectNodeGroups(dbPool, ad)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				}
+				logger.Err(err).Msg("unable to query node-groups")
+				return nil, err
+			}
+
+			resp := &nodeGroupsOutput{
+				Body: nodeGroups,
+			}
+			return resp, nil
+		})
+
+		postNodeGroupsPath := "/v1/node-groups"
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postNodeGroupsPath, &nodeGroupOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postNodeGroupsPath, &nodeGroupOutput{}),
+				Method:        http.MethodPost,
+				Path:          postNodeGroupsPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Body struct {
+					Name        string `json:"name" example:"myname" doc:"name of node group" minLength:"1" maxLength:"63"`
+					Description string `json:"description" doc:"some identifying info for the node group" minLength:"1" maxLength:"100" `
+				}
+			},
+			) (*nodeGroupOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from node group POST handler")
+				}
+
+				nodeGroup, err := insertNodeGroup(logger, ad, dbPool, input.Body.Name, input.Body.Description)
+				if err != nil {
+					switch {
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
+						return nil, huma.Error422UnprocessableEntity("unable to parse request to add node group")
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("node group already exists")
+					case errors.Is(err, cdnerrors.ErrForbidden):
+						return nil, huma.Error403Forbidden("not allowed to create this node group")
+					}
+					logger.Err(err).Msg("unable to add node group")
+					return nil, err
+				}
+				resp := &nodeGroupOutput{}
+				resp.Body = nodeGroup
+				return resp, nil
+			},
+		)
+	})
 	return nil
 }
 
@@ -6202,16 +6844,28 @@ type userOutput struct {
 	Body user
 }
 
-type cacheNodeInput struct {
-	Name        string      `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
-	Description string      `json:"description" doc:"some identifying info for the cache node" minLength:"1" maxLength:"100" `
+type NodeInput struct {
+	Name        string      `json:"name" example:"Some name" doc:"Node name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+	Description string      `json:"description" doc:"some identifying info for the node" minLength:"1" maxLength:"100" `
 	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
 	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
 	Maintenance *bool       `json:"maintenance,omitempty" doc:"If the node should start in maintenance mode or not, defaults to maintenance mode"`
 }
 
+type cacheNodeInput struct {
+	NodeInput
+}
+
 type cacheNodePostInput struct {
 	Body cacheNodeInput
+}
+
+type l4lbNodeInput struct {
+	NodeInput
+}
+
+type l4lbNodePostInput struct {
+	Body l4lbNodeInput
 }
 
 type cacheNodeOutput struct {
@@ -6220,6 +6874,14 @@ type cacheNodeOutput struct {
 
 type cacheNodesOutput struct {
 	Body []cdntypes.CacheNode
+}
+
+type l4lbNodeOutput struct {
+	Body cdntypes.L4LBNode
+}
+
+type l4lbNodesOutput struct {
+	Body []cdntypes.L4LBNode
 }
 
 type usersOutput struct {
@@ -6289,6 +6951,14 @@ type originGroupsOutput struct {
 
 type originGroupOutput struct {
 	Body cdntypes.OriginGroup
+}
+
+type nodeGroupsOutput struct {
+	Body []cdntypes.NodeGroup
+}
+
+type nodeGroupOutput struct {
+	Body cdntypes.NodeGroup
 }
 
 type ipNetwork struct {
@@ -6363,7 +7033,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 
 	err := migrations.Up(logger, pgConfig)
 	if err != nil {
-		return InitUser{}, fmt.Errorf("unable to run initial migration: %w", err)
+		return InitUser{}, fmt.Errorf("unable to run migrations: %w", err)
 	}
 
 	dbPool, err := pgxpool.NewWithConfig(context.Background(), pgConfig)
