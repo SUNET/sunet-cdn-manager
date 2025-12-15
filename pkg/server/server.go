@@ -6410,6 +6410,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+					return nil, huma.Error400BadRequest("invalid node name or id")
 				}
 				logger.Err(err).Msg("unable to query cache-node-configs")
 				return nil, err
@@ -6438,6 +6440,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+					return nil, huma.Error400BadRequest("invalid node name or id")
 				}
 				logger.Err(err).Msg("unable to query l4lb-version-configs")
 				return nil, err
