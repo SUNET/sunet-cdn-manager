@@ -82,8 +82,9 @@ type OriginGroup struct {
 }
 
 type NodeGroup struct {
-	ID   pgtype.UUID `json:"id" doc:"ID of node group"`
-	Name string      `json:"name"`
+	ID          pgtype.UUID `json:"id" doc:"ID of node group"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
 }
 
 type InputOrigin struct {

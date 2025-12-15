@@ -3962,7 +3962,7 @@ func selectNodeGroups(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.No
 func selectNodeGroupsTx(tx pgx.Tx) ([]cdntypes.NodeGroup, error) {
 	rows, err := tx.Query(
 		context.Background(),
-		"SELECT id, name FROM node_groups ORDER BY name",
+		"SELECT id, name, description FROM node_groups ORDER BY name",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("selectNodeGroupsTx: unable to select node group rows: %w", err)
@@ -3991,7 +3991,7 @@ func insertNodeGroup(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpo
 
 		nodeGroup.ID = nodeGroupID
 		nodeGroup.Name = name
-		nodeGroup.Name = description
+		nodeGroup.Description = description
 
 		return nil
 	})
