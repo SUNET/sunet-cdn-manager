@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -2692,7 +2693,22 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Ca
 	var rows pgx.Rows
 	var err error
 
-	rows, err = dbPool.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes ORDER BY id")
+	rows, err = dbPool.Query(
+		context.Background(),
+		`SELECT
+			cache_nodes.id,
+			cache_nodes.name,
+			cache_nodes.description,
+			cache_nodes.maintenance,
+			agg_addresses.addresses
+		FROM cache_nodes
+		JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM cache_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
+		ORDER BY cache_nodes.name
+		`)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for all cache nodes: %w", err)
 	}
@@ -2705,7 +2721,7 @@ func selectCacheNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Ca
 	return cacheNodes, nil
 }
 
-func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (cdntypes.CacheNode, error) {
+func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.CacheNode, error) {
 	if !ad.Superuser {
 		return cdntypes.CacheNode{}, cdnerrors.ErrForbidden
 	}
@@ -2715,7 +2731,7 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 	var cacheNodeID pgtype.UUID
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeID, err = insertCacheNodeTx(tx, name, description, ipv4Address, ipv6Address, maintenance)
+		cacheNodeID, err = insertCacheNodeTx(tx, name, description, addresses, maintenance)
 		if err != nil {
 			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
 		}
@@ -2731,18 +2747,25 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 			Name:        name,
 			ID:          cacheNodeID,
 			Description: description,
-			IPv4Address: ipv4Address,
-			IPv6Address: ipv6Address,
+			Addresses:   addresses,
 			Maintenance: maintenance,
 		},
 	}, nil
 }
 
-func insertCacheNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (pgtype.UUID, error) {
+func insertCacheNodeTx(tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
 	var cacheNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, ipv4_address, ipv6_address, maintenance) VALUES ($1, $2, $3, $4, $5) RETURNING id", name, description, ipv4Address, ipv6Address, maintenance).Scan(&cacheNodeID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
+	}
+
+	for _, address := range addresses {
+		var cacheNodeAddressID pgtype.UUID
+		err = tx.QueryRow(context.Background(), "INSERT INTO cache_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", cacheNodeID, address).Scan(&cacheNodeAddressID)
+		if err != nil {
+			return pgtype.UUID{}, fmt.Errorf("INSERT cache node address failed: %w", err)
+		}
 	}
 
 	return cacheNodeID, nil
@@ -2811,7 +2834,21 @@ func selectL4LBNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.L4L
 	var rows pgx.Rows
 	var err error
 
-	rows, err = dbPool.Query(context.Background(), "SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM l4lb_nodes ORDER BY id")
+	rows, err = dbPool.Query(
+		context.Background(),
+		`SELECT
+			l4lb_nodes.id,
+			l4lb_nodes.name,
+			l4lb_nodes.description,
+			l4lb_nodes.maintenance,
+			agg_addresses.addresses
+		FROM l4lb_nodes
+		JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM l4lb_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
+		ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for all l4lb nodes: %w", err)
 	}
@@ -2824,7 +2861,7 @@ func selectL4LBNodes(dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.L4L
 	return l4lbNodes, nil
 }
 
-func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (cdntypes.L4LBNode, error) {
+func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.L4LBNode, error) {
 	if !ad.Superuser {
 		return cdntypes.L4LBNode{}, cdnerrors.ErrForbidden
 	}
@@ -2834,7 +2871,7 @@ func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, des
 	var l4lbNodeID pgtype.UUID
 
 	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		l4lbNodeID, err = insertL4LBNodeTx(tx, name, description, ipv4Address, ipv6Address, maintenance)
+		l4lbNodeID, err = insertL4LBNodeTx(tx, name, description, addresses, maintenance)
 		if err != nil {
 			return fmt.Errorf("createL4LBNode: INSERT failed: %w", err)
 		}
@@ -2850,18 +2887,25 @@ func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, des
 			Name:        name,
 			ID:          l4lbNodeID,
 			Description: description,
-			IPv4Address: ipv4Address,
-			IPv6Address: ipv6Address,
+			Addresses:   addresses,
 			Maintenance: maintenance,
 		},
 	}, nil
 }
 
-func insertL4LBNodeTx(tx pgx.Tx, name string, description string, ipv4Address *netip.Addr, ipv6Address *netip.Addr, maintenance bool) (pgtype.UUID, error) {
+func insertL4LBNodeTx(tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
 	var l4lbNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO l4lb_nodes (name, description, ipv4_address, ipv6_address, maintenance) VALUES ($1, $2, $3, $4, $5) RETURNING id", name, description, ipv4Address, ipv6Address, maintenance).Scan(&l4lbNodeID)
+	err := tx.QueryRow(context.Background(), "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node failed: %w", err)
+	}
+
+	for _, address := range addresses {
+		var l4lbAddressID pgtype.UUID
+		err = tx.QueryRow(context.Background(), "INSERT INTO l4lb_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", l4lbNodeID, address).Scan(&l4lbAddressID)
+		if err != nil {
+			return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node IP address failed: %w", err)
+		}
 	}
 
 	return l4lbNodeID, nil
@@ -4256,7 +4300,19 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 func selectCacheNodeTx(tx pgx.Tx, cacheNodeID pgtype.UUID) (cdntypes.CacheNode, error) {
 	rows, err := tx.Query(
 		context.Background(),
-		`SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM cache_nodes WHERE id = $1`,
+		`SELECT
+			cache_nodes.id,
+			cache_nodes.name,
+			cache_nodes.description,
+			cache_nodes.maintenance,
+			agg_addresses.addresses
+		FROM cache_nodes
+		JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM cache_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
+		WHERE id = $1`,
 		cacheNodeID,
 	)
 	if err != nil {
@@ -4503,13 +4559,17 @@ func selectL4LBMembersForCacheNode(tx pgx.Tx, cacheNodeID pgtype.UUID) ([]cdntyp
 			l4lb_nodes.id,
 			l4lb_nodes.name,
 			l4lb_nodes.description,
-			l4lb_nodes.ipv4_address,
-			l4lb_nodes.ipv6_address,
-			l4lb_nodes.maintenance
+			l4lb_nodes.maintenance,
+			agg_addresses.addresses
 		FROM l4lb_nodes
 		JOIN node_groups ON node_groups.id = l4lb_nodes.node_group_id
+		JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM l4lb_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
 		WHERE node_groups.id = (SELECT node_group_id FROM cache_nodes WHERE id = $1)
-		ORDER BY l4lb_nodes.ipv4_address, l4lb_nodes.ipv6_address
+		ORDER BY l4lb_nodes.name
 		`,
 		cacheNodeID,
 	)
@@ -4532,13 +4592,17 @@ func selectCacheMembersForL4LBNode(tx pgx.Tx, l4lbNodeID pgtype.UUID) ([]cdntype
 				cache_nodes.id,
 				cache_nodes.name,
 				cache_nodes.description,
-				cache_nodes.ipv4_address,
-				cache_nodes.ipv6_address,
-				cache_nodes.maintenance
+				cache_nodes.maintenance,
+				agg_addresses.addresses
 			FROM cache_nodes
 			JOIN node_groups ON node_groups.id = cache_nodes.node_group_id
+			JOIN (
+				SELECT node_id, array_agg(address ORDER BY address) as addresses
+				FROM cache_node_addresses
+				GROUP BY node_id
+			) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
 			WHERE node_groups.id = (SELECT node_group_id FROM l4lb_nodes WHERE id = $1)
-			ORDER BY cache_nodes.ipv4_address, cache_nodes.ipv6_address
+			ORDER BY cache_nodes.name
 			`,
 		l4lbNodeID,
 	)
@@ -4557,7 +4621,19 @@ func selectCacheMembersForL4LBNode(tx pgx.Tx, l4lbNodeID pgtype.UUID) ([]cdntype
 func selectL4LBNodeTx(tx pgx.Tx, l4lbNodeID pgtype.UUID) (cdntypes.L4LBNode, error) {
 	rows, err := tx.Query(
 		context.Background(),
-		`SELECT id, name, description, ipv4_address, ipv6_address, maintenance FROM l4lb_nodes WHERE id = $1`,
+		`SELECT
+			l4lb_nodes.id,
+			l4lb_nodes.name,
+			l4lb_nodes.description,
+			l4lb_nodes.maintenance,
+			agg_addresses.addresses
+		FROM l4lb_nodes
+		JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM l4lb_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
+		WHERE id = $1`,
 		l4lbNodeID,
 	)
 	if err != nil {
@@ -6581,7 +6657,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					maintenance = *input.Body.Maintenance
 				}
 
-				cacheNode, err := createCacheNode(dbPool, ad, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, maintenance)
+				// Convert our Huma workaround address type to real netip.Addr
+				addresses := []netip.Addr{}
+				for _, address := range input.Body.Addresses {
+					addresses = append(addresses, netip.Addr(address))
+				}
+
+				cacheNode, err := createCacheNode(dbPool, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -6690,7 +6772,13 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					maintenance = *input.Body.Maintenance
 				}
 
-				l4lbNode, err := createL4LBNode(dbPool, ad, input.Body.Name, input.Body.Description, input.Body.IPv4Address, input.Body.IPv6Address, maintenance)
+				// Convert our Huma workaround address type to real netip.Addr
+				addresses := []netip.Addr{}
+				for _, address := range input.Body.Addresses {
+					addresses = append(addresses, netip.Addr(address))
+				}
+
+				l4lbNode, err := createL4LBNode(dbPool, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -6848,11 +6936,46 @@ type userOutput struct {
 	Body user
 }
 
+// IPAddress is used to override huma IP address handling, it seems a
+// []netip.Addr is automatically taken to mean it contains all IPv4 addresses,
+// even if setting "format: "ipv6" (and even if the "ipv6" format worked we
+// support mixing both ipv4 and ipv6 in the lists of addresses.
+// Possibly related work: https://github.com/danielgtaylor/huma/pull/792
+type IPAddress netip.Addr
+
+func (IPAddress) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type:        huma.TypeString,
+		Description: "IPv4 or IPv6 address",
+		AnyOf: []*huma.Schema{
+			{Type: huma.TypeString, Format: "ipv4"},
+			{Type: huma.TypeString, Format: "ipv6"},
+		},
+		Examples: []any{
+			"192.0.2.1",
+			"2001:db8::1",
+		},
+	}
+}
+
+// parse strings into netip.Addr
+func (ip *IPAddress) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		return err
+	}
+	*ip = IPAddress(addr)
+	return nil
+}
+
 type NodeInput struct {
 	Name        string      `json:"name" example:"Some name" doc:"Node name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 	Description string      `json:"description" doc:"some identifying info for the node" minLength:"1" maxLength:"100" `
-	IPv4Address *netip.Addr `json:"ipv4_address,omitempty" doc:"The IPv4 address of the node" format:"ipv4"`
-	IPv6Address *netip.Addr `json:"ipv6_address,omitempty" doc:"The IPv6 address of the node" format:"ipv6"`
+	Addresses   []IPAddress `json:"addresses,omitempty" doc:"The IPv4 and IPv6 addresses of the node"`
 	Maintenance *bool       `json:"maintenance,omitempty" doc:"If the node should start in maintenance mode or not, defaults to maintenance mode"`
 }
 

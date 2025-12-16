@@ -194,18 +194,42 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO node_groups (id, name, description) VALUES ('00000021-0000-0000-0000-000000000002', 'node-group-2', 'A node group, number 2')",
 
 		// Cache nodes
-		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000022-0000-0000-0000-000000000001', 'cache-node1', 'A cache node, cache-node1.example.com', '127.0.0.100', '::1337')",
+		"INSERT INTO cache_nodes (id, name, description) VALUES ('00000022-0000-0000-0000-000000000001', 'cache-node1', 'A cache node, cache-node1.example.com')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000001', '00000022-0000-0000-0000-000000000001', '127.0.0.100')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000002', '00000022-0000-0000-0000-000000000001', '::1337')",
+
 		"INSERT INTO cache_nodes (id, name, description) VALUES ('00000022-0000-0000-0000-000000000002', 'cache-node2', 'A cache node, cache-node2.example.com, no addresses')",
-		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000022-0000-0000-0000-000000000003', 'cache-node3', 'A cache node, member of node-group-1', '127.0.0.101', '::1338', '00000021-0000-0000-0000-000000000001')",
-		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000022-0000-0000-0000-000000000004', 'cache-node4', 'A cache node, also member of node-group-1', '127.0.0.102', '::1339', '00000021-0000-0000-0000-000000000001')",
-		"INSERT INTO cache_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000022-0000-0000-0000-000000000005', 'cache-node5-no-group', 'A cache node, not yet member of a node group', '127.0.0.103', '::1340')",
+
+		"INSERT INTO cache_nodes (id, name, description, node_group_id) VALUES ('00000022-0000-0000-0000-000000000003', 'cache-node3', 'A cache node, member of node-group-1', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000003', '00000022-0000-0000-0000-000000000003', '127.0.0.101')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000004', '00000022-0000-0000-0000-000000000003', '::1338')",
+
+		"INSERT INTO cache_nodes (id, name, description, node_group_id) VALUES ('00000022-0000-0000-0000-000000000004', 'cache-node4', 'A cache node, also member of node-group-1', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000005', '00000022-0000-0000-0000-000000000004', '127.0.0.102')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000006', '00000022-0000-0000-0000-000000000004', '::1339')",
+
+		"INSERT INTO cache_nodes (id, name, description) VALUES ('00000022-0000-0000-0000-000000000005', 'cache-node5-no-group', 'A cache node, not yet member of a node group')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000007', '00000022-0000-0000-0000-000000000005', '127.0.0.103')",
+		"INSERT INTO cache_node_addresses (id, node_id, address) VALUES ('00000023-0000-0000-0000-000000000008', '00000022-0000-0000-0000-000000000005', '::1340')",
 
 		// L4LB nodes
-		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000016-0000-0000-0000-000000000001', 'l4lb-node1', 'A l4lb node, l4lb-node1.example.com', '127.0.0.200', '::1347')",
+		"INSERT INTO l4lb_nodes (id, name, description) VALUES ('00000016-0000-0000-0000-000000000001', 'l4lb-node1', 'A l4lb node, l4lb-node1.example.com')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000001', '00000016-0000-0000-0000-000000000001', '127.0.0.200')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000002', '00000016-0000-0000-0000-000000000001', '::1347')",
+
 		"INSERT INTO l4lb_nodes (id, name, description) VALUES ('00000016-0000-0000-0000-000000000002', 'l4lb-node2', 'A l4lb node, l4lb-node2.example.com, no addresses')",
-		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000016-0000-0000-0000-000000000003', 'l4lb-node3', 'A l4lb node, member of node-group-1', '127.0.0.201', '::1348', '00000021-0000-0000-0000-000000000001')",
-		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address, node_group_id) VALUES ('00000016-0000-0000-0000-000000000004', 'l4lb-node4', 'A l4lb node, also member of node-group-1', '127.0.0.202', '::1349', '00000021-0000-0000-0000-000000000001')",
-		"INSERT INTO l4lb_nodes (id, name, description, ipv4_address, ipv6_address) VALUES ('00000016-0000-0000-0000-000000000005', 'l4lb-node5-no-group', 'A l4lb node, not yet member of a node group', '127.0.0.203', '::1350')",
+
+		"INSERT INTO l4lb_nodes (id, name, description, node_group_id) VALUES ('00000016-0000-0000-0000-000000000003', 'l4lb-node3', 'A l4lb node, member of node-group-1', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000003', '00000016-0000-0000-0000-000000000003', '127.0.0.201')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000004', '00000016-0000-0000-0000-000000000003', '::1348')",
+
+		"INSERT INTO l4lb_nodes (id, name, description, node_group_id) VALUES ('00000016-0000-0000-0000-000000000004', 'l4lb-node4', 'A l4lb node, also member of node-group-1', '00000021-0000-0000-0000-000000000001')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000005', '00000016-0000-0000-0000-000000000004', '127.0.0.202')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000006', '00000016-0000-0000-0000-000000000004', '::1349')",
+
+		"INSERT INTO l4lb_nodes (id, name, description) VALUES ('00000016-0000-0000-0000-000000000005', 'l4lb-node5-no-group', 'A l4lb node, not yet member of a node group')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000007', '00000016-0000-0000-0000-000000000005', '127.0.0.203')",
+		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000008', '00000016-0000-0000-0000-000000000005', '::1350')",
 	}
 
 	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
@@ -4225,8 +4249,7 @@ func TestPostCacheNodes(t *testing.T) {
 		password       string
 		expectedStatus int
 		cacheNodeDescr string
-		ipv4Address    *netip.Addr
-		ipv6Address    *netip.Addr
+		addresses      []netip.Addr
 		name           string
 	}{
 		{
@@ -4235,8 +4258,7 @@ func TestPostCacheNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			cacheNodeDescr: "cache-node-post-1.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.1")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::1")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
 			name:           "cache-node-post-1",
 		},
 		{
@@ -4253,8 +4275,7 @@ func TestPostCacheNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			cacheNodeDescr: strings.Repeat("a", 100),
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
 			name:           "cache-node-post-3",
 		},
 		{
@@ -4263,8 +4284,7 @@ func TestPostCacheNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			cacheNodeDescr: strings.Repeat("a", 101),
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
 			name:           "cache-node-post-4",
 		},
 		{
@@ -4273,8 +4293,7 @@ func TestPostCacheNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			cacheNodeDescr: "",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.3")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::3")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.3"), netip.MustParseAddr("::3")},
 			name:           "cache-node-post-5",
 		},
 		{
@@ -4282,8 +4301,7 @@ func TestPostCacheNodes(t *testing.T) {
 			username:       "username1",
 			password:       "password1",
 			cacheNodeDescr: "cache-node-post-6.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.4")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::4")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.4"), netip.MustParseAddr("::4")},
 			expectedStatus: http.StatusForbidden,
 			name:           "cache-node-post-6",
 		},
@@ -4292,8 +4310,7 @@ func TestPostCacheNodes(t *testing.T) {
 			username:       "node-user-1",
 			password:       "nodeuserpass1",
 			cacheNodeDescr: "cache-node-post-user-1.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.5")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::5")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.5"), netip.MustParseAddr("::5")},
 			expectedStatus: http.StatusForbidden,
 			name:           "cache-node-post-user-7",
 		},
@@ -4301,14 +4318,12 @@ func TestPostCacheNodes(t *testing.T) {
 
 	for _, test := range tests {
 		newCacheNode := struct {
-			Description string      `json:"description"`
-			IPv4Address *netip.Addr `json:"ipv4_address,omitempty"`
-			IPv6Address *netip.Addr `json:"ipv6_address,omitempty"`
-			Name        string      `json:"name"`
+			Description string       `json:"description"`
+			Addresses   []netip.Addr `json:"addresses,omitempty"`
+			Name        string       `json:"name"`
 		}{
 			Description: test.cacheNodeDescr,
-			IPv4Address: test.ipv4Address,
-			IPv6Address: test.ipv6Address,
+			Addresses:   test.addresses,
 			Name:        test.name,
 		}
 
@@ -4804,8 +4819,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		password       string
 		expectedStatus int
 		l4lbNodeDescr  string
-		ipv4Address    *netip.Addr
-		ipv6Address    *netip.Addr
+		addresses      []netip.Addr
 		name           string
 	}{
 		{
@@ -4814,8 +4828,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			l4lbNodeDescr:  "l4lb-node-post-1.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.1")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::1")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
 			name:           "l4lb-node-post-1",
 		},
 		{
@@ -4832,8 +4845,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusCreated,
 			l4lbNodeDescr:  strings.Repeat("a", 100),
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
 			name:           "l4lb-node-post-3",
 		},
 		{
@@ -4842,8 +4854,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			l4lbNodeDescr:  strings.Repeat("a", 101),
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.2")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::2")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
 			name:           "l4lb-node-post-4",
 		},
 		{
@@ -4852,8 +4863,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			password:       "adminpass1",
 			expectedStatus: http.StatusUnprocessableEntity,
 			l4lbNodeDescr:  "",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.3")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::3")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.3"), netip.MustParseAddr("::3")},
 			name:           "l4lb-node-post-5",
 		},
 		{
@@ -4861,8 +4871,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			username:       "username1",
 			password:       "password1",
 			l4lbNodeDescr:  "l4lb-node-post-6.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.4")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::4")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.4"), netip.MustParseAddr("::4")},
 			expectedStatus: http.StatusForbidden,
 			name:           "l4lb-node-post-6",
 		},
@@ -4871,8 +4880,7 @@ func TestPostL4LBNodes(t *testing.T) {
 			username:       "node-user-1",
 			password:       "nodeuserpass1",
 			l4lbNodeDescr:  "l4lb-node-post-user-1.example.com",
-			ipv4Address:    Ptr(netip.MustParseAddr("127.0.0.5")),
-			ipv6Address:    Ptr(netip.MustParseAddr("::5")),
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.5"), netip.MustParseAddr("::5")},
 			expectedStatus: http.StatusForbidden,
 			name:           "l4lb-node-post-user-7",
 		},
@@ -4880,14 +4888,12 @@ func TestPostL4LBNodes(t *testing.T) {
 
 	for _, test := range tests {
 		newCacheNode := struct {
-			Description string      `json:"description"`
-			IPv4Address *netip.Addr `json:"ipv4_address,omitempty"`
-			IPv6Address *netip.Addr `json:"ipv6_address,omitempty"`
-			Name        string      `json:"name"`
+			Description string       `json:"description"`
+			Addresses   []netip.Addr `json:"addresses,omitempty"`
+			Name        string       `json:"name"`
 		}{
 			Description: test.l4lbNodeDescr,
-			IPv4Address: test.ipv4Address,
-			IPv6Address: test.ipv6Address,
+			Addresses:   test.addresses,
 			Name:        test.name,
 		}
 
