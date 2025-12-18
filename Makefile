@@ -17,4 +17,4 @@ test:
 	go test -race ./...
 
 run-dev:
-	go run . --config sunet-cdn-manager-dev.toml server --dev --disable-acme --tls-cert-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.crt --tls-key-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.key
+	go run . --config sunet-cdn-manager-dev.toml server --dev --shutdown-delay 0 --disable-acme --tls-cert-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.crt --tls-key-file local-dev/generated/manager/certs/manager.sunet-cdn.localhost.key
