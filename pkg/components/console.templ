@@ -293,7 +293,7 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 	</table>
 }
 
-templ OriginFieldSet(orgName string, serviceName string, index int, numFields int, cloneOrigin cdntypes.Origin, originGroups []cdntypes.OriginGroup, htmxRequest bool) {
+templ OriginFieldSet(orgName string, serviceName string, index int, numFields int, submittedOrigin *cdntypes.CreateServiceVersionOrigin, cloneOrigin cdntypes.Origin, originGroups []cdntypes.OriginGroup, htmxRequest bool) {
 	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
 		<fieldset>
 			<legend>Origin</legend>
@@ -301,15 +301,21 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 				Origin group
 				<select id={ fmt.Sprintf("origins.%d.origin-group", index) } name={ fmt.Sprintf("origins.%d.origin-group", index) }>
 					{{
+						var originGroupSubmitMatch bool
 						var originGroupCloneMatch bool
 						for _, originGroup := range originGroups {
+							if submittedOrigin != nil && originGroup.Name == submittedOrigin.OriginGroup {
+								originGroupSubmitMatch = true
+							}
 							if originGroup.ID == cloneOrigin.OriginGroupID {
 								originGroupCloneMatch = true
 							}
 						}
 					}}
 					for _, originGroup := range originGroups {
-						if originGroupCloneMatch {
+						if originGroupSubmitMatch {
+							<option value={ originGroup.Name } selected?={ originGroup.Name == submittedOrigin.OriginGroup }>{ originGroup.Name }</option>
+						} else if originGroupCloneMatch {
 							<option value={ originGroup.Name } selected?={ originGroup.ID == cloneOrigin.OriginGroupID }>{ originGroup.Name }</option>
 						} else {
 							<option value={ originGroup.Name } selected?={ originGroup.DefaultGroup }>{ originGroup.Name }</option>
@@ -318,27 +324,53 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 				</select>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.host", index) }>
+				{{
+					host := ""
+					if submittedOrigin != nil {
+						host = submittedOrigin.OriginHost
+					} else if cloneOrigin.Host != "" {
+						host = cloneOrigin.Host
+					}
+				}}
 				Host
-				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ cloneOrigin.Host }/>
+				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ host }/>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.port", index) }>
-				Port
 				{{
 					originPortStr := ""
-					if cloneOrigin.Port != 0 {
+					if submittedOrigin != nil && submittedOrigin.OriginPort != 0 {
+						originPortStr = strconv.Itoa(submittedOrigin.OriginPort)
+					} else if cloneOrigin.Port != 0 {
 						originPortStr = strconv.Itoa(cloneOrigin.Port)
 
 					}
 				}}
+				Port
 				<input type="text" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr }/>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.tls", index) }>
+				{{
+					var tlsChecked bool
+					if submittedOrigin != nil {
+						tlsChecked = submittedOrigin.OriginTLS
+					} else {
+						tlsChecked = cloneOrigin.TLS
+					}
+				}}
 				TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", index) } name={ fmt.Sprintf("origins.%d.tls", index) } checked?={ cloneOrigin.TLS }/>
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", index) } name={ fmt.Sprintf("origins.%d.tls", index) } checked?={ tlsChecked }/>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.verify-tls", index) }>
+				{{
+					var verifyTLSChecked bool
+					if submittedOrigin != nil {
+						verifyTLSChecked = submittedOrigin.OriginVerifyTLS
+					} else {
+						verifyTLSChecked = cloneOrigin.VerifyTLS
+					}
+				}}
 				Verify TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ cloneOrigin.VerifyTLS }/>
+				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ verifyTLSChecked }/>
 			</label>
 		</fieldset>
 		@deleteOriginButton(strconv.Itoa(index), numFields == 1)
@@ -379,7 +411,7 @@ templ deleteOriginButton(index string, disabled bool) {
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>
 		<article>
 			<fieldset>
@@ -393,6 +425,14 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 								{ domain.Name }
 								{{
 									var precheck bool
+									if submittedData != nil {
+										for _, submittedDomain := range submittedData.Domains {
+											if string(submittedDomain) == domain.Name {
+												precheck = true
+												break
+											}
+										}
+									}
 									for _, cloneDomain := range cloneData.Domains {
 										if string(cloneDomain) == domain.Name {
 											precheck = true
@@ -434,11 +474,19 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 				end
 			"
 		>
-			if len(cloneData.Origins) == 0 {
-				@OriginFieldSet(orgName, serviceName, 0, 1, cdntypes.Origin{}, originGroups, false)
+			// Prefer submitted data over clone data since this can
+			// be modified contents based on a clone
+			if submittedData != nil && len(submittedData.Origins) != 0 {
+				for i, submittedOrigin := range submittedData.Origins {
+					@OriginFieldSet(orgName, serviceName, i, len(submittedData.Origins), &submittedOrigin, cdntypes.Origin{}, originGroups, false)
+				}
 			} else {
-				for i, cloneOrigin := range cloneData.Origins {
-					@OriginFieldSet(orgName, serviceName, i, len(cloneData.Origins), cloneOrigin, originGroups, false)
+				if len(cloneData.Origins) == 0 {
+					@OriginFieldSet(orgName, serviceName, 0, 1, nil, cdntypes.Origin{}, originGroups, false)
+				} else {
+					for i, cloneOrigin := range cloneData.Origins {
+						@OriginFieldSet(orgName, serviceName, i, len(cloneData.Origins), nil, cloneOrigin, originGroups, false)
+					}
 				}
 			}
 		</div>
@@ -452,7 +500,14 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 			}
 		}}
 		@addOriginButton(orgName, serviceName, nextOriginIndexStr, false)
-		{{ cloneVclStepsMap := cdntypes.VclStepsToMap(cloneData.VclSteps) }}
+		{{
+			var vclStepsMap map[string]string
+			if submittedData != nil {
+				vclStepsMap = cdntypes.VclStepsToMap(submittedData.VclSteps)
+			} else {
+				vclStepsMap = cdntypes.VclStepsToMap(cloneData.VclSteps)
+			}
+		}}
 		<article>
 			<fieldset>
 				<legend>VCL steps</legend>
@@ -460,7 +515,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 					<div>
 						<label for={ vclSK.FieldToKey[vclStep] }>
 							{ vclSK.FieldToKey[vclStep] }
-							<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ cloneVclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
+							<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ vclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
 						</label>
 					</div>
 				}

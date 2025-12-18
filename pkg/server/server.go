@@ -1040,7 +1040,7 @@ func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions
 				return
 			}
 		}
-		component := components.OriginFieldSet(orgIdent.name, serviceIdent.name, index, index+1, cdntypes.Origin{}, originGroups, true)
+		component := components.OriginFieldSet(orgIdent.name, serviceIdent.name, index, index+1, nil, cdntypes.Origin{}, originGroups, true)
 		err = component.Render(r.Context(), w)
 		if err != nil {
 			logger.Error().Msg("console: unable to render origin fieldset")
@@ -1397,7 +1397,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				}
 			}
 
-			err = renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, cloneData, nil, ""))
+			err = renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, nil, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1411,7 +1411,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				return
 			}
 
-			formData := createServiceVersionForm{}
+			formData := cdntypes.CreateServiceVersionForm{}
 
 			err = schemaDecoder.Decode(&formData, r.PostForm)
 			if err != nil {
@@ -1446,7 +1446,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 
-				err = renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1474,7 +1474,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1685,20 +1685,6 @@ type createDomainForm struct {
 	// Domain name length validation needs to be kept in sync with the CHECK
 	// constraints in the domains table, see the migrations module.
 	Name string `schema:"name" validate:"min=1,max=253,fqdn"`
-}
-
-type createServiceVersionOrigin struct {
-	OriginGroup     string `schema:"origin-group" validate:"gte=1,min=1,max=63"`
-	OriginHost      string `schema:"host" validate:"gte=1,min=1,max=253"`
-	OriginPort      int    `schema:"port" validate:"gte=1,min=1,max=65535"`
-	OriginTLS       bool   `schema:"tls"`
-	OriginVerifyTLS bool   `schema:"verify-tls"`
-}
-
-type createServiceVersionForm struct {
-	cdntypes.VclSteps
-	Domains []cdntypes.DomainString      `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins []createServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
 }
 
 type activateServiceVersionForm struct {

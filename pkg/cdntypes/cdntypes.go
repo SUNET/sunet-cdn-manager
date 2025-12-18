@@ -75,6 +75,20 @@ type InputServiceVersion struct {
 	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
+type CreateServiceVersionOrigin struct {
+	OriginGroup     string `schema:"origin-group" validate:"gte=1,min=1,max=63"`
+	OriginHost      string `schema:"host" validate:"gte=1,min=1,max=253"`
+	OriginPort      int    `schema:"port" validate:"gte=1,min=1,max=65535"`
+	OriginTLS       bool   `schema:"tls"`
+	OriginVerifyTLS bool   `schema:"verify-tls"`
+}
+
+type CreateServiceVersionForm struct {
+	VclSteps
+	Domains []DomainString               `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
+}
+
 type OriginGroup struct {
 	ID           pgtype.UUID `json:"id" doc:"ID of origin group"`
 	DefaultGroup bool        `json:"defaut_group" example:"true" doc:"If the group is the default"`
