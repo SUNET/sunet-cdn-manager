@@ -1,0 +1,9 @@
+{
+  "protocol":"openid-connect",
+  "clientId":"sunet-cdn-manager-admin-client",
+  "publicClient":false,
+  "standardFlowEnabled":false,
+  "directAccessGrantsEnabled":false,
+  "serviceAccountsEnabled":true,
+  "standardFlowEnabled": false
+}
