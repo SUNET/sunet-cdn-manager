@@ -368,7 +368,7 @@ type strictFetchMetadataMiddleware struct{}
 func (*strictFetchMetadataMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case "GET", "HEAD", "OPTIONS":
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
 			// Safe methods are always allowed the same way
 			// http.CrossOriginProtection does it.
 			next.ServeHTTP(w, r)
@@ -755,14 +755,14 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 		}
 
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			err := renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, components.DomainData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render domain creation page in GET")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		case "POST":
+		case http.MethodPost:
 			err := r.ParseForm()
 			if err != nil {
 				logger.Err(err).Msg("unable to parse create-domain POST form")
@@ -879,14 +879,14 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 		}
 
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			err := renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, nil))
 			if err != nil {
 				logger.Err(err).Msg("GET: unable to render service creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		case "POST":
+		case http.MethodPost:
 			err := r.ParseForm()
 			if err != nil {
 				logger.Err(err).Msg("unable to parse create-service POST form")
@@ -1372,7 +1372,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 		}
 
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			var cloneData cdntypes.ServiceVersionCloneData
 			cloneVersionStr := r.URL.Query().Get("clone-version")
 			if cloneVersionStr != "" {
@@ -1403,7 +1403,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		case "POST":
+		case http.MethodPost:
 			err := r.ParseForm()
 			if err != nil {
 				logger.Err(err).Msg("unable to parse create-service-version POST form")
@@ -1556,14 +1556,14 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 		ad := adRef.(cdntypes.AuthData)
 
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			err := renderConsolePage(dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render activate-service-version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		case "POST":
+		case http.MethodPost:
 			err := r.ParseForm()
 			if err != nil {
 				logger.Err(err).Msg("unable to parse activate-service-version POST form")
@@ -1697,7 +1697,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			q := r.URL.Query()
 			returnTo := q.Get(returnToKey)
 			_, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
@@ -1721,7 +1721,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-		case "POST":
+		case http.MethodPost:
 			err := r.ParseForm()
 			if err != nil {
 				logger.Err(err).Msg("unable to parse login POST form")
