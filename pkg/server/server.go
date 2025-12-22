@@ -5975,8 +5975,8 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 		huma.Register(
 			api,
 			huma.Operation{
-				OperationID:   huma.GenerateOperationID(http.MethodPost, postDomainsPath, &orgDomainsOutput{}),
-				Summary:       huma.GenerateSummary(http.MethodPost, postDomainsPath, &orgDomainsOutput{}),
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postDomainsPath, &orgDomainOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postDomainsPath, &orgDomainOutput{}),
 				Method:        http.MethodPost,
 				Path:          postDomainsPath,
 				DefaultStatus: http.StatusCreated,
