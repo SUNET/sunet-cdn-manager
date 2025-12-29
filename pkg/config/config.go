@@ -17,12 +17,13 @@ import (
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
-	Server    serverSettings
-	DB        dbSettings
-	OIDC      oidcSettings
-	Domains   domainSettings
-	CertMagic certmagicSettings
-	AcmeDNS   acmeDNSConfig
+	Server              serverSettings
+	DB                  dbSettings
+	OIDC                oidcSettings
+	Domains             domainSettings
+	CertMagic           certmagicSettings
+	AcmeDNS             acmeDNSConfig
+	KeycloakClientAdmin keycloakClientAdminSettings `mapstructure:"keycloak_client_admin" validate:"required"`
 }
 
 type serverSettings struct {
@@ -45,6 +46,12 @@ type oidcSettings struct {
 	ClientID     string `mapstructure:"client_id" validate:"required"`
 	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 	RedirectURL  string `mapstructure:"redirect_url" validate:"required"`
+}
+
+type keycloakClientAdminSettings struct {
+	ClientURL    string `mapstructure:"client_url" validate:"required"`
+	ClientID     string `mapstructure:"client_id" validate:"required"`
+	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 }
 
 type domainSettings struct {

@@ -24,6 +24,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/coreos/go-oidc/v3/oidc"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -33,6 +34,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 var pgt *postgrestest.Server
@@ -437,7 +440,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	return nil
 }
 
-func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclValidatorClient) (*httptest.Server, *pgxpool.Pool, error) {
+func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclValidatorClient, kcClientManager *keycloakClientManager) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -498,7 +501,7 @@ func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclVali
 
 	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, vclValidator, confTemplates, false)
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -543,7 +546,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -608,7 +611,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, true, nil)
+	ts, dbPool, err := prepareServer(t, true, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -678,7 +681,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -757,7 +760,7 @@ func TestGetUsers(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -863,7 +866,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestPostUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1006,7 +1009,7 @@ func TestPostUsers(t *testing.T) {
 }
 
 func TestPutUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1120,7 +1123,7 @@ func TestPutUser(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1251,7 +1254,7 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestPutPassword(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1419,7 +1422,7 @@ func testAuth(t *testing.T, ts *httptest.Server, username string, password strin
 }
 
 func TestGetOrgs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1491,8 +1494,551 @@ func TestGetOrgs(t *testing.T) {
 	}
 }
 
+func TestGetOrgClientCredentials(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		nameOrID       string
+		expectedStatus int
+	}{
+		{
+			description:    "successful superuser request with ID",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful superuser request with name",
+			username:       "admin",
+			password:       "adminpass1",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org request with ID",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "successful org request with name",
+			username:       "username1",
+			password:       "password1",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "failed org request, bad password",
+			username:       "username1",
+			password:       "badpassword1",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			description:    "failed lookup of org you do not belong to with ID",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "00000002-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed lookup of org you do not belong to with name",
+			username:       "username2",
+			password:       "password2",
+			nameOrID:       "org1",
+			expectedStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
+// {"id":"1af03a7c-735a-4717-b48a-988256d5586f","username":"service-account-sunet-cdn-admin-client","emailVerified":false,"createdTimestamp":1767042831875,"enabled":true,"totp":false,"disableableCredentialTypes":[],"requiredActions":[],"notBefore":0}
+type keycloakServiceAccountUser struct {
+	ID                          string   `json:"id"`
+	Username                    string   `json:"username"`
+	EmailVerified               bool     `json:"emailVerified"`
+	CreatedTimestamp            int64    `json:"createdTimestamp"`
+	Enabled                     bool     `json:"enabled"`
+	TOTP                        bool     `json:"totp"`
+	DisabledableCredentialTypes []string `json:"disableableCredentialTypes"`
+	RequiredActions             []string `json:"requiredActions"`
+	NotBefore                   int64    `json:"notBefore"`
+}
+
+// [{"id":"a69f1222-0174-454b-9de8-0a359c063753","clientId":"realm-management","name":"${client_realm-management}","surrogateAuthRequired":false,"enabled":true,"alwaysDisplayInConsole":false,"clientAuthenticatorType":"client-secret","redirectUris":[],"webOrigins":[],"notBefore":0,"bearerOnly":true,"consentRequired":false,"standardFlowEnabled":true,"implicitFlowEnabled":false,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":false,"publicClient":false,"frontchannelLogout":false,"protocol":"openid-connect","attributes":{"realm_client":"true"},"authenticationFlowBindingOverrides":{},"fullScopeAllowed":false,"nodeReRegistrationTimeout":0,"defaultClientScopes":["web-origins","acr","roles","profile","basic","email"],"optionalClientScopes":["address","phone","organization","offline_access","microprofile-jwt"],"access":{"view":true,"configure":true,"manage":true}}]
+type keycloakClientInfo struct {
+	ID       string `json:"id"`
+	ClientID string `json:"clientId"`
+	Name     string `json:"name"`
+}
+
+// {"id":"0b71362e-1d3d-433d-b14e-0a302e5f053f","name":"manage-clients","description":"${role_manage-clients}","composite":false,"clientRole":true,"containerId":"133f641d-414b-4767-9664-5e9971ba5f21","attributes":{}}
+type keycloakRoleInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// [
+//
+//	{
+//	    "id":"$manage_clients_role_uuid",
+//	    "name":"manage-clients",
+//	    "description":"${role_manage-clients}"
+//	}
+//
+// ]
+type keycloakRoleMapping struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Set up keycloak similarly to the local-dev scripts in this repo
+func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, password string, realm string) (string, string, error) {
+	adminIssuer, err := url.JoinPath(baseURL.String(), "realms/master")
+	if err != nil {
+		return "", "", err
+	}
+
+	adminProvider, err := oidc.NewProvider(context.Background(), adminIssuer)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Get access token from username/password
+	adminConfig := &oauth2.Config{
+		ClientID: "admin-cli",
+		Endpoint: adminProvider.Endpoint(),
+	}
+
+	token, err := adminConfig.PasswordCredentialsToken(context.Background(), user, password)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Printf("%#v\n", token)
+
+	adminClient := adminConfig.Client(context.Background(), token)
+
+	realmsURL, err := url.JoinPath(baseURL.String(), "admin/realms")
+	if err != nil {
+		return "", "", err
+	}
+
+	realmsJSON, err := json.Marshal(struct {
+		Realm   string `json:"realm"`
+		Enabled bool   `json:"enabled"`
+	}{
+		Realm:   realm,
+		Enabled: true,
+	})
+	if err != nil {
+		return "", "", err
+	}
+
+	realmsReq, err := http.NewRequest("POST", realmsURL, bytes.NewReader(realmsJSON))
+	if err != nil {
+		return "", "", err
+	}
+	realmsReq.Header.Add("Content-Type", "application/json")
+
+	realmsResp, err := adminClient.Do(realmsReq)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Printf("%#v\n", realmsResp)
+
+	// Create oauth2 admin client used by sunet-cdn-manager service for
+	// managing client credentials by reusing the same function being used
+	// to create user-facing client credentials
+	clientsURLString, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients")
+	if err != nil {
+		return "", "", err
+	}
+
+	clientsURL, err := url.Parse(clientsURLString)
+	if err != nil {
+		return "", "", err
+	}
+
+	adminKeycloakManager := keycloakClientManager{
+		url:    clientsURL,
+		client: adminClient,
+		logger: logger,
+	}
+
+	clientAdminClientID := "sunet-cdn-admin-client"
+
+	clientAdminUUID, clientAdminSecret, err := adminKeycloakManager.createClientCred(clientAdminClientID)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Finding related service account UUID so we can assign "manage-clients" admin role to it.
+	serviceAccountURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients", clientAdminUUID, "service-account-user")
+	if err != nil {
+		return "", "", err
+	}
+
+	serviceAccountReq, err := http.NewRequest("GET", serviceAccountURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+
+	serviceAccountResp, err := adminClient.Do(serviceAccountReq)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := serviceAccountResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	fmt.Printf("%#v\n", serviceAccountResp)
+
+	b, err := io.ReadAll(serviceAccountResp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	var adminClientServiceAccount keycloakServiceAccountUser
+
+	err = json.Unmarshal(b, &adminClientServiceAccount)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(string(b))
+	fmt.Println(adminClientServiceAccount)
+
+	fmt.Printf("%s (%s): %s\n", clientAdminClientID, clientAdminUUID, clientAdminSecret)
+
+	// Finding realm-management client UUID, needed to find manage-clients role UUID
+	realmManagementClientReq, err := http.NewRequest("GET", clientsURL.String(), nil)
+	if err != nil {
+		return "", "", err
+	}
+
+	realmManagementClientID := "realm-management"
+	realmManagementQueryParams := url.Values{}
+	realmManagementQueryParams.Set("clientId", realmManagementClientID)
+	realmManagementClientReq.URL.RawQuery = realmManagementQueryParams.Encode()
+
+	realmManagementClientResp, err := adminClient.Do(realmManagementClientReq)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := realmManagementClientResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	fmt.Printf("%#v\n", realmManagementClientResp)
+
+	b, err = io.ReadAll(realmManagementClientResp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(string(b))
+
+	var kcClientsInfo []keycloakClientInfo
+
+	err = json.Unmarshal(b, &kcClientsInfo)
+	if err != nil {
+		return "", "", err
+	}
+
+	if len(kcClientsInfo) != 1 {
+		return "", "", fmt.Errorf("expected exactly one matche for clientId '%s': %d", realmManagementClientID, len(kcClientsInfo))
+	}
+
+	fmt.Println(kcClientsInfo)
+
+	// Finding UUID for realm-management manage-clients role
+	manageClientsRoleURL, err := url.JoinPath(clientsURL.String(), kcClientsInfo[0].ID, "roles/manage-clients")
+	if err != nil {
+		return "", "", err
+	}
+	manageClientsRoleReq, err := http.NewRequest("GET", manageClientsRoleURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	manageClientsRoleResp, err := adminClient.Do(manageClientsRoleReq)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := manageClientsRoleResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	fmt.Printf("%#v\n", manageClientsRoleResp)
+
+	b, err = io.ReadAll(manageClientsRoleResp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(string(b))
+
+	var kcRoleInfo keycloakRoleInfo
+
+	err = json.Unmarshal(b, &kcRoleInfo)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(kcRoleInfo)
+
+	// Apply manage-clients role to sunet-cdn-manager client service account
+	serviceAccountRoleMappingURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "users", adminClientServiceAccount.ID, "role-mappings/clients", kcClientsInfo[0].ID)
+	if err != nil {
+		return "", "", err
+	}
+
+	kcRoleMappings := []keycloakRoleMapping{
+		{
+			ID:          kcRoleInfo.ID,
+			Name:        "manage-clients",
+			Description: "${role_manage-clients}",
+		},
+	}
+
+	roleMappingJSON, err := json.Marshal(kcRoleMappings)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(serviceAccountRoleMappingURL)
+	fmt.Println(string(roleMappingJSON))
+
+	// http://localhost:53472/admin/realms/sunet-cdn-manager/users/03b31228-babf-48a8-a731-a7f5773a3f4d/role-mappings/clients/516102b6-7200-4b7c-8687-72507986475f[{"id":"$manage_clients_role_uuid","name":"manage-clients","description":"${role_manage-clients}"}]
+
+	roleMappingReq, err := http.NewRequest("POST", serviceAccountRoleMappingURL, bytes.NewReader(roleMappingJSON))
+	if err != nil {
+		return "", "", err
+	}
+	roleMappingReq.Header.Add("Content-Type", "application/json")
+
+	roleMappingResp, err := adminClient.Do(roleMappingReq)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := roleMappingResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	fmt.Printf("%#v\n", roleMappingResp)
+
+	return clientAdminClientID, clientAdminSecret, nil
+}
+
+func TestPostOrgClientCredentials(t *testing.T) {
+	req := testcontainers.ContainerRequest{
+		Image:      "quay.io/keycloak/keycloak:26.0.7",
+		WaitingFor: wait.ForListeningPort("8080/tcp"),
+		Env: map[string]string{
+			"KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
+			"KC_BOOTSTRAP_ADMIN_PASSWORD": "admin",
+		},
+		Cmd: []string{"start-dev"},
+	}
+
+	ctx := context.Background()
+	keycloakC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	defer testcontainers.CleanupContainer(t, keycloakC)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We need to use PortEndpoint() rather than the simpler Endpoint()
+	// because the varnish container used as a baseline for the validator
+	// container includes "EXPOSE 80 8443" so we end up trying to use
+	// 80/tcp in that case (which is not used at all for the validator
+	// container). Also it is not possible to simply add our own EXPOSE in
+	// the validator Dockerfile with port 8888, it is just appended to the
+	// existing list rather than overriding the existing set.
+	endpoint, err := keycloakC.Endpoint(ctx, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	realm := "sunet-cdn-manager"
+
+	clientID, clientSecret, err := setupKeycloak(logger, endpointURL, "admin", "admin", realm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	issuerURL, err := url.Parse(endpoint + "/realms/" + realm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kcClientURL, err := url.Parse(endpoint + "/admin/realms/" + realm + "/clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	providerCtx := context.Background()
+	provider, err := oidc.NewProvider(providerCtx, issuerURL.String())
+	if err != nil {
+		t.Fatal(fmt.Errorf("setting up OIDC provider failed: %w", err))
+	}
+
+	cc := clientcredentials.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		TokenURL:     provider.Endpoint().TokenURL,
+	}
+
+	// Client used for creating client credentials in keycloak
+	kcClientManager := &keycloakClientManager{
+		client: cc.Client(providerCtx),
+		url:    kcClientURL,
+		logger: logger,
+	}
+
+	ts, dbPool, err := prepareServer(t, false, nil, kcClientManager)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description     string
+		username        string
+		password        string
+		expectedStatus  int
+		credName        string
+		credDescription string
+		orgNameOrID     string
+	}{
+		{
+			description:     "successful superuser request",
+			username:        "admin",
+			password:        "adminpass1",
+			expectedStatus:  http.StatusCreated,
+			credName:        "post-cred-1",
+			credDescription: "a description 1",
+			orgNameOrID:     "org1",
+		},
+	}
+
+	for _, test := range tests {
+		newCred := struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}{
+			Name:        test.credName,
+			Description: test.credDescription,
+		}
+
+		b, err := json.Marshal(newCred)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := bytes.NewReader(b)
+
+		req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.SetBasicAuth(test.username, test.password)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != test.expectedStatus {
+			r, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+		}
+
+		jsonData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		t.Logf("%s\n", jsonData)
+	}
+}
+
 func TestGetOrg(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1591,7 +2137,7 @@ func TestGetOrg(t *testing.T) {
 }
 
 func TestGetDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1717,7 +2263,7 @@ func TestGetDomains(t *testing.T) {
 }
 
 func TestGetServiceIPs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1819,7 +2365,7 @@ func TestGetServiceIPs(t *testing.T) {
 }
 
 func TestPostOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1926,7 +2472,7 @@ func TestPostOrganizations(t *testing.T) {
 }
 
 func TestGetServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2034,7 +2580,7 @@ func TestGetServices(t *testing.T) {
 }
 
 func TestGetService(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2163,7 +2709,7 @@ func TestGetService(t *testing.T) {
 }
 
 func TestDeleteService(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2292,7 +2838,7 @@ func TestDeleteService(t *testing.T) {
 }
 
 func TestPostServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2470,7 +3016,7 @@ func TestPostServices(t *testing.T) {
 }
 
 func TestDeleteDomain(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2580,7 +3126,7 @@ func TestDeleteDomain(t *testing.T) {
 }
 
 func TestPostDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2674,7 +3220,7 @@ func TestPostDomains(t *testing.T) {
 }
 
 func TestGetServiceVersions(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2817,7 +3363,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 	vclValidator := newVclValidator(u)
 
-	ts, dbPool, err := prepareServer(t, false, vclValidator)
+	ts, dbPool, err := prepareServer(t, false, vclValidator, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3255,7 +3801,7 @@ func TestPostServiceVersion(t *testing.T) {
 }
 
 func TestActivateServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3397,7 +3943,7 @@ func TestActivateServiceVersion(t *testing.T) {
 }
 
 func TestGetOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3513,7 +4059,7 @@ func TestGetOriginGroups(t *testing.T) {
 }
 
 func TestPostOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3604,7 +4150,7 @@ func TestPostOriginGroups(t *testing.T) {
 }
 
 func TestGetServiceVersionVCL(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3723,7 +4269,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 }
 
 func TestGetIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3824,7 +4370,7 @@ func TestGetIPNetworks(t *testing.T) {
 }
 
 func TestPostIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3945,7 +4491,7 @@ func TestPostIPNetworks(t *testing.T) {
 }
 
 func TestGetCacheNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4058,7 +4604,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 }
 
 func TestGetL4LBNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4234,7 +4780,7 @@ func TestCamelCaseToSnakeCase(t *testing.T) {
 }
 
 func TestPostCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4382,7 +4928,7 @@ func TestPostCacheNodes(t *testing.T) {
 }
 
 func TestGetCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4467,7 +5013,7 @@ func TestGetCacheNodes(t *testing.T) {
 }
 
 func TestPutCacheNodeMaintenance(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4589,7 +5135,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 }
 
 func TestPutCacheNodeGroup(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4719,7 +5265,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 }
 
 func TestGetL4LBNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4804,7 +5350,7 @@ func TestGetL4LBNodes(t *testing.T) {
 }
 
 func TestPostL4LBNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4952,7 +5498,7 @@ func TestPostL4LBNodes(t *testing.T) {
 }
 
 func TestPutL4LBNodeMaintenance(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5074,7 +5620,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 }
 
 func TestPutL4LBNodeGroup(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5204,7 +5750,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 }
 
 func TestGetNodeGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5277,7 +5823,7 @@ func TestGetNodeGroups(t *testing.T) {
 }
 
 func TestPostNodeGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil)
+	ts, dbPool, err := prepareServer(t, false, nil, nil)
 	if dbPool != nil {
 		defer dbPool.Close()
 	}

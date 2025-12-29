@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -42,6 +44,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -58,6 +61,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 func init() {
@@ -3253,6 +3257,224 @@ func selectOrg(dbPool *pgxpool.Pool, orgNameOrID string, ad cdntypes.AuthData) (
 	return o, nil
 }
 
+func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdntypes.AuthData) ([]cdntypes.OrgClientCredential, error) {
+	orgClientCredentials := []cdntypes.OrgClientCredential{}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+			return cdnerrors.ErrNotFound
+		}
+
+		rows, err := tx.Query(
+			context.Background(),
+			"SELECT id, org_id, client_id, description FROM org_keycloak_client_credentials WHERE org_id = $1",
+			orgIdent.id,
+		)
+		if err != nil {
+			return fmt.Errorf("unable query org_keycloak_client_credentials: %w", err)
+		}
+
+		orgClientCredentials, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.OrgClientCredential])
+		if err != nil {
+			return fmt.Errorf("collecting rows for org_keycloak_client_credentials failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("selectOrgClientTokens: transaction failed: %w", err)
+	}
+
+	return orgClientCredentials, nil
+}
+
+type keyCloakData struct {
+	Protocol                  string `json:"protocol"`
+	ClientID                  string `json:"clientId"`
+	PublicClient              bool   `json:"publicClient"`
+	StandardFlowEnabled       bool   `json:"standardFlowEnabled"`
+	DirectAccessGrantsEnabled bool   `json:"directAccessGrantsEnabled"`
+	ServiceAccountsEnabled    bool   `json:"serviceAccountsEnabled"`
+}
+
+func newKeycloakClientReq(clientID string) keyCloakData {
+	return keyCloakData{
+		Protocol:                  "openid-connect",
+		ClientID:                  clientID,
+		PublicClient:              false,
+		StandardFlowEnabled:       false,
+		DirectAccessGrantsEnabled: false,
+		ServiceAccountsEnabled:    true,
+	}
+}
+
+type keycloakClientSecretData struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+func (kccm *keycloakClientManager) createClientCred(clientID string) (string, string, error) {
+	ckBody := newKeycloakClientReq(clientID)
+
+	b, err := json.Marshal(ckBody)
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to marshal json: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(b)
+
+	createResp, err := kccm.client.Post(kccm.url.String(), "application/json", bodyReader)
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to do POST request: %w", err)
+	}
+	defer func() {
+		err := createResp.Body.Close()
+		if err != nil {
+			kccm.logger.Err(err).Msg("createClientCred: unable to close POST body")
+		}
+	}()
+
+	if createResp.StatusCode != http.StatusCreated {
+		return "", "", fmt.Errorf("createClientCred: unexpected status code for client creation: %d", createResp.StatusCode)
+	}
+
+	clientURL, err := url.Parse(createResp.Header.Get("Location"))
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to parse location URL for created client: '%s': %w", createResp.Header.Get("Location"), err)
+	}
+	fmt.Println("clientURL", clientURL)
+
+	clientUUID := path.Base(clientURL.Path)
+	if clientUUID == "." || clientUUID == "/" {
+		return "", "", fmt.Errorf("createClientCred: unable to parse client UUID from clientURL '%s'", clientURL)
+	}
+
+	clientSecretURL, err := url.JoinPath(clientURL.String(), "client-secret")
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to join client-secret path to client URL: %w", err)
+	}
+
+	secretResp, err := kccm.client.Get(clientSecretURL)
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to GET client-secret: %w", err)
+	}
+	defer func() {
+		err := secretResp.Body.Close()
+		if err != nil {
+			kccm.logger.Err(err).Msg("createClientCred: unable to close client-secret GET body")
+		}
+	}()
+
+	secretData, err := io.ReadAll(secretResp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to read client-secret body: %w", err)
+	}
+
+	var clientSecret keycloakClientSecretData
+
+	err = json.Unmarshal(secretData, &clientSecret)
+	if err != nil {
+		return "", "", fmt.Errorf("createClientCred: unable to unmarshal client-secret JSON: %w", err)
+	}
+
+	return clientUUID, clientSecret.Value, nil
+}
+
+func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager) (cdntypes.NewOrgClientCredential, error) {
+	var orgClientTokenID pgtype.UUID
+	var clientID, clientSecret string
+
+	if !ad.Superuser && ad.OrgID == nil {
+		return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(tx, orgNameOrID)
+		if err != nil {
+			return cdnerrors.ErrUnprocessable
+		}
+
+		// A normal user must supply an org id for an org they are
+		// a member of
+		if !ad.Superuser && *ad.OrgID != orgIdent.id {
+			return cdnerrors.ErrForbidden
+		}
+
+		var clientTokenQuota int64
+		// Verify we are not hitting the limit of how many client tokens the
+		// org allows, do "FOR UPDATE" to lock out any concurrently
+		// running function until we are done with counting rows.
+		err = tx.QueryRow(context.Background(), "SELECT client_token_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&clientTokenQuota)
+		if err != nil {
+			return err
+		}
+
+		var numClientTokens int64
+		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id=$1", orgIdent.id).Scan(&numClientTokens)
+		if err != nil {
+			return err
+		}
+
+		if numClientTokens >= clientTokenQuota {
+			logger.Error().Int64("num_client_tokens", numClientTokens).Int64("client_token_quota", clientTokenQuota).Msg("unable to create additional domain as quota has been reached")
+			return cdnerrors.ErrOrgClientTokenQuotaHit
+		}
+
+		// Mostly the "id" in our database is an UUIDv4 generated for us
+		// by the database via "DEFAULT gen_random_uuid()", but in this
+		// case since we want to reuse our "id" value in the
+		// "client_id" used in keycloak (e.g. sunet-cdn-org-client-<uuid>) instead
+		// generate it ourselves here.
+		tokenUUID, err := uuid.NewRandom()
+		if err != nil {
+			return fmt.Errorf("unable to generate UUID: %w", err)
+		}
+
+		clientID = fmt.Sprintf("sunet-cdn-org-client-%s", tokenUUID)
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, name, client_id, description) VALUES ($1, $2, $3, $4, $5) RETURNING id", tokenUUID, orgIdent.id, name, clientID, description).Scan(&orgClientTokenID)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT org keycloak client token: %w", err)
+		}
+
+		// Doing network operations inside transactions is not optimal
+		// but this way the database contents are rolled back if the
+		// keycloak operation fails.
+		_, clientSecret, err = kcClientManager.createClientCred(clientID)
+		if err != nil {
+			return fmt.Errorf("unable to create keycloak client: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("insertOrgClientCredential transaction failed")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == pgUniqueViolation {
+				return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrAlreadyExists
+			}
+		}
+		return cdntypes.NewOrgClientCredential{}, fmt.Errorf("insertOrgClientCredential transaction failed: %w", err)
+	}
+
+	nocd := cdntypes.NewOrgClientCredential{
+		OrgClientCredential: cdntypes.OrgClientCredential{
+			ID:          orgClientTokenID,
+			Description: description,
+			ClientID:    clientID,
+		},
+		ClientSecret: clientSecret,
+	}
+
+	return nocd, nil
+}
+
 func insertOrg(dbPool *pgxpool.Pool, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
@@ -4101,7 +4323,7 @@ func insertDomain(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, org
 
 		if numDomains >= domainQuota {
 			logger.Error().Int64("num_domains", numDomains).Int64("domain_quota", domainQuota).Msg("unable to create additional domain as quota has been reached")
-			return cdnerrors.ErrServiceQuotaHit
+			return cdnerrors.ErrDomainQuotaHit
 		}
 
 		// Generate verification token, just reuse our password generation function for now
@@ -5692,7 +5914,13 @@ const (
 	notAllowedToAddResource = "not allowed to add resource"
 )
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates) error {
+type keycloakClientManager struct {
+	client *http.Client
+	url    *url.URL
+	logger zerolog.Logger
+}
+
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -5919,6 +6147,76 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			resp.Body.Name = org.Name
 			return resp, nil
 		})
+
+		huma.Get(api, "/v1/orgs/{org}/client-credentials", func(ctx context.Context, input *struct {
+			Org string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*orgClientCredentialsOutput, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from organization client tokens GET handler")
+			}
+
+			orgClientTokens, err := selectOrgClientCredentials(dbPool, input.Org, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden(api403String)
+				} else if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("organization client credentials not found")
+				}
+				logger.Err(err).Msg("unable to query organization client credentials")
+				return nil, err
+			}
+			resp := &orgClientCredentialsOutput{}
+			resp.Body = orgClientTokens
+			return resp, nil
+		})
+
+		postOrgClientTokensPath := "/v1/orgs/{org}/client-credentials" // #nosec G101 -- Not a hardcoded credential
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postOrgClientTokensPath, &newOrgClientCredentialOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postOrgClientTokensPath, &newOrgClientCredentialOutput{}),
+				Method:        http.MethodPost,
+				Path:          postOrgClientTokensPath,
+				DefaultStatus: http.StatusCreated,
+			},
+			func(ctx context.Context, input *struct {
+				Org  string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+				Body struct {
+					Name        string `json:"name" example:"Some-name" doc:"Name for the token, must be a valid DNS label" minLength:"1" maxLength:"63"`
+					Description string `json:"description" example:"Some description" doc:"Description for the token" minLength:"1" maxLength:"100"`
+				}
+			},
+			) (*newOrgClientCredentialOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+				}
+
+				newOrgClientCred, err := insertOrgClientCredential(logger, dbPool, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager)
+				if err != nil {
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
+						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("domain already exists")
+					case errors.Is(err, cdnerrors.ErrUnprocessable):
+						return nil, huma.Error422UnprocessableEntity("missing required params")
+					}
+					logger.Err(err).Msg("unable to add client credential")
+					return nil, err
+				}
+				resp := &newOrgClientCredentialOutput{}
+				resp.Body = newOrgClientCred
+				return resp, nil
+			},
+		)
 
 		huma.Get(api, "/v1/domains", func(ctx context.Context, input *struct {
 			Org string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
@@ -7018,6 +7316,14 @@ type orgsOutput struct {
 	Body []cdntypes.Org
 }
 
+type newOrgClientCredentialOutput struct {
+	Body cdntypes.NewOrgClientCredential
+}
+
+type orgClientCredentialsOutput struct {
+	Body []cdntypes.OrgClientCredential
+}
+
 type orgIPsOutput struct {
 	Body serviceAddresses
 }
@@ -7526,6 +7832,24 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("setting up OIDC provider failed: %w", err)
 	}
 
+	cc := clientcredentials.Config{
+		ClientID:     conf.KeycloakClientAdmin.ClientID,
+		ClientSecret: conf.KeycloakClientAdmin.ClientSecret,
+		TokenURL:     provider.Endpoint().TokenURL,
+	}
+
+	kcClientURL, err := url.Parse(conf.KeycloakClientAdmin.ClientURL)
+	if err != nil {
+		return fmt.Errorf("parsing Keycloak client URL failed: %w", err)
+	}
+
+	// Client used for creating client credentials in keycloak
+	kcClientManager := &keycloakClientManager{
+		client: cc.Client(providerCtx),
+		url:    kcClientURL,
+		logger: logger,
+	}
+
 	vclValidationURL, err := url.Parse(conf.Server.VCLValidationURL)
 	if err != nil {
 		return fmt.Errorf("parsing VCL validation URL failed: %w", err)
@@ -7554,7 +7878,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 
 	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates)
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
