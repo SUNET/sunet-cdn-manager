@@ -136,7 +136,6 @@ oidc_server_client_secret=$(curl -ks -X GET \
   -H "Authorization: bearer $access_token" \
   "$base_url/admin/realms/$realm/clients/$server_client_id/client-secret" | jq -r .value)
 
-oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)
 
 echo "Creating oauth2 public client for requesting device grants"
 curl -k -X POST \
@@ -146,35 +145,40 @@ curl -k -X POST \
   "$base_url/admin/realms/$realm/clients"
 
 echo "Creating oauth2 admin client for managing API credentials"
-admin_client_id=$(curl -ksi -X POST \
+admin_client_uuid=$(curl -ksi -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
   -d @keycloak-admin-client.json \
   "$base_url/admin/realms/$realm/clients" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
 
+echo "Finding generated client-secret for admin client"
+admin_client_secret=$(curl -ks \
+  -H "Authorization: bearer $access_token" \
+  "$base_url/admin/realms/$realm/clients/$admin_client_uuid/client-secret" | jq -r .value)
+
 echo "Finding related service account UUID for admin client"
 admin_service_account_id=$(curl -ks \
   -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$admin_client_id/service-account-user" | jq -r .id)
+  "$base_url/admin/realms/$realm/clients/$admin_client_uuid/service-account-user" | jq -r .id)
 
 echo "Finding realm-management client UUID"
-realm_management_client_id=$(curl -ks \
+realm_management_client_uuid=$(curl -ks \
   -H "Authorization: bearer $access_token" \
   "$base_url/admin/realms/$realm/clients?clientId=realm-management" | jq -r .[0].id)
 
 echo "Finding UUID for realm-management manage-clients role"
-manage_clients_role_id=$(curl -ks \
+manage_clients_role_uuid=$(curl -ks \
   -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$realm_management_client_id/roles/manage-clients" | jq -r .id)
+  "$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/manage-clients" | jq -r .id)
 
 curl -iks -X POST \
   -H "Authorization: bearer $access_token" \
   -H "Content-Type: application/json" \
   -d @- \
-  "$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_id" <<EOF
+  "$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
 [
     {
-        "id":"$manage_clients_role_id",
+        "id":"$manage_clients_role_uuid",
         "name":"manage-clients",
         "description":"\${role_manage-clients}"
     }
@@ -182,5 +186,9 @@ curl -iks -X POST \
 EOF
 
 echo
+oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)
 echo "server OIDC client_id: $oidc_server_client_id"
 echo "server OIDC client_secret: $oidc_server_client_secret"
+admin_client_id=$(jq -r .clientId keycloak-admin-client.json)
+echo "admin client client_id: $admin_client_id"
+echo "admin client client_secret: $admin_client_secret"
