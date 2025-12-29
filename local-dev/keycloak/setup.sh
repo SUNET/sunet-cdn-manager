@@ -17,35 +17,35 @@ idp_alias=$(jq -r .alias "$gen_dir/keycloak-satosa-idp.json")
 
 # Get access token from username/password
 access_token=$(curl -ks \
-  -d "client_id=admin-cli" \
-  -d "username=admin" \
-  -d "password=admin" \
-  -d "grant_type=password" \
-  "$base_url/realms/master/protocol/openid-connect/token" | jq -r .access_token)
+	-d "client_id=admin-cli" \
+	-d "username=admin" \
+	-d "password=admin" \
+	-d "grant_type=password" \
+	"$base_url/realms/master/protocol/openid-connect/token" | jq -r .access_token)
 
 # Only do anything if the realm does not exist
 realm_response=$(curl -ks -X GET \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm")
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm")
 
 if ! echo "$realm_response" | grep -q "Realm not found."; then
-    echo "Realm '$realm' alredy exists, doing nothing"
-    exit 1
+	echo "Realm '$realm' alredy exists, doing nothing"
+	exit 1
 fi
 
 echo "Creating realm '$realm'"
 curl -k -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-realm.json \
-  "$base_url/admin/realms"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-realm.json \
+	"$base_url/admin/realms"
 
 echo "Creating identity provider"
 curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d "@$gen_dir/keycloak-satosa-idp.json" \
-  "$base_url/admin/realms/$realm/identity-provider/instances"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d "@$gen_dir/keycloak-satosa-idp.json" \
+	"$base_url/admin/realms/$realm/identity-provider/instances"
 
 # We need to create attribute mappers for email, first name and last name for
 # Keycloak to fill these in when creating users based on logins.
@@ -80,24 +80,24 @@ curl -ksi -X POST \
 # use it like that in the future.
 echo "Creating first name mapper"
 curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d "@$gen_dir/keycloak-satosa-idp-mapper-first-name.json" \
-  "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d "@$gen_dir/keycloak-satosa-idp-mapper-first-name.json" \
+	"$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 echo "Creating last name mapper"
 curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d "@$gen_dir/keycloak-satosa-idp-mapper-last-name.json" \
-  "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d "@$gen_dir/keycloak-satosa-idp-mapper-last-name.json" \
+	"$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 echo "Creating email mapper"
 curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d "@$gen_dir/keycloak-satosa-idp-mapper-email.json" \
-  "$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d "@$gen_dir/keycloak-satosa-idp-mapper-email.json" \
+	"$base_url/admin/realms/$realm/identity-provider/instances/$idp_alias/mappers"
 
 # Make metadata available to SATOSA
 #
@@ -106,76 +106,74 @@ curl -ksi -X POST \
 # "what attributes the application will get" is controlled by the
 # entity-category applied to the SATOSA metadata in SWAMID having a second
 # place to limit these via SATOSA just seems confusing.
-curl -ks "$base_url/realms/$realm/broker/$idp_alias/endpoint/descriptor" | xmlstarlet ed -d '/md:EntityDescriptor/md:SPSSODescriptor/md:AttributeConsumingService' > "../satosa/$gen_dir/config/metadata/keycloak_sp_metadata.xml"
+curl -ks "$base_url/realms/$realm/broker/$idp_alias/endpoint/descriptor" | xmlstarlet ed -d '/md:EntityDescriptor/md:SPSSODescriptor/md:AttributeConsumingService' >"../satosa/$gen_dir/config/metadata/keycloak_sp_metadata.xml"
 
 echo "Creating user '$user'"
 # The sed is needed to strip out a \r character present in the header printed by
 # curl, without this the content of user_id is not usable in the next step.
 user_id=$(curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-user.json \
-  "$base_url/admin/realms/$realm/users" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-user.json \
+	"$base_url/admin/realms/$realm/users" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
 
 echo "Setting password for user '$user'"
 curl -k -X PUT \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-user-password.json \
-  "$base_url/admin/realms/$realm/users/$user_id/reset-password"
-
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-user-password.json \
+	"$base_url/admin/realms/$realm/users/$user_id/reset-password"
 
 echo "Creating oauth2 confidential client for sunet-cdn-manager server"
 server_client_id=$(curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-server-client.json \
-  "$base_url/admin/realms/$realm/clients" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-server-client.json \
+	"$base_url/admin/realms/$realm/clients" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
 
 oidc_server_client_secret=$(curl -ks -X GET \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$server_client_id/client-secret" | jq -r .value)
-
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm/clients/$server_client_id/client-secret" | jq -r .value)
 
 echo "Creating oauth2 public client for requesting device grants"
 curl -k -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-device-client.json \
-  "$base_url/admin/realms/$realm/clients"
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-device-client.json \
+	"$base_url/admin/realms/$realm/clients"
 
 echo "Creating oauth2 admin client for managing API credentials"
 admin_client_uuid=$(curl -ksi -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @keycloak-admin-client.json \
-  "$base_url/admin/realms/$realm/clients" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-admin-client.json \
+	"$base_url/admin/realms/$realm/clients" | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//')
 
 echo "Finding generated client-secret for admin client"
 admin_client_secret=$(curl -ks \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$admin_client_uuid/client-secret" | jq -r .value)
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm/clients/$admin_client_uuid/client-secret" | jq -r .value)
 
 echo "Finding related service account UUID for admin client"
 admin_service_account_id=$(curl -ks \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$admin_client_uuid/service-account-user" | jq -r .id)
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm/clients/$admin_client_uuid/service-account-user" | jq -r .id)
 
 echo "Finding realm-management client UUID"
 realm_management_client_uuid=$(curl -ks \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients?clientId=realm-management" | jq -r .[0].id)
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm/clients?clientId=realm-management" | jq -r .[0].id)
 
 echo "Finding UUID for realm-management manage-clients role"
 manage_clients_role_uuid=$(curl -ks \
-  -H "Authorization: bearer $access_token" \
-  "$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/manage-clients" | jq -r .id)
+	-H "Authorization: bearer $access_token" \
+	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/manage-clients" | jq -r .id)
 
 curl -iks -X POST \
-  -H "Authorization: bearer $access_token" \
-  -H "Content-Type: application/json" \
-  -d @- \
-  "$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
 [
     {
         "id":"$manage_clients_role_uuid",
