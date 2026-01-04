@@ -49,7 +49,7 @@ type oidcSettings struct {
 }
 
 type keycloakClientAdminSettings struct {
-	ClientURL    string `mapstructure:"client_url" validate:"required"`
+	ClientRegURL string `mapstructure:"client_reg_url" validate:"required"`
 	ClientID     string `mapstructure:"client_id" validate:"required"`
 	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 }

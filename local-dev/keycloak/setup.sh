@@ -164,10 +164,10 @@ realm_management_client_uuid=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
 	"$base_url/admin/realms/$realm/clients?clientId=realm-management" | jq -r .[0].id)
 
-echo "Finding UUID for realm-management manage-clients role"
-manage_clients_role_uuid=$(curl -ks \
+echo "Finding UUID for realm-management create-client role"
+create_client_role_uuid=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
-	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/manage-clients" | jq -r .id)
+	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/create-client" | jq -r .id)
 
 curl -iks -X POST \
 	-H "Authorization: bearer $access_token" \
@@ -176,9 +176,9 @@ curl -iks -X POST \
 	"$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
 [
     {
-        "id":"$manage_clients_role_uuid",
-        "name":"manage-clients",
-        "description":"\${role_manage-clients}"
+        "id":"$create_client_role_uuid",
+        "name":"create-client",
+        "description":"\${role_create-client}"
     }
 ]
 EOF

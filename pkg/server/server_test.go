@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1613,7 +1614,7 @@ type keycloakClientInfo struct {
 	Name     string `json:"name"`
 }
 
-// {"id":"0b71362e-1d3d-433d-b14e-0a302e5f053f","name":"manage-clients","description":"${role_manage-clients}","composite":false,"clientRole":true,"containerId":"133f641d-414b-4767-9664-5e9971ba5f21","attributes":{}}
+// {"id":"0b71362e-1d3d-433d-b14e-0a302e5f053f","name":"create-client","description":"${role_create-client}","composite":false,"clientRole":true,"containerId":"133f641d-414b-4767-9664-5e9971ba5f21","attributes":{}}
 type keycloakRoleInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -1623,9 +1624,9 @@ type keycloakRoleInfo struct {
 // [
 //
 //	{
-//	    "id":"$manage_clients_role_uuid",
-//	    "name":"manage-clients",
-//	    "description":"${role_manage-clients}"
+//	    "id":"$create_client_role_uuid",
+//	    "name":"create-client",
+//	    "description":"\${role_create-client}"
 //	}
 //
 // ]
@@ -1635,8 +1636,102 @@ type keycloakRoleMapping struct {
 	Description string `json:"description"`
 }
 
+type keycloakClientSecretData struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm string, clientName string) (string, string, error) {
+	ckBody := newKeycloakClientReq(clientName)
+
+	b, err := json.Marshal(ckBody)
+	if err != nil {
+		return "", "", err
+	}
+
+	bodyReader := bytes.NewReader(b)
+
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", "", err
+	}
+	u.Path = path.Join("admin/realms", realm, "clients")
+
+	createResp, err := adminClient.Post(u.String(), "application/json", bodyReader)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := createResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	respBody, err := io.ReadAll(createResp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println("CREATE RESP BODY:")
+	fmt.Println(len(respBody))
+	fmt.Println(createResp)
+
+	fmt.Print(string(respBody) + "\n")
+
+	if createResp.StatusCode != http.StatusCreated {
+		return "", "", fmt.Errorf("unexpected status code: %d", createResp.StatusCode)
+	}
+
+	clientURL, err := url.Parse(createResp.Header.Get("Location"))
+	if err != nil {
+		return "", "", err
+	}
+	fmt.Println("clientURL", clientURL)
+
+	clientUUID := path.Base(clientURL.Path)
+	if clientUUID == "." || clientUUID == "/" {
+		return "", "", fmt.Errorf("unable to parse clientUUID from clientURL '%s'", clientURL)
+	}
+
+	clientSecretURL, err := url.JoinPath(clientURL.String(), "client-secret")
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(clientSecretURL)
+
+	secretResp, err := adminClient.Get(clientSecretURL)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		err := secretResp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	secretData, err := io.ReadAll(secretResp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	var secretVal keycloakClientSecretData
+
+	err = json.Unmarshal(secretData, &secretVal)
+	if err != nil {
+		return "", "", err
+	}
+
+	fmt.Println(string(secretData))
+	fmt.Printf("%#v\n", secretVal)
+
+	return clientUUID, secretVal.Value, nil
+}
+
 // Set up keycloak similarly to the local-dev scripts in this repo
-func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, password string, realm string) (string, string, error) {
+func setupKeycloak(baseURL *url.URL, user string, password string, realm string) (string, string, error) {
 	adminIssuer, err := url.JoinPath(baseURL.String(), "realms/master")
 	if err != nil {
 		return "", "", err
@@ -1692,32 +1787,14 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 	fmt.Printf("%#v\n", realmsResp)
 
 	// Create oauth2 admin client used by sunet-cdn-manager service for
-	// managing client credentials by reusing the same function being used
-	// to create user-facing client credentials
-	clientsURLString, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients")
-	if err != nil {
-		return "", "", err
-	}
-
-	clientsURL, err := url.Parse(clientsURLString)
-	if err != nil {
-		return "", "", err
-	}
-
-	adminKeycloakManager := keycloakClientManager{
-		url:    clientsURL,
-		client: adminClient,
-		logger: logger,
-	}
-
+	// registering user facing API client credentials
 	clientAdminClientID := "sunet-cdn-admin-client"
-
-	clientAdminUUID, clientAdminSecret, err := adminKeycloakManager.createClientCred(clientAdminClientID)
+	clientAdminUUID, clientAdminSecret, err := createKeycloakAdminClient(adminClient, baseURL.String(), realm, clientAdminClientID)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Finding related service account UUID so we can assign "manage-clients" admin role to it.
+	// Finding related service account UUID so we can assign "create-client" admin role to it.
 	serviceAccountURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients", clientAdminUUID, "service-account-user")
 	if err != nil {
 		return "", "", err
@@ -1758,7 +1835,17 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 
 	fmt.Printf("%s (%s): %s\n", clientAdminClientID, clientAdminUUID, clientAdminSecret)
 
-	// Finding realm-management client UUID, needed to find manage-clients role UUID
+	// Finding realm-management client UUID, needed to find create-client role UUID
+	clientsURLString, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients")
+	if err != nil {
+		return "", "", err
+	}
+
+	clientsURL, err := url.Parse(clientsURLString)
+	if err != nil {
+		return "", "", err
+	}
+
 	realmManagementClientReq, err := http.NewRequest("GET", clientsURL.String(), nil)
 	if err != nil {
 		return "", "", err
@@ -1797,13 +1884,13 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 	}
 
 	if len(kcClientsInfo) != 1 {
-		return "", "", fmt.Errorf("expected exactly one matche for clientId '%s': %d", realmManagementClientID, len(kcClientsInfo))
+		return "", "", fmt.Errorf("expected exactly one match for clientId '%s': %d", realmManagementClientID, len(kcClientsInfo))
 	}
 
 	fmt.Println(kcClientsInfo)
 
-	// Finding UUID for realm-management manage-clients role
-	manageClientsRoleURL, err := url.JoinPath(clientsURL.String(), kcClientsInfo[0].ID, "roles/manage-clients")
+	// Finding UUID for realm-management create-client role
+	manageClientsRoleURL, err := url.JoinPath(clientsURL.String(), kcClientsInfo[0].ID, "roles/create-client")
 	if err != nil {
 		return "", "", err
 	}
@@ -1840,7 +1927,7 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 
 	fmt.Println(kcRoleInfo)
 
-	// Apply manage-clients role to sunet-cdn-manager client service account
+	// Apply create-client role to sunet-cdn-manager client service account
 	serviceAccountRoleMappingURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "users", adminClientServiceAccount.ID, "role-mappings/clients", kcClientsInfo[0].ID)
 	if err != nil {
 		return "", "", err
@@ -1849,8 +1936,8 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 	kcRoleMappings := []keycloakRoleMapping{
 		{
 			ID:          kcRoleInfo.ID,
-			Name:        "manage-clients",
-			Description: "${role_manage-clients}",
+			Name:        "create-client",
+			Description: "${role_create-client}",
 		},
 	}
 
@@ -1862,7 +1949,7 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 	fmt.Println(serviceAccountRoleMappingURL)
 	fmt.Println(string(roleMappingJSON))
 
-	// http://localhost:53472/admin/realms/sunet-cdn-manager/users/03b31228-babf-48a8-a731-a7f5773a3f4d/role-mappings/clients/516102b6-7200-4b7c-8687-72507986475f[{"id":"$manage_clients_role_uuid","name":"manage-clients","description":"${role_manage-clients}"}]
+	// http://localhost:53472/admin/realms/sunet-cdn-manager/users/03b31228-babf-48a8-a731-a7f5773a3f4d/role-mappings/clients/516102b6-7200-4b7c-8687-72507986475f[{"id":"$manage_clients_role_uuid","name":"create-client","description":"${role_create-client}"}]
 
 	roleMappingReq, err := http.NewRequest("POST", serviceAccountRoleMappingURL, bytes.NewReader(roleMappingJSON))
 	if err != nil {
@@ -1886,7 +1973,7 @@ func setupKeycloak(logger zerolog.Logger, baseURL *url.URL, user string, passwor
 	return clientAdminClientID, clientAdminSecret, nil
 }
 
-func TestPostOrgClientCredentials(t *testing.T) {
+func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	req := testcontainers.ContainerRequest{
 		Image:      "quay.io/keycloak/keycloak:26.0.7",
 		WaitingFor: wait.ForListeningPort("8080/tcp"),
@@ -1928,7 +2015,7 @@ func TestPostOrgClientCredentials(t *testing.T) {
 
 	realm := "sunet-cdn-manager"
 
-	clientID, clientSecret, err := setupKeycloak(logger, endpointURL, "admin", "admin", realm)
+	clientID, clientSecret, err := setupKeycloak(endpointURL, "admin", "admin", realm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1938,7 +2025,7 @@ func TestPostOrgClientCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kcClientURL, err := url.Parse(endpoint + "/admin/realms/" + realm + "/clients")
+	kcClientRegURL, err := url.Parse(endpoint + "/realms/" + realm + "/clients-registrations/default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1957,9 +2044,10 @@ func TestPostOrgClientCredentials(t *testing.T) {
 
 	// Client used for creating client credentials in keycloak
 	kcClientManager := &keycloakClientManager{
-		client: cc.Client(providerCtx),
-		url:    kcClientURL,
-		logger: logger,
+		createClient: cc.Client(providerCtx),
+		deleteClient: &http.Client{},
+		regURL:       kcClientRegURL,
+		logger:       logger,
 	}
 
 	ts, dbPool, err := prepareServer(t, false, nil, kcClientManager)
@@ -1972,22 +2060,24 @@ func TestPostOrgClientCredentials(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description     string
-		username        string
-		password        string
-		expectedStatus  int
-		credName        string
-		credDescription string
-		orgNameOrID     string
+		description          string
+		username             string
+		password             string
+		expectedPostStatus   int
+		expectedDeleteStatus int
+		credName             string
+		credDescription      string
+		orgNameOrID          string
 	}{
 		{
-			description:     "successful superuser request",
-			username:        "admin",
-			password:        "adminpass1",
-			expectedStatus:  http.StatusCreated,
-			credName:        "post-cred-1",
-			credDescription: "a description 1",
-			orgNameOrID:     "org1",
+			description:          "successful superuser request",
+			username:             "admin",
+			password:             "adminpass1",
+			expectedPostStatus:   http.StatusCreated,
+			expectedDeleteStatus: http.StatusNoContent,
+			credName:             "post-cred-1",
+			credDescription:      "a description 1",
+			orgNameOrID:          "org1",
 		},
 	}
 
@@ -2007,33 +2097,61 @@ func TestPostOrgClientCredentials(t *testing.T) {
 
 		r := bytes.NewReader(b)
 
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
+		postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		req.SetBasicAuth(test.username, test.password)
+		postReq.SetBasicAuth(test.username, test.password)
 
-		resp, err := http.DefaultClient.Do(req)
+		postResp, err := http.DefaultClient.Do(postReq)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer postResp.Body.Close()
 
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		if postResp.StatusCode != test.expectedPostStatus {
+			r, err := io.ReadAll(postResp.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			t.Fatalf("%s: POST org client credentials unexpected status code: %d (%s)", test.description, postResp.StatusCode, string(r))
 		}
 
-		jsonData, err := io.ReadAll(resp.Body)
+		postJSONData, err := io.ReadAll(postResp.Body)
 		if err != nil {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		t.Logf("%s\n", jsonData)
+		t.Logf("%s\n", postJSONData)
+
+		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		deleteReq.SetBasicAuth(test.username, test.password)
+
+		deleteResp, err := http.DefaultClient.Do(deleteReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer deleteResp.Body.Close()
+
+		if deleteResp.StatusCode != test.expectedDeleteStatus {
+			r, err := io.ReadAll(deleteResp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: DELETE org client credentials unexpected status code: %d (%s)", test.description, deleteResp.StatusCode, string(r))
+		}
+
+		deleteJSONData, err := io.ReadAll(deleteResp.Body)
+		if err != nil {
+			t.Fatalf("%s: %s", test.description, err)
+		}
+
+		t.Logf("%s\n", deleteJSONData)
 	}
 }
 
