@@ -2248,7 +2248,7 @@ func newArgon2DefaultSettings() argon2Settings {
 type authDataKey struct{}
 
 func sendHumaBasicAuth(logger *zerolog.Logger, api huma.API, ctx huma.Context) {
-	ctx.SetHeader("WWW-Authenticate", `Basic realm="SUNET CDN Manager`)
+	ctx.SetHeader("WWW-Authenticate", `Basic realm="SUNET CDN Manager"`)
 	err := huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 	if err != nil {
 		logger.Err(err).Msg("failed writing Basic Auth response")
