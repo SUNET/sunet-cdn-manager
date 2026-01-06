@@ -51,6 +51,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lestrrat-go/httprc/v3"
+	"github.com/lestrrat-go/httprc/v3/errsink"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 	"github.com/libdns/acmedns"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
@@ -96,6 +100,9 @@ const (
 	sunetTxtTag       = "sunet-cdn-verification"
 	sunetTxtSeparator = "="
 	sunetTxtPrefix    = sunetTxtTag + sunetTxtSeparator
+
+	// The expected "aud" set in JWts sent as access tokens to the API
+	jwtAudience = "sunet-cdn-manager"
 )
 
 var (
@@ -2250,11 +2257,21 @@ func newArgon2DefaultSettings() argon2Settings {
 
 type authDataKey struct{}
 
-func sendHumaBasicAuth(logger *zerolog.Logger, api huma.API, ctx huma.Context) {
-	ctx.SetHeader("WWW-Authenticate", `Basic realm="SUNET CDN Manager"`)
+const (
+	wwwAuthenticateHeader = "WWW-Authenticate"
+	apiAuthRealm          = "SUNET CDN Manager"
+)
+
+func authChallenge(scheme string, realm string) string {
+	return fmt.Sprintf(`%s realm="%s"`, scheme, realm)
+}
+
+func sendHumaUnauthorized(logger *zerolog.Logger, api huma.API, ctx huma.Context) {
+	ctx.AppendHeader(wwwAuthenticateHeader, authChallenge("Basic", apiAuthRealm))
+	ctx.AppendHeader(wwwAuthenticateHeader, authChallenge("Bearer", apiAuthRealm))
 	err := huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
 	if err != nil {
-		logger.Err(err).Msg("failed writing Basic Auth response")
+		logger.Err(err).Msg("sendHumaUnauthorized: writing auth challenge response")
 	}
 }
 
@@ -5972,43 +5989,115 @@ func decodeBasicAuth(token string) (username, password string, ok bool) {
 	return username, password, true
 }
 
+// It is annoying that we need to create our own openidConfig struct when we
+// already use oidc.NewProvider() and calling .Endpoint() on the returned
+// provider for learning about keycloak oauth2 endpoints for the OIDC
+// authorization code flow, but the oidc library does not expose JwksURI. Since
+// we want to do validation of the Keycloak access token and this happens to be
+// a JWT we just do our own lookup for the ".well-known/openid-configuration"
+// even if this means we do a duplicate HTTP request this way.
+type openidConfig struct {
+	JwksURI              string `json:"jwks_uri"`
+	IntrospectionEndoint string `json:"introspection_endpoint"`
+}
+
+func validateKeycloakToken(c *jwk.Cache, issuer string, oiConf openidConfig, token string) (jwt.Token, error) {
+	// https://www.keycloak.org/securing-apps/oidc-layers#_validating_access_tokens
+	//
+	// Even though access tokens in OAuth2 are generally treated as opaque values in
+	// keycloak specifically they are defined as JWTs so lets inspect them as such.
+	keySet, err := c.Lookup(context.Background(), oiConf.JwksURI)
+	if err != nil {
+		return jwt.New(), fmt.Errorf("validateKeycloakToken: failed to fetch JWKS: %w", err)
+	}
+
+	jwtToken, err := jwt.Parse([]byte(token), jwt.WithKeySet(keySet), jwt.WithValidate(true), jwt.WithIssuer(issuer), jwt.WithAudience(jwtAudience))
+	if err != nil {
+		return jwt.New(), fmt.Errorf("validateKeycloakToken: failed to parse payload: %w", err)
+	}
+
+	return jwtToken, nil
+}
+
 // https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
-func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) func(ctx huma.Context, next func(huma.Context)) {
+func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(ctx huma.Context, next func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		logger := zlog.Ctx(ctx.Context())
 
-		token := strings.TrimPrefix(ctx.Header("Authorization"), "Basic ")
-		if len(token) == 0 {
-			sendHumaBasicAuth(logger, api, ctx)
-			return
-		}
+		authorizationVal := ctx.Header("Authorization")
 
-		username, password, ok := decodeBasicAuth(token)
-		if !ok {
-			sendHumaBasicAuth(logger, api, ctx)
-			return
-		}
+		basicPrefix := "Basic "
+		bearerPrefix := "Bearer "
 
 		var ad cdntypes.AuthData
 		var err error
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
-			return err
-		})
-		if err != nil {
-			switch err {
-			case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-				// The user does not exist, has no password set etc or the password was bad, try again
-				logger.Err(err).Msg("API auth failed")
-				sendHumaBasicAuth(logger, api, ctx)
+
+		switch {
+		case strings.HasPrefix(authorizationVal, basicPrefix):
+			token := strings.TrimPrefix(authorizationVal, basicPrefix)
+			if len(token) == 0 {
+				sendHumaUnauthorized(logger, api, ctx)
 				return
 			}
-			logger.Err(err).Msg("handleBasicAuth transaction failed")
-			err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
-			if err != nil {
-				logger.Err(err).Msg("faled writing error about trasnaction")
+
+			username, password, ok := decodeBasicAuth(token)
+			if !ok {
+				sendHumaUnauthorized(logger, api, ctx)
+				return
 			}
-			return
+
+			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
+				return err
+			})
+			if err != nil {
+				switch err {
+				case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+					// The user does not exist, has no password set etc or the password was bad, try again
+					logger.Err(err).Msg("API auth failed")
+					sendHumaUnauthorized(logger, api, ctx)
+					return
+				}
+				logger.Err(err).Msg("handleBasicAuth transaction failed")
+				err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				if err != nil {
+					logger.Err(err).Msg("failed writing error about transaction")
+				}
+				return
+			}
+		case strings.HasPrefix(authorizationVal, bearerPrefix):
+			token := strings.TrimPrefix(authorizationVal, bearerPrefix)
+			if len(token) == 0 {
+				sendHumaUnauthorized(logger, api, ctx)
+				return
+			}
+
+			_, err := validateKeycloakToken(jwkCache, jwtIssuer, oiConf, token)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate keycloak access token")
+				sendHumaUnauthorized(logger, api, ctx)
+				return
+			}
+
+			//err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			//	ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
+			//	return err
+			//})
+			//if err != nil {
+			//	switch err {
+			//	case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+			//		// The user does not exist, has no password set etc or the password was bad, try again
+			//		logger.Err(err).Msg("API auth failed")
+			//		sendHumaUnauthorized(logger, api, ctx)
+			//		return
+			//	}
+			//	logger.Err(err).Msg("handleBasicAuth transaction failed")
+			//	err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+			//	if err != nil {
+			//		logger.Err(err).Msg("failed writing error about transaction")
+			//	}
+			//	return
+			//}
 		}
 
 		ctx = huma.WithValue(ctx, authDataKey{}, ad)
@@ -6030,7 +6119,7 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -6050,7 +6139,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 		api := humachi.New(r, config)
 
-		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool, argon2Mutex, loginCache))
+		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool, argon2Mutex, loginCache, jwkCache, jwtIssuer, oiConf))
 
 		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
 		) (*usersOutput, error) {
@@ -7926,6 +8015,61 @@ type configTemplates struct {
 	haproxy *template.Template
 }
 
+func setupJwkCache(ctx context.Context, logger zerolog.Logger, client *http.Client, oiConf openidConfig) (*jwk.Cache, error) {
+	options := []httprc.NewClientOption{}
+	options = append(
+		options,
+		httprc.WithErrorSink(
+			errsink.NewFunc(
+				func(_ context.Context, err error) {
+					logger.Err(err).Msg("httprc errsink")
+				},
+			),
+		),
+	)
+	options = append(options, httprc.WithHTTPClient(client))
+
+	// First, set up the `jwk.Cache` object. You need to pass it a
+	// `context.Context` object to control the lifecycle of the background fetching goroutine.
+	jwkCache, err := jwk.NewCache(ctx, httprc.NewClient(options...))
+	if err != nil {
+		return nil, fmt.Errorf("unable to create JWK cache: %w", err)
+	}
+
+	if err := jwkCache.Register(ctx, oiConf.JwksURI); err != nil {
+		return nil, fmt.Errorf("failed to register keycloak JWKS: %w", err)
+	}
+
+	return jwkCache, nil
+}
+
+func fetchKeyCloakOpenIDConfig(client *http.Client, issuer string) (oiConf openidConfig, err error) {
+	openidConfigURL, err := url.JoinPath(issuer, ".well-known/openid-configuration")
+	if err != nil {
+		return openidConfig{}, fmt.Errorf("unable to parse keycloak openid-configuration URL: %w", err)
+	}
+	confResp, err := client.Get(openidConfigURL)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		err = errors.Join(err, confResp.Body.Close())
+	}()
+
+	confData, err := io.ReadAll(confResp.Body)
+	if err != nil {
+		fmt.Println(string(confData))
+	}
+	fmt.Println(string(confData))
+
+	err = json.Unmarshal(confData, &oiConf)
+	if err != nil {
+		return openidConfig{}, fmt.Errorf("unable to unmarshal openid-configuration JSON: %w", err)
+	}
+
+	return oiConf, nil
+}
+
 func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -8038,7 +8182,30 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 
 	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager)
+	// Fetch openid-configuration from keycloak manually (even if already
+	// done by oidc.NewProvider() above) because the struct returned by
+	// provider.Endpoint() does not give access to the JwksURI that we need
+	// for fetching JWT keysets. This does result in a duplicate HTTP
+	// request on startup but it is good enough for now.
+	oiConf, err := fetchKeyCloakOpenIDConfig(client, conf.OIDC.Issuer)
+	if err != nil {
+		return fmt.Errorf("unable to parse fetch openid-configuration: %w", err)
+	}
+
+	jwkCtx, jwkCancel := context.WithCancel(context.Background())
+	defer jwkCancel()
+
+	jwkCache, err := setupJwkCache(jwkCtx, logger, client, oiConf)
+	if err != nil {
+		return fmt.Errorf("unable to setup JWK cache: %w", err)
+	}
+
+	ready := jwkCache.Ready(context.Background(), oiConf.JwksURI)
+	if !ready {
+		return fmt.Errorf("JWK cache is not ready")
+	}
+
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}

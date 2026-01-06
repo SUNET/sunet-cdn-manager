@@ -183,6 +183,49 @@ curl -iks -X POST \
 ]
 EOF
 
+echo "Creating client-scope for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
+client_scope_uuid=$(curl -iks -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/client-scopes" <<EOF | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//'
+
+{
+  "name": "sunet-cdn-manager-aud",
+  "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+  "type": "none",
+  "protocol": "openid-connect",
+  "attributes": {
+    "display.on.consent.screen": "true",
+    "consent.screen.text": "",
+    "include.in.token.scope": "false",
+    "gui.order": ""
+  }
+}
+EOF
+)
+
+echo "Creating client-scope mapper for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
+curl -iks -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/client-scopes/$client_scope_uuid/protocol-mappers/models" <<EOF
+{
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-audience-mapper",
+  "name": "sunet-cdn-manager-aud",
+  "config": {
+    "included.client.audience": "",
+    "included.custom.audience": "sunet-cdn-manager",
+    "id.token.claim": "false",
+    "access.token.claim": "true",
+    "lightweight.claim": "false",
+    "introspection.token.claim": "true"
+  }
+}
+EOF
+
 echo
 oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)
 echo "server OIDC client_id: $oidc_server_client_id"

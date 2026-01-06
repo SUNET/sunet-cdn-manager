@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/rs/zerolog"
 	"github.com/stapelberg/postgrestest"
 	"github.com/testcontainers/testcontainers-go"
@@ -441,7 +442,16 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 	return nil
 }
 
-func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclValidatorClient, kcClientManager *keycloakClientManager) (*httptest.Server, *pgxpool.Pool, error) {
+type testServerInput struct {
+	encryptedSessionKey bool
+	vclValidator        *vclValidatorClient
+	kcClientManager     *keycloakClientManager
+	jwkCache            *jwk.Cache
+	jwtIssuer           string
+	oiConf              openidConfig
+}
+
+func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(context.Background())
 	if err != nil {
 		return nil, nil, err
@@ -471,7 +481,7 @@ func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclVali
 		return nil, nil, err
 	}
 
-	err = populateTestData(dbPool, encryptedSessionKey)
+	err = populateTestData(dbPool, tsi.encryptedSessionKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -500,9 +510,9 @@ func prepareServer(t *testing.T, encryptedSessionKey bool, vclValidator *vclVali
 		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, vclValidator, confTemplates, false)
+	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager)
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -547,7 +557,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -612,7 +622,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, true, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{encryptedSessionKey: true})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -682,7 +692,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -761,7 +771,7 @@ func TestGetUsers(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -867,7 +877,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestPostUsers(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1010,7 +1020,7 @@ func TestPostUsers(t *testing.T) {
 }
 
 func TestPutUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1124,7 +1134,7 @@ func TestPutUser(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1255,7 +1265,7 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestPutPassword(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1423,7 +1433,7 @@ func testAuth(t *testing.T, ts *httptest.Server, username string, password strin
 }
 
 func TestGetOrgs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1496,7 +1506,7 @@ func TestGetOrgs(t *testing.T) {
 }
 
 func TestGetOrgClientCredentials(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -1636,12 +1646,82 @@ type keycloakRoleMapping struct {
 	Description string `json:"description"`
 }
 
+//	{
+//	  "name": "sunet-cdn-manager-aud",
+//	  "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+//	  "type": "none",
+//	  "protocol": "openid-connect",
+//	  "attributes": {
+//	    "display.on.consent.screen": "true",
+//	    "consent.screen.text": "",
+//	    "include.in.token.scope": "false",
+//	    "gui.order": ""
+//	  }
+//	}
+type keycloakClientScope struct {
+	Protocol    string                        `json:"protocol"`
+	Name        string                        `json:"name"`
+	Description string                        `json:"description"`
+	Type        string                        `json:"type"`
+	Attributes  keycloakClientScopeAttributes `json:"attributes"`
+}
+
+//	{
+//	  "protocol": "openid-connect",
+//	  "protocolMapper": "oidc-audience-mapper",
+//	  "name": "sunet-cdn-manager-aud",
+//	  "config": {
+//	    "included.client.audience": "",
+//	    "included.custom.audience": "sunet-cdn-manager",
+//	    "id.token.claim": "false",
+//	    "access.token.claim": "true",
+//	    "lightweight.claim": "false",
+//	    "introspection.token.claim": "true"
+//	  }
+//	}
+type keycloakClientScopeMapper struct {
+	Name           string                       `json:"name"`
+	Protocol       string                       `json:"protocol"`
+	ProtocolMapper string                       `json:"protocolMapper"`
+	Config         keycloakProtocolMapperConfig `json:"config"`
+}
+
+type keycloakProtocolMapperConfig struct {
+	IncludedClientAudience  string `json:"included.client.audience"`
+	IncludedCustomAudience  string `json:"included.custom.audience"`
+	IDTokenClaim            string `json:"id.token.claim"`
+	AccessTokenClaim        string `json:"access.token.claim"`
+	LightweightClaim        string `json:"lightweight.claim"`
+	IntrospectionTokenClaim string `json:"introspection.token.claim"`
+}
+
+type keycloakClientScopeAttributes struct {
+	DisplayOnConsentScreen string `json:"display.on.consent.screen"`
+	ConsentScreenText      string `json:"consent.screen.text"`
+	IncludeInTokenScope    string `json:"include.in.token.scope"`
+	GuiOrder               string `json:"gui.order"`
+}
+
 type keycloakClientSecretData struct {
 	Type  string `json:"type"`
 	Value string `json:"value"`
 }
 
-func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm string, clientName string) (string, string, error) {
+func keycloakUUIDFromLocation(resp *http.Response) (string, error) {
+	locationURL, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		return "", fmt.Errorf("keycloakUUIDFromLocation: unable to parse header: %w", err)
+	}
+
+	resourceUUID := path.Base(locationURL.Path)
+	if resourceUUID == "." || resourceUUID == "/" {
+		return "", fmt.Errorf("unable to parse resource UUID from Location URL '%s'", locationURL)
+	}
+
+	return resourceUUID, nil
+}
+
+func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL string, realm string, clientName string) (string, string, error) {
 	ckBody := newKeycloakClientReq(clientName)
 
 	b, err := json.Marshal(ckBody)
@@ -1673,11 +1753,11 @@ func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm s
 		return "", "", err
 	}
 
-	fmt.Println("CREATE RESP BODY:")
-	fmt.Println(len(respBody))
-	fmt.Println(createResp)
+	t.Log("CREATE RESP BODY:")
+	t.Log(len(respBody))
+	t.Log(createResp)
 
-	fmt.Print(string(respBody) + "\n")
+	t.Log(string(respBody))
 
 	if createResp.StatusCode != http.StatusCreated {
 		return "", "", fmt.Errorf("unexpected status code: %d", createResp.StatusCode)
@@ -1687,11 +1767,11 @@ func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm s
 	if err != nil {
 		return "", "", err
 	}
-	fmt.Println("clientURL", clientURL)
+	t.Log("clientURL", clientURL)
 
-	clientUUID := path.Base(clientURL.Path)
-	if clientUUID == "." || clientUUID == "/" {
-		return "", "", fmt.Errorf("unable to parse clientUUID from clientURL '%s'", clientURL)
+	clientUUID, err := keycloakUUIDFromLocation(createResp)
+	if err != nil {
+		return "", "", err
 	}
 
 	clientSecretURL, err := url.JoinPath(clientURL.String(), "client-secret")
@@ -1699,7 +1779,7 @@ func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm s
 		return "", "", err
 	}
 
-	fmt.Println(clientSecretURL)
+	t.Log(clientSecretURL)
 
 	secretResp, err := adminClient.Get(clientSecretURL)
 	if err != nil {
@@ -1724,14 +1804,50 @@ func createKeycloakAdminClient(adminClient *http.Client, baseURL string, realm s
 		return "", "", err
 	}
 
-	fmt.Println(string(secretData))
-	fmt.Printf("%#v\n", secretVal)
+	t.Log(string(secretData))
+	t.Logf("%#v\n", secretVal)
 
 	return clientUUID, secretVal.Value, nil
 }
 
+func sendKeycloakReq(t *testing.T, client *http.Client, url string, method string, json []byte, queryParams url.Values, expectedStatusCode int) (resp *http.Response, body []byte, err error) {
+	t.Log(url)
+	req, err := http.NewRequest(method, url, bytes.NewReader(json))
+	if err != nil {
+		return nil, nil, err
+	}
+	if body != nil {
+		req.Header.Add("Content-Type", "application/json")
+	}
+
+	if queryParams != nil {
+		req.URL.RawQuery = queryParams.Encode()
+	}
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		err = errors.Join(err, resp.Body.Close())
+	}()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	t.Logf("%#v", resp)
+	t.Log(string(body))
+
+	if resp.StatusCode != expectedStatusCode {
+		return nil, nil, fmt.Errorf("sendKeycloakReq: unexpected status code for URL '%s', method '%s', want: %d, have: %d", url, method, expectedStatusCode, resp.StatusCode)
+	}
+	return resp, body, nil
+}
+
 // Set up keycloak similarly to the local-dev scripts in this repo
-func setupKeycloak(baseURL *url.URL, user string, password string, realm string) (string, string, error) {
+func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string, realm string) (string, string, error) {
 	adminIssuer, err := url.JoinPath(baseURL.String(), "realms/master")
 	if err != nil {
 		return "", "", err
@@ -1753,7 +1869,7 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 		return "", "", err
 	}
 
-	fmt.Printf("%#v\n", token)
+	t.Logf("%#v", token)
 
 	adminClient := adminConfig.Client(context.Background(), token)
 
@@ -1773,23 +1889,15 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 		return "", "", err
 	}
 
-	realmsReq, err := http.NewRequest("POST", realmsURL, bytes.NewReader(realmsJSON))
+	_, _, err = sendKeycloakReq(t, adminClient, realmsURL, http.MethodPost, realmsJSON, nil, http.StatusCreated)
 	if err != nil {
 		return "", "", err
 	}
-	realmsReq.Header.Add("Content-Type", "application/json")
-
-	realmsResp, err := adminClient.Do(realmsReq)
-	if err != nil {
-		return "", "", err
-	}
-
-	fmt.Printf("%#v\n", realmsResp)
 
 	// Create oauth2 admin client used by sunet-cdn-manager service for
 	// registering user facing API client credentials
 	clientAdminClientID := "sunet-cdn-admin-client"
-	clientAdminUUID, clientAdminSecret, err := createKeycloakAdminClient(adminClient, baseURL.String(), realm, clientAdminClientID)
+	clientAdminUUID, clientAdminSecret, err := createKeycloakAdminClient(t, adminClient, baseURL.String(), realm, clientAdminClientID)
 	if err != nil {
 		return "", "", err
 	}
@@ -1800,40 +1908,21 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 		return "", "", err
 	}
 
-	serviceAccountReq, err := http.NewRequest("GET", serviceAccountURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-
-	serviceAccountResp, err := adminClient.Do(serviceAccountReq)
-	if err != nil {
-		return "", "", err
-	}
-	defer func() {
-		err := serviceAccountResp.Body.Close()
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	fmt.Printf("%#v\n", serviceAccountResp)
-
-	b, err := io.ReadAll(serviceAccountResp.Body)
+	_, adminClientServiceAccountBody, err := sendKeycloakReq(t, adminClient, serviceAccountURL, http.MethodGet, nil, nil, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
 
 	var adminClientServiceAccount keycloakServiceAccountUser
 
-	err = json.Unmarshal(b, &adminClientServiceAccount)
+	err = json.Unmarshal(adminClientServiceAccountBody, &adminClientServiceAccount)
 	if err != nil {
 		return "", "", err
 	}
 
-	fmt.Println(string(b))
-	fmt.Println(adminClientServiceAccount)
+	t.Log(adminClientServiceAccount)
 
-	fmt.Printf("%s (%s): %s\n", clientAdminClientID, clientAdminUUID, clientAdminSecret)
+	t.Logf("%s (%s): %s\n", clientAdminClientID, clientAdminUUID, clientAdminSecret)
 
 	// Finding realm-management client UUID, needed to find create-client role UUID
 	clientsURLString, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients")
@@ -1856,29 +1945,14 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 	realmManagementQueryParams.Set("clientId", realmManagementClientID)
 	realmManagementClientReq.URL.RawQuery = realmManagementQueryParams.Encode()
 
-	realmManagementClientResp, err := adminClient.Do(realmManagementClientReq)
+	_, kcClientsInfoBody, err := sendKeycloakReq(t, adminClient, clientsURL.String(), http.MethodGet, nil, realmManagementQueryParams, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
-	defer func() {
-		err := realmManagementClientResp.Body.Close()
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	fmt.Printf("%#v\n", realmManagementClientResp)
-
-	b, err = io.ReadAll(realmManagementClientResp.Body)
-	if err != nil {
-		return "", "", err
-	}
-
-	fmt.Println(string(b))
 
 	var kcClientsInfo []keycloakClientInfo
 
-	err = json.Unmarshal(b, &kcClientsInfo)
+	err = json.Unmarshal(kcClientsInfoBody, &kcClientsInfo)
 	if err != nil {
 		return "", "", err
 	}
@@ -1887,45 +1961,27 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 		return "", "", fmt.Errorf("expected exactly one match for clientId '%s': %d", realmManagementClientID, len(kcClientsInfo))
 	}
 
-	fmt.Println(kcClientsInfo)
+	t.Log(kcClientsInfo)
 
 	// Finding UUID for realm-management create-client role
 	manageClientsRoleURL, err := url.JoinPath(clientsURL.String(), kcClientsInfo[0].ID, "roles/create-client")
 	if err != nil {
 		return "", "", err
 	}
-	manageClientsRoleReq, err := http.NewRequest("GET", manageClientsRoleURL, nil)
+
+	_, kcRoleInfoBody, err := sendKeycloakReq(t, adminClient, manageClientsRoleURL, http.MethodGet, nil, nil, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
-	manageClientsRoleResp, err := adminClient.Do(manageClientsRoleReq)
-	if err != nil {
-		return "", "", err
-	}
-	defer func() {
-		err := manageClientsRoleResp.Body.Close()
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	fmt.Printf("%#v\n", manageClientsRoleResp)
-
-	b, err = io.ReadAll(manageClientsRoleResp.Body)
-	if err != nil {
-		return "", "", err
-	}
-
-	fmt.Println(string(b))
 
 	var kcRoleInfo keycloakRoleInfo
 
-	err = json.Unmarshal(b, &kcRoleInfo)
+	err = json.Unmarshal(kcRoleInfoBody, &kcRoleInfo)
 	if err != nil {
 		return "", "", err
 	}
 
-	fmt.Println(kcRoleInfo)
+	t.Log(kcRoleInfo)
 
 	// Apply create-client role to sunet-cdn-manager client service account
 	serviceAccountRoleMappingURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "users", adminClientServiceAccount.ID, "role-mappings/clients", kcClientsInfo[0].ID)
@@ -1946,29 +2002,86 @@ func setupKeycloak(baseURL *url.URL, user string, password string, realm string)
 		return "", "", err
 	}
 
-	fmt.Println(serviceAccountRoleMappingURL)
-	fmt.Println(string(roleMappingJSON))
+	t.Log(serviceAccountRoleMappingURL)
+	t.Log(string(roleMappingJSON))
 
 	// http://localhost:53472/admin/realms/sunet-cdn-manager/users/03b31228-babf-48a8-a731-a7f5773a3f4d/role-mappings/clients/516102b6-7200-4b7c-8687-72507986475f[{"id":"$manage_clients_role_uuid","name":"create-client","description":"${role_create-client}"}]
 
-	roleMappingReq, err := http.NewRequest("POST", serviceAccountRoleMappingURL, bytes.NewReader(roleMappingJSON))
+	_, _, err = sendKeycloakReq(t, adminClient, serviceAccountRoleMappingURL, http.MethodPost, roleMappingJSON, nil, http.StatusNoContent)
 	if err != nil {
 		return "", "", err
 	}
-	roleMappingReq.Header.Add("Content-Type", "application/json")
 
-	roleMappingResp, err := adminClient.Do(roleMappingReq)
+	// We want to include a custom audience in the access token "aud" list
+	// so we can validate that access tokens were meant for out API.
+	// Start with creating a client-scope that we can use to add an audience mapper to.
+	clientScopesURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "client-scopes")
 	if err != nil {
 		return "", "", err
 	}
-	defer func() {
-		err := roleMappingResp.Body.Close()
-		if err != nil {
-			panic(err)
-		}
-	}()
 
-	fmt.Printf("%#v\n", roleMappingResp)
+	kcClientScope := keycloakClientScope{
+		Name:        "sunet-cdn-manager-aud",
+		Description: "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+		Type:        "none",
+		Protocol:    "openid-connect",
+		Attributes: keycloakClientScopeAttributes{
+			DisplayOnConsentScreen: "true",
+			ConsentScreenText:      "",
+			IncludeInTokenScope:    "false",
+			GuiOrder:               "",
+		},
+	}
+
+	clientScopeJSON, err := json.Marshal(kcClientScope)
+	if err != nil {
+		return "", "", err
+	}
+
+	t.Log(clientScopesURL)
+	t.Log(string(clientScopeJSON))
+
+	clientScopeResp, _, err := sendKeycloakReq(t, adminClient, clientScopesURL, http.MethodPost, clientScopeJSON, nil, http.StatusCreated)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Now assign a client-scope mapper to the above client-scope that
+	// actually assigns our custom "aud" to access tokens created for our
+	// API client credentials.
+	clientScopeUUID, err := keycloakUUIDFromLocation(clientScopeResp)
+	if err != nil {
+		return "", "", err
+	}
+
+	clientScopeMapperURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "client-scopes", clientScopeUUID, "protocol-mappers/models")
+	if err != nil {
+		return "", "", err
+	}
+
+	kcClientScopeMapper := keycloakClientScopeMapper{
+		Protocol:       "openid-connect",
+		ProtocolMapper: "oidc-audience-mapper",
+		Name:           "sunet-cdn-manager-aud",
+		Config: keycloakProtocolMapperConfig{
+			IncludedClientAudience:  "",
+			IncludedCustomAudience:  jwtAudience,
+			IDTokenClaim:            "false",
+			AccessTokenClaim:        "true",
+			LightweightClaim:        "false",
+			IntrospectionTokenClaim: "true",
+		},
+	}
+
+	kcClientScopeMapperJSON, err := json.Marshal(&kcClientScopeMapper)
+	if err != nil {
+		return "", "", err
+	}
+
+	_, _, err = sendKeycloakReq(t, adminClient, clientScopeMapperURL, http.MethodPost, kcClientScopeMapperJSON, nil, http.StatusCreated)
+	if err != nil {
+		return "", "", err
+	}
 
 	return clientAdminClientID, clientAdminSecret, nil
 }
@@ -2015,7 +2128,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 	realm := "sunet-cdn-manager"
 
-	clientID, clientSecret, err := setupKeycloak(endpointURL, "admin", "admin", realm)
+	clientID, clientSecret, err := setupKeycloak(t, endpointURL, "admin", "admin", realm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2042,7 +2155,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		TokenURL:     provider.Endpoint().TokenURL,
 	}
 
-	// Client used for creating client credentials in keycloak
+	// Client used for creating/deleting API client credentials in keycloak
 	kcClientManager := &keycloakClientManager{
 		createClient: cc.Client(providerCtx),
 		deleteClient: &http.Client{},
@@ -2050,7 +2163,22 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		logger:       logger,
 	}
 
-	ts, dbPool, err := prepareServer(t, false, nil, kcClientManager)
+	client := &http.Client{}
+
+	oiConf, err := fetchKeyCloakOpenIDConfig(client, issuerURL.String())
+	if err != nil {
+		t.Fatal("unable to fetch openid-configuration: %w", err)
+	}
+
+	jwkCtx, jwkCancel := context.WithCancel(t.Context())
+	defer jwkCancel()
+
+	jwkCache, err := setupJwkCache(jwkCtx, logger, client, oiConf)
+	if err != nil {
+		t.Fatalf("unable to setup JWK cache: %s", err)
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{kcClientManager: kcClientManager, jwkCache: jwkCache, jwtIssuer: issuerURL.String(), oiConf: oiConf})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2156,7 +2284,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 }
 
 func TestGetOrg(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2255,7 +2383,7 @@ func TestGetOrg(t *testing.T) {
 }
 
 func TestGetDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2381,7 +2509,7 @@ func TestGetDomains(t *testing.T) {
 }
 
 func TestGetServiceIPs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2483,7 +2611,7 @@ func TestGetServiceIPs(t *testing.T) {
 }
 
 func TestPostOrganizations(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2590,7 +2718,7 @@ func TestPostOrganizations(t *testing.T) {
 }
 
 func TestGetServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2698,7 +2826,7 @@ func TestGetServices(t *testing.T) {
 }
 
 func TestGetService(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2827,7 +2955,7 @@ func TestGetService(t *testing.T) {
 }
 
 func TestDeleteService(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2956,7 +3084,7 @@ func TestDeleteService(t *testing.T) {
 }
 
 func TestPostServices(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3134,7 +3262,7 @@ func TestPostServices(t *testing.T) {
 }
 
 func TestDeleteDomain(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3244,7 +3372,7 @@ func TestDeleteDomain(t *testing.T) {
 }
 
 func TestPostDomains(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3338,7 +3466,7 @@ func TestPostDomains(t *testing.T) {
 }
 
 func TestGetServiceVersions(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3481,7 +3609,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 	vclValidator := newVclValidator(u)
 
-	ts, dbPool, err := prepareServer(t, false, vclValidator, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{vclValidator: vclValidator})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -3919,7 +4047,7 @@ func TestPostServiceVersion(t *testing.T) {
 }
 
 func TestActivateServiceVersion(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4061,7 +4189,7 @@ func TestActivateServiceVersion(t *testing.T) {
 }
 
 func TestGetOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4177,7 +4305,7 @@ func TestGetOriginGroups(t *testing.T) {
 }
 
 func TestPostOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4268,7 +4396,7 @@ func TestPostOriginGroups(t *testing.T) {
 }
 
 func TestGetServiceVersionVCL(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4387,7 +4515,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 }
 
 func TestGetIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4488,7 +4616,7 @@ func TestGetIPNetworks(t *testing.T) {
 }
 
 func TestPostIPNetworks(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4609,7 +4737,7 @@ func TestPostIPNetworks(t *testing.T) {
 }
 
 func TestGetCacheNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4722,7 +4850,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 }
 
 func TestGetL4LBNodeConfigs(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -4898,7 +5026,7 @@ func TestCamelCaseToSnakeCase(t *testing.T) {
 }
 
 func TestPostCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5046,7 +5174,7 @@ func TestPostCacheNodes(t *testing.T) {
 }
 
 func TestGetCacheNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5131,7 +5259,7 @@ func TestGetCacheNodes(t *testing.T) {
 }
 
 func TestPutCacheNodeMaintenance(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5253,7 +5381,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 }
 
 func TestPutCacheNodeGroup(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5383,7 +5511,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 }
 
 func TestGetL4LBNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5468,7 +5596,7 @@ func TestGetL4LBNodes(t *testing.T) {
 }
 
 func TestPostL4LBNodes(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5616,7 +5744,7 @@ func TestPostL4LBNodes(t *testing.T) {
 }
 
 func TestPutL4LBNodeMaintenance(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5738,7 +5866,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 }
 
 func TestPutL4LBNodeGroup(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5868,7 +5996,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 }
 
 func TestGetNodeGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -5941,7 +6069,7 @@ func TestGetNodeGroups(t *testing.T) {
 }
 
 func TestPostNodeGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, false, nil, nil)
+	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -6013,5 +6141,13 @@ func TestPostNodeGroups(t *testing.T) {
 		}
 
 		t.Logf("%s\n", jsonData)
+	}
+}
+
+func TestAuthChallenge(t *testing.T) {
+	expectedChallenge := `Basic realm="test realm"`
+	challenge := authChallenge("Basic", "test realm")
+	if challenge != expectedChallenge {
+		t.Fatalf("unexpected challange string, want '%s', have: '%s'", expectedChallenge, challenge)
 	}
 }
