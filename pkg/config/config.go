@@ -49,7 +49,8 @@ type oidcSettings struct {
 }
 
 type keycloakClientAdminSettings struct {
-	ClientRegURL string `mapstructure:"client_reg_url" validate:"required"`
+	Realm        string `mapstructure:"realm" validate:"required"`
+	BaseURL      string `mapstructure:"base_url" validate:"required"`
 	ClientID     string `mapstructure:"client_id" validate:"required"`
 	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 }

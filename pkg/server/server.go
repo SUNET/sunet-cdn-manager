@@ -103,6 +103,8 @@ const (
 
 	// The expected "aud" set in JWts sent as access tokens to the API
 	jwtAudience = "sunet-cdn-manager"
+	// The client-scope used for adding the above "aud" via a mapper
+	clientScopeName = "sunet-cdn-manager-aud"
 )
 
 var (
@@ -3309,17 +3311,18 @@ func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdn
 	return orgClientCredentials, nil
 }
 
-type keyCloakData struct {
-	Protocol                  string `json:"protocol"`
-	ClientID                  string `json:"clientId"`
-	PublicClient              bool   `json:"publicClient"`
-	StandardFlowEnabled       bool   `json:"standardFlowEnabled"`
-	DirectAccessGrantsEnabled bool   `json:"directAccessGrantsEnabled"`
-	ServiceAccountsEnabled    bool   `json:"serviceAccountsEnabled"`
+type keyCloakClientData struct {
+	Protocol                  string   `json:"protocol"`
+	ClientID                  string   `json:"clientId"`
+	PublicClient              bool     `json:"publicClient"`
+	StandardFlowEnabled       bool     `json:"standardFlowEnabled"`
+	DirectAccessGrantsEnabled bool     `json:"directAccessGrantsEnabled"`
+	ServiceAccountsEnabled    bool     `json:"serviceAccountsEnabled"`
+	DefaultClientScopes       []string `json:"defaultClientScopes,omitempty"`
 }
 
-func newKeycloakClientReq(clientID string) keyCloakData {
-	return keyCloakData{
+func newKeycloakClientReq(clientID string, defaultClientScopes []string) keyCloakClientData {
+	kcd := keyCloakClientData{
 		Protocol:                  "openid-connect",
 		ClientID:                  clientID,
 		PublicClient:              false,
@@ -3327,38 +3330,147 @@ func newKeycloakClientReq(clientID string) keyCloakData {
 		DirectAccessGrantsEnabled: false,
 		ServiceAccountsEnabled:    true,
 	}
+
+	kcd.DefaultClientScopes = append(kcd.DefaultClientScopes, defaultClientScopes...)
+
+	return kcd
 }
 
 type keycloakClientRegistrationData struct {
-	keyCloakData
+	keyCloakClientData
 	ID                      string `json:"id"`
-	Secret                  string `json:"string"`
+	Secret                  string `json:"secret"`
 	RegistrationAccessToken string `json:"registrationAccessToken"`
 }
 
-func (kccm *keycloakClientManager) createClientCred(clientID string) (string, string, string, error) {
-	ckBody := newKeycloakClientReq(clientID)
+func sendHTTPReq(client *http.Client, method string, url string, headers map[string]string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (resp *http.Response, respBody []byte, err error) {
+	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, nil, err
+	}
+	if reqBody != nil {
+		req.Header.Add("Content-Type", "application/json")
+	}
 
-	b, err := json.Marshal(ckBody)
+	for k, v := range headers {
+		req.Header.Add(k, v)
+	}
+
+	if queryParams != nil {
+		req.URL.RawQuery = queryParams.Encode()
+	}
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		if resp != nil {
+			err = errors.Join(err, resp.Body.Close())
+		}
+	}()
+
+	respBody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode != expectedStatusCode {
+		return nil, nil, fmt.Errorf("sendHTTPReq: unexpected status code for URL '%s', method '%s', want: %d, have: %d", url, method, expectedStatusCode, resp.StatusCode)
+	}
+
+	return resp, respBody, nil
+}
+
+// [
+//
+//	{
+//	 "id": "fc687680-0e84-4a67-b26d-985c75a9ff16",
+//	 "name": "sunet-cdn-manager-aud",
+//	 "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+//	 "protocol": "openid-connect",
+//	 "attributes": {
+//	   "include.in.token.scope": "false",
+//	   "display.on.consent.screen": "true",
+//	   "gui.order": "",
+//	   "consent.screen.text": ""
+//	 },
+//	 "protocolMappers": [
+//	   {
+//	     "id": "04c78222-4055-496d-828a-233097a28244",
+//	     "name": "sunet-cdn-manager-aud",
+//	     "protocol": "openid-connect",
+//	     "protocolMapper": "oidc-audience-mapper",
+//	     "consentRequired": false,
+//	     "config": {
+//	       "id.token.claim": "false",
+//	       "lightweight.claim": "false",
+//	       "access.token.claim": "true",
+//	       "introspection.token.claim": "true",
+//	       "included.custom.audience": "sunet-cdn-manager"
+//	     }
+//	   }
+//	 ]
+//	}
+//
+// ]
+type keycloakClientScope struct {
+	ID              string                        `json:"id,omitempty"` // omitempty is needed when using this struct to create new scopes in tests
+	Protocol        string                        `json:"protocol"`
+	Name            string                        `json:"name"`
+	Description     string                        `json:"description"`
+	Type            string                        `json:"type"`
+	Attributes      keycloakClientScopeAttributes `json:"attributes"`
+	ProtocolMappers []keycloakClientScopeMapper   `json:"protocolMappers"`
+}
+
+type keycloakClientScopeMapper struct {
+	Name           string                       `json:"name"`
+	Protocol       string                       `json:"protocol"`
+	ProtocolMapper string                       `json:"protocolMapper"`
+	Config         keycloakProtocolMapperConfig `json:"config"`
+}
+
+type keycloakProtocolMapperConfig struct {
+	IncludedClientAudience  string `json:"included.client.audience"`
+	IncludedCustomAudience  string `json:"included.custom.audience"`
+	IDTokenClaim            string `json:"id.token.claim"`
+	AccessTokenClaim        string `json:"access.token.claim"`
+	LightweightClaim        string `json:"lightweight.claim"`
+	IntrospectionTokenClaim string `json:"introspection.token.claim"`
+}
+
+type keycloakClientScopeAttributes struct {
+	DisplayOnConsentScreen string `json:"display.on.consent.screen"`
+	ConsentScreenText      string `json:"consent.screen.text"`
+	IncludeInTokenScope    string `json:"include.in.token.scope"`
+	GuiOrder               string `json:"gui.order"`
+}
+
+func (kccm *keycloakClientManager) createClientCred(clientID string) (string, string, string, error) {
+	ckBody := newKeycloakClientReq(clientID, []string{clientScopeName})
+
+	regURL, err := url.JoinPath(kccm.baseURL.String(), "realms", kccm.realm, "clients-registrations/default")
+	if err != nil {
+		return "", "", "", fmt.Errorf("createClientCred: unable to create client-registrations URL: %w", err)
+	}
+
+	ckBytes, err := json.Marshal(ckBody)
 	if err != nil {
 		return "", "", "", fmt.Errorf("createClientCred: unable to marshal json: %w", err)
 	}
 
-	bodyReader := bytes.NewReader(b)
-
-	regResp, err := kccm.createClient.Post(kccm.regURL.String(), "application/json", bodyReader)
+	regResp, regBody, err := sendHTTPReq(
+		kccm.createClient,
+		http.MethodPost,
+		regURL,
+		map[string]string{"Content-Type": "application/json"},
+		ckBytes,
+		nil,
+		http.StatusCreated,
+	)
 	if err != nil {
-		return "", "", "", fmt.Errorf("createClientCred: unable to do POST request: %w", err)
-	}
-	defer func() {
-		err := regResp.Body.Close()
-		if err != nil {
-			kccm.logger.Err(err).Msg("createClientCred: unable to close POST body")
-		}
-	}()
-
-	if regResp.StatusCode != http.StatusCreated {
-		return "", "", "", fmt.Errorf("createClientCred: unexpected status code for client registration: %d", regResp.StatusCode)
+		return "", "", "", fmt.Errorf("createClientCred: unable to POST registration request: %w", err)
 	}
 
 	clientRegURL, err := url.Parse(regResp.Header.Get("Location"))
@@ -3366,11 +3478,6 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 		return "", "", "", fmt.Errorf("createClientCred: unable to parse location URL for registered client: '%s': %w", regResp.Header.Get("Location"), err)
 	}
 	fmt.Println("clientRegURL", clientRegURL)
-
-	regBody, err := io.ReadAll(regResp.Body)
-	if err != nil {
-		return "", "", "", fmt.Errorf("createClientCred: unable to read client registration body: %w", err)
-	}
 
 	var regData keycloakClientRegistrationData
 
@@ -3383,7 +3490,7 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 }
 
 func (kccm *keycloakClientManager) deleteClientCred(clientID string, registrationAccessToken string) error {
-	deleteURL, err := url.JoinPath(kccm.regURL.String(), clientID)
+	deleteURL, err := url.JoinPath(kccm.baseURL.String(), "realms", kccm.realm, "clients-registrations/default", clientID)
 	if err != nil {
 		return fmt.Errorf("deleteClientCred: unable to create DELETE URL: %w", err)
 	}
@@ -6025,6 +6132,11 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 		logger := zlog.Ctx(ctx.Context())
 
 		authorizationVal := ctx.Header("Authorization")
+		if authorizationVal == "" {
+			logger.Error().Msg("no Authorization header in request")
+			sendHumaUnauthorized(logger, api, ctx)
+			return
+		}
 
 		basicPrefix := "Basic "
 		bearerPrefix := "Bearer "
@@ -6098,6 +6210,10 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 			//	}
 			//	return
 			//}
+		default:
+			logger.Error().Msg("no supported type in Authorization header")
+			sendHumaUnauthorized(logger, api, ctx)
+			return
 		}
 
 		ctx = huma.WithValue(ctx, authDataKey{}, ad)
@@ -6113,9 +6229,10 @@ const (
 )
 
 type keycloakClientManager struct {
+	realm        string
 	createClient *http.Client // The createClient uses automatic token refreshing
 	deleteClient *http.Client // ... where deleteClient uses a registration_access_token from the database
-	regURL       *url.URL
+	baseURL      *url.URL
 	logger       zerolog.Logger
 }
 
@@ -8070,6 +8187,16 @@ func fetchKeyCloakOpenIDConfig(client *http.Client, issuer string) (oiConf openi
 	return oiConf, nil
 }
 
+func newKeycloakClientManager(logger zerolog.Logger, baseURL *url.URL, realm string, createClient *http.Client, deleteClient *http.Client) *keycloakClientManager {
+	return &keycloakClientManager{
+		realm:        realm,
+		createClient: createClient,
+		deleteClient: deleteClient,
+		baseURL:      baseURL,
+		logger:       logger,
+	}
+}
+
 func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -8141,18 +8268,13 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		TokenURL:     provider.Endpoint().TokenURL,
 	}
 
-	kcClientRegURL, err := url.Parse(conf.KeycloakClientAdmin.ClientRegURL)
+	kcClientBaseURL, err := url.Parse(conf.KeycloakClientAdmin.BaseURL)
 	if err != nil {
-		return fmt.Errorf("parsing Keycloak client URL failed: %w", err)
+		return fmt.Errorf("parsing Keycloak base URL failed: %w", err)
 	}
 
 	// Client used for creating client credentials in keycloak
-	kcClientManager := &keycloakClientManager{
-		createClient: cc.Client(providerCtx),
-		deleteClient: client,
-		regURL:       kcClientRegURL,
-		logger:       logger,
-	}
+	kcClientManager := newKeycloakClientManager(logger, kcClientBaseURL, conf.KeycloakClientAdmin.Realm, cc.Client(providerCtx), client)
 
 	vclValidationURL, err := url.Parse(conf.Server.VCLValidationURL)
 	if err != nil {

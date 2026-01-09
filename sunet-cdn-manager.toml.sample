@@ -17,6 +17,12 @@ client_id = "server-client-id"
 client_secret = "server-client-secret"
 redirect_url = "https://manager.sunet-cdn.localhost:8444/auth/oidc/keycloak/callback"
 
++[keycloak_client_admin]
++realm = "sunet-cdn-manager"
++base_url = "https://keycloak.sunet-cdn.localhost:8443"
++client_id = "sunet-cdn-manager-admin-client"
++client_secret = "some-secret"
+
 [domains]
 resolver_address = "127.0.0.1:53"
 verify_interval = "2m"

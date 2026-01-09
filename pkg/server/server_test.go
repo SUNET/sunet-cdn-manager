@@ -1658,13 +1658,20 @@ type keycloakRoleMapping struct {
 //	    "gui.order": ""
 //	  }
 //	}
-type keycloakClientScope struct {
-	Protocol    string                        `json:"protocol"`
-	Name        string                        `json:"name"`
-	Description string                        `json:"description"`
-	Type        string                        `json:"type"`
-	Attributes  keycloakClientScopeAttributes `json:"attributes"`
-}
+//type keycloakClientScope struct {
+//	Protocol    string                        `json:"protocol"`
+//	Name        string                        `json:"name"`
+//	Description string                        `json:"description"`
+//	Type        string                        `json:"type"`
+//	Attributes  keycloakClientScopeAttributes `json:"attributes"`
+//}
+//
+//type keycloakClientScopeAttributes struct {
+//	DisplayOnConsentScreen string `json:"display.on.consent.screen"`
+//	ConsentScreenText      string `json:"consent.screen.text"`
+//	IncludeInTokenScope    string `json:"include.in.token.scope"`
+//	GuiOrder               string `json:"gui.order"`
+//}
 
 //	{
 //	  "protocol": "openid-connect",
@@ -1679,28 +1686,6 @@ type keycloakClientScope struct {
 //	    "introspection.token.claim": "true"
 //	  }
 //	}
-type keycloakClientScopeMapper struct {
-	Name           string                       `json:"name"`
-	Protocol       string                       `json:"protocol"`
-	ProtocolMapper string                       `json:"protocolMapper"`
-	Config         keycloakProtocolMapperConfig `json:"config"`
-}
-
-type keycloakProtocolMapperConfig struct {
-	IncludedClientAudience  string `json:"included.client.audience"`
-	IncludedCustomAudience  string `json:"included.custom.audience"`
-	IDTokenClaim            string `json:"id.token.claim"`
-	AccessTokenClaim        string `json:"access.token.claim"`
-	LightweightClaim        string `json:"lightweight.claim"`
-	IntrospectionTokenClaim string `json:"introspection.token.claim"`
-}
-
-type keycloakClientScopeAttributes struct {
-	DisplayOnConsentScreen string `json:"display.on.consent.screen"`
-	ConsentScreenText      string `json:"consent.screen.text"`
-	IncludeInTokenScope    string `json:"include.in.token.scope"`
-	GuiOrder               string `json:"gui.order"`
-}
 
 type keycloakClientSecretData struct {
 	Type  string `json:"type"`
@@ -1722,7 +1707,7 @@ func keycloakUUIDFromLocation(resp *http.Response) (string, error) {
 }
 
 func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL string, realm string, clientName string) (string, string, error) {
-	ckBody := newKeycloakClientReq(clientName)
+	ckBody := newKeycloakClientReq(clientName, nil)
 
 	b, err := json.Marshal(ckBody)
 	if err != nil {
@@ -1753,10 +1738,6 @@ func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL s
 		return "", "", err
 	}
 
-	t.Log("CREATE RESP BODY:")
-	t.Log(len(respBody))
-	t.Log(createResp)
-
 	t.Log(string(respBody))
 
 	if createResp.StatusCode != http.StatusCreated {
@@ -1767,7 +1748,6 @@ func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL s
 	if err != nil {
 		return "", "", err
 	}
-	t.Log("clientURL", clientURL)
 
 	clientUUID, err := keycloakUUIDFromLocation(createResp)
 	if err != nil {
@@ -1778,8 +1758,6 @@ func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL s
 	if err != nil {
 		return "", "", err
 	}
-
-	t.Log(clientSecretURL)
 
 	secretResp, err := adminClient.Get(clientSecretURL)
 	if err != nil {
@@ -1804,19 +1782,16 @@ func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL s
 		return "", "", err
 	}
 
-	t.Log(string(secretData))
-	t.Logf("%#v\n", secretVal)
-
 	return clientUUID, secretVal.Value, nil
 }
 
-func sendKeycloakReq(t *testing.T, client *http.Client, url string, method string, json []byte, queryParams url.Values, expectedStatusCode int) (resp *http.Response, body []byte, err error) {
+func sendKeycloakReq(t *testing.T, client *http.Client, method string, url string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (resp *http.Response, respBody []byte, err error) {
 	t.Log(url)
-	req, err := http.NewRequest(method, url, bytes.NewReader(json))
+	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, nil, err
 	}
-	if body != nil {
+	if reqBody != nil {
 		req.Header.Add("Content-Type", "application/json")
 	}
 
@@ -1829,21 +1804,78 @@ func sendKeycloakReq(t *testing.T, client *http.Client, url string, method strin
 		return nil, nil, err
 	}
 	defer func() {
-		err = errors.Join(err, resp.Body.Close())
+		if resp != nil {
+			err = errors.Join(err, resp.Body.Close())
+		}
 	}()
 
-	body, err = io.ReadAll(resp.Body)
+	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	t.Logf("%#v", resp)
-	t.Log(string(body))
+	t.Log(string(respBody))
 
 	if resp.StatusCode != expectedStatusCode {
 		return nil, nil, fmt.Errorf("sendKeycloakReq: unexpected status code for URL '%s', method '%s', want: %d, have: %d", url, method, expectedStatusCode, resp.StatusCode)
 	}
-	return resp, body, nil
+	return resp, respBody, nil
+}
+
+//	{
+//	  "name": "sunet-cdn-manager-client-admin",
+//	  "description": "Role used for managing API client credentials",
+//	  "attributes": {}
+//	}
+type keycloakRole struct {
+	ID          string            `json:"id,omitempty"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Attributes  map[string]string `json:"attributes"`
+}
+
+// [
+//
+//	{
+//	  "id": "3fe577c3-2eee-4c39-8bc2-6ac66325b8f8",
+//	  "name": "Allowed Client Scopes",
+//	  "providerId": "allowed-client-templates",
+//	  "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+//	  "parentId": "9de5b688-738d-4615-ad09-6a474f4aa74d",
+//	  "subType": "authenticated",
+//	  "config": {
+//	    "allow-default-scopes": [
+//	      "true"
+//	    ]
+//	  }
+//	},
+//	{
+//	  "id": "2b2d4cd4-3838-434b-bc9d-5189564d25d4",
+//	  "name": "Trusted Hosts",
+//	  "providerId": "trusted-hosts",
+//	  "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+//	  "parentId": "9de5b688-738d-4615-ad09-6a474f4aa74d",
+//	  "subType": "anonymous",
+//	  "config": {
+//	    "host-sending-registration-request-must-match": [
+//	      "true"
+//	    ],
+//	    "client-uris-must-match": [
+//	      "true"
+//	    ]
+//	  }
+//	}
+//
+// ]
+type keycloakComponentPolicy struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	ProviderID   string              `json:"providerId"`
+	ProviderType string              `json:"providerType"`
+	ParentID     string              `json:"parentId"`
+	SubType      string              `json:"subType"`
+	Config       map[string][]string `json:"config"`
 }
 
 // Set up keycloak similarly to the local-dev scripts in this repo
@@ -1869,8 +1901,6 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	t.Logf("%#v", token)
-
 	adminClient := adminConfig.Client(context.Background(), token)
 
 	realmsURL, err := url.JoinPath(baseURL.String(), "admin/realms")
@@ -1889,7 +1919,7 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	_, _, err = sendKeycloakReq(t, adminClient, realmsURL, http.MethodPost, realmsJSON, nil, http.StatusCreated)
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPost, realmsURL, realmsJSON, nil, http.StatusCreated)
 	if err != nil {
 		return "", "", err
 	}
@@ -1902,13 +1932,58 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
+	// Create role that we can assign to the sunet-cdn-admin-client that grants it permissions to do client creation
+	rolesURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "roles")
+	if err != nil {
+		return "", "", err
+	}
+
+	roleName := "sunet-cdn-manager-client-admin"
+
+	kcRole := keycloakRole{
+		Name:        roleName,
+		Description: "Role used for managing API client credentials",
+		Attributes:  map[string]string{},
+	}
+
+	kcRoleJSON, err := json.Marshal(kcRole)
+	if err != nil {
+		return "", "", err
+	}
+
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPost, rolesURL, kcRoleJSON, nil, http.StatusCreated)
+	if err != nil {
+		return "", "", err
+	}
+
+	// The role creation does not return any JSON with the ID, and the
+	// Location header actually points to the resource by name
+	// (roles/the-role-name), so we need
+	// to do an additional GET to find the UUID
+	getRoleURL, err := url.JoinPath(rolesURL, roleName)
+	if err != nil {
+		return "", "", err
+	}
+
+	_, roleBody, err := sendKeycloakReq(t, adminClient, http.MethodGet, getRoleURL, nil, nil, http.StatusOK)
+	if err != nil {
+		return "", "", err
+	}
+
+	var newRole keycloakRole
+
+	err = json.Unmarshal(roleBody, &newRole)
+	if err != nil {
+		return "", "", err
+	}
+
 	// Finding related service account UUID so we can assign "create-client" admin role to it.
 	serviceAccountURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients", clientAdminUUID, "service-account-user")
 	if err != nil {
 		return "", "", err
 	}
 
-	_, adminClientServiceAccountBody, err := sendKeycloakReq(t, adminClient, serviceAccountURL, http.MethodGet, nil, nil, http.StatusOK)
+	_, adminClientServiceAccountBody, err := sendKeycloakReq(t, adminClient, http.MethodGet, serviceAccountURL, nil, nil, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
@@ -1919,10 +1994,6 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 	if err != nil {
 		return "", "", err
 	}
-
-	t.Log(adminClientServiceAccount)
-
-	t.Logf("%s (%s): %s\n", clientAdminClientID, clientAdminUUID, clientAdminSecret)
 
 	// Finding realm-management client UUID, needed to find create-client role UUID
 	clientsURLString, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "clients")
@@ -1935,17 +2006,10 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	realmManagementClientReq, err := http.NewRequest("GET", clientsURL.String(), nil)
-	if err != nil {
-		return "", "", err
-	}
-
 	realmManagementClientID := "realm-management"
 	realmManagementQueryParams := url.Values{}
 	realmManagementQueryParams.Set("clientId", realmManagementClientID)
-	realmManagementClientReq.URL.RawQuery = realmManagementQueryParams.Encode()
-
-	_, kcClientsInfoBody, err := sendKeycloakReq(t, adminClient, clientsURL.String(), http.MethodGet, nil, realmManagementQueryParams, http.StatusOK)
+	_, kcClientsInfoBody, err := sendKeycloakReq(t, adminClient, http.MethodGet, clientsURL.String(), nil, realmManagementQueryParams, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
@@ -1969,7 +2033,7 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	_, kcRoleInfoBody, err := sendKeycloakReq(t, adminClient, manageClientsRoleURL, http.MethodGet, nil, nil, http.StatusOK)
+	_, kcRoleInfoBody, err := sendKeycloakReq(t, adminClient, http.MethodGet, manageClientsRoleURL, nil, nil, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
@@ -1981,10 +2045,13 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	t.Log(kcRoleInfo)
+	t.Log("KC ROLE INFO: ", kcRoleInfo)
 
-	// Apply create-client role to sunet-cdn-manager client service account
-	serviceAccountRoleMappingURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "users", adminClientServiceAccount.ID, "role-mappings/clients", kcClientsInfo[0].ID)
+	// Apply create-client role as a composite (associated role) to
+	// sunet-cdn-manager-client-admin role. For some reason the roles/
+	// endpoint allows us to use the name of the role rather than the UUID
+	// id (which instead uses role-by-id/)
+	compositeRoleURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "roles", roleName, "composites")
 	if err != nil {
 		return "", "", err
 	}
@@ -2002,19 +2069,40 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	t.Log(serviceAccountRoleMappingURL)
-	t.Log(string(roleMappingJSON))
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPost, compositeRoleURL, roleMappingJSON, nil, http.StatusNoContent)
+	if err != nil {
+		return "", "", err
+	}
 
-	// http://localhost:53472/admin/realms/sunet-cdn-manager/users/03b31228-babf-48a8-a731-a7f5773a3f4d/role-mappings/clients/516102b6-7200-4b7c-8687-72507986475f[{"id":"$manage_clients_role_uuid","name":"create-client","description":"${role_create-client}"}]
+	// Apply realm role to sunet-cdn-manager client service account
+	serviceAccountRealmRoleMappingURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "users", adminClientServiceAccount.ID, "role-mappings/realm")
+	if err != nil {
+		return "", "", err
+	}
 
-	_, _, err = sendKeycloakReq(t, adminClient, serviceAccountRoleMappingURL, http.MethodPost, roleMappingJSON, nil, http.StatusNoContent)
+	kcRealmRoleMappings := []keycloakRoleMapping{
+		{
+			ID:          newRole.ID,
+			Name:        roleName,
+			Description: "Role used for managing API client credentials",
+		},
+	}
+
+	realmRoleMappingJSON, err := json.Marshal(kcRealmRoleMappings)
+	if err != nil {
+		return "", "", err
+	}
+
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPost, serviceAccountRealmRoleMappingURL, realmRoleMappingJSON, nil, http.StatusNoContent)
 	if err != nil {
 		return "", "", err
 	}
 
 	// We want to include a custom audience in the access token "aud" list
 	// so we can validate that access tokens were meant for out API.
-	// Start with creating a client-scope that we can use to add an audience mapper to.
+	// Create a client-scope with an audience mapper that assigns our
+	// expected custom audience value. This client-scope will then be
+	// assigned to the API token clients we create.
 	clientScopesURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "client-scopes")
 	if err != nil {
 		return "", "", err
@@ -2031,6 +2119,21 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 			IncludeInTokenScope:    "false",
 			GuiOrder:               "",
 		},
+		ProtocolMappers: []keycloakClientScopeMapper{
+			{
+				Protocol:       "openid-connect",
+				ProtocolMapper: "oidc-audience-mapper",
+				Name:           "sunet-cdn-manager-aud",
+				Config: keycloakProtocolMapperConfig{
+					IncludedClientAudience:  "",
+					IncludedCustomAudience:  jwtAudience,
+					IDTokenClaim:            "false",
+					AccessTokenClaim:        "true",
+					LightweightClaim:        "false",
+					IntrospectionTokenClaim: "true",
+				},
+			},
+		},
 	}
 
 	clientScopeJSON, err := json.Marshal(kcClientScope)
@@ -2038,47 +2141,68 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		return "", "", err
 	}
 
-	t.Log(clientScopesURL)
-	t.Log(string(clientScopeJSON))
-
-	clientScopeResp, _, err := sendKeycloakReq(t, adminClient, clientScopesURL, http.MethodPost, clientScopeJSON, nil, http.StatusCreated)
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPost, clientScopesURL, clientScopeJSON, nil, http.StatusCreated)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Now assign a client-scope mapper to the above client-scope that
-	// actually assigns our custom "aud" to access tokens created for our
-	// API client credentials.
-	clientScopeUUID, err := keycloakUUIDFromLocation(clientScopeResp)
+	// Find UUID for client registration policy that allows assigning our
+	// custom client-scope that includes the auidence mapper for new
+	// clients at registration
+	clientRegistrationPolicyURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "components")
 	if err != nil {
 		return "", "", err
 	}
 
-	clientScopeMapperURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "client-scopes", clientScopeUUID, "protocol-mappers/models")
+	componentProviderType := "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy"
+	componentPolicyQueryParams := url.Values{}
+	componentPolicyQueryParams.Set("type", componentProviderType)
+	_, componentsPolicyBody, err := sendKeycloakReq(t, adminClient, http.MethodGet, clientRegistrationPolicyURL, nil, componentPolicyQueryParams, http.StatusOK)
 	if err != nil {
 		return "", "", err
 	}
 
-	kcClientScopeMapper := keycloakClientScopeMapper{
-		Protocol:       "openid-connect",
-		ProtocolMapper: "oidc-audience-mapper",
-		Name:           "sunet-cdn-manager-aud",
-		Config: keycloakProtocolMapperConfig{
-			IncludedClientAudience:  "",
-			IncludedCustomAudience:  jwtAudience,
-			IDTokenClaim:            "false",
-			AccessTokenClaim:        "true",
-			LightweightClaim:        "false",
-			IntrospectionTokenClaim: "true",
-		},
-	}
+	kcComponentPolicies := []keycloakComponentPolicy{}
 
-	kcClientScopeMapperJSON, err := json.Marshal(&kcClientScopeMapper)
+	err = json.Unmarshal(componentsPolicyBody, &kcComponentPolicies)
 	if err != nil {
 		return "", "", err
 	}
 
-	_, _, err = sendKeycloakReq(t, adminClient, clientScopeMapperURL, http.MethodPost, kcClientScopeMapperJSON, nil, http.StatusCreated)
+	clientScopeProviderID := "allowed-client-templates"
+	expectedSubType := "authenticated"
+	var modifiedKCComponentScopePolicy keycloakComponentPolicy
+	for _, kcComponentPolicy := range kcComponentPolicies {
+		if kcComponentPolicy.ProviderType == componentProviderType && kcComponentPolicy.ProviderID == clientScopeProviderID && kcComponentPolicy.SubType == expectedSubType {
+			modifiedKCComponentScopePolicy = kcComponentPolicy
+			break
+		}
+	}
+
+	if modifiedKCComponentScopePolicy.ID == "" {
+		return "", "", fmt.Errorf("unable to find UUID for scopeProviderID '%s'", clientScopeProviderID)
+	}
+
+	// Errors seen when trying to create clients via client registration service:
+	// ==
+	// 2026-01-09 13:08:33,637 WARN  [org.keycloak.services] (executor-thread-1) KC-SERVICES0099: Operation 'before register client' rejected. Policy 'Allowed Client Scopes' rejected request to client-registration service. Details: Not permitted to use specified clientScope
+	// 2026-01-09 13:08:33,638 WARN  [org.keycloak.events] (executor-thread-1) type="CLIENT_REGISTER_ERROR", realmId="791a5cd3-4db7-4fce-9f28-ceffd1d93712", realmName="sunet-cdn-manager", clientId="null", userId="null", ipAddress="192.168.65.1", error="not_allowed", client_registration_policy="Allowed Client Scopes"
+	// ... so add the client-scope "sunet-cdn-manager-aud"
+	allowedClientScope := "sunet-cdn-manager-aud"
+	modifiedKCComponentScopePolicy.Config["allowed-client-scopes"] = append(modifiedKCComponentScopePolicy.Config["allowed-client-scopes"], allowedClientScope)
+
+	// https://keycloak.sunet-cdn.localhost:8443/admin/realms/sunet-cdn-manager/components/f28de905-7104-4189-9be4-88ca2aa9e6b1
+	clientRegistrationScopePolicyUpdateURL, err := url.JoinPath(clientRegistrationPolicyURL, modifiedKCComponentScopePolicy.ID)
+	if err != nil {
+		return "", "", err
+	}
+
+	clientRegistrationScopePolicyUpdateJSON, err := json.Marshal(modifiedKCComponentScopePolicy)
+	if err != nil {
+		return "", "", err
+	}
+
+	_, _, err = sendKeycloakReq(t, adminClient, http.MethodPut, clientRegistrationScopePolicyUpdateURL, clientRegistrationScopePolicyUpdateJSON, componentPolicyQueryParams, http.StatusNoContent)
 	if err != nil {
 		return "", "", err
 	}
@@ -2138,11 +2262,6 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kcClientRegURL, err := url.Parse(endpoint + "/realms/" + realm + "/clients-registrations/default")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	providerCtx := context.Background()
 	provider, err := oidc.NewProvider(providerCtx, issuerURL.String())
 	if err != nil {
@@ -2155,15 +2274,10 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		TokenURL:     provider.Endpoint().TokenURL,
 	}
 
-	// Client used for creating/deleting API client credentials in keycloak
-	kcClientManager := &keycloakClientManager{
-		createClient: cc.Client(providerCtx),
-		deleteClient: &http.Client{},
-		regURL:       kcClientRegURL,
-		logger:       logger,
-	}
-
 	client := &http.Client{}
+
+	// Client used for creating/deleting API client credentials in keycloak
+	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc.Client(providerCtx), client)
 
 	oiConf, err := fetchKeyCloakOpenIDConfig(client, issuerURL.String())
 	if err != nil {
@@ -2251,7 +2365,90 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 			t.Fatalf("%s: %s", test.description, err)
 		}
 
-		t.Logf("%s\n", postJSONData)
+		// Try to use the new client cred if it was expected to be created
+		if test.expectedPostStatus == http.StatusCreated {
+			var newClientCred cdntypes.NewOrgClientCredential
+
+			err := json.Unmarshal(postJSONData, &newClientCred)
+			if err != nil {
+				t.Fatalf("unable to unmarshal JSON for new cred: %s", err)
+			}
+
+			// Make sure the client_secret is set
+			if newClientCred.ClientSecret == "" {
+				t.Fatalf("new client cred has an empty password, thats not expected")
+			}
+
+			// Try to do requests with the new client cred, it is
+			// expected to be able to to look up its own organization
+			// if it has the proper Authorization header from
+			// keycloak and otherwise it should fail.
+			clientCredTests := []struct {
+				description         string
+				authorizationHeader string
+				getKeycloakToken    bool
+				expectedStatus      int
+			}{
+				{
+					description:         "valid request with access token from keycloak",
+					authorizationHeader: "",
+					getKeycloakToken:    true,
+					expectedStatus:      http.StatusOK,
+				},
+				{
+					description:         "authorization header missing",
+					authorizationHeader: "",
+					getKeycloakToken:    false,
+					expectedStatus:      http.StatusUnauthorized,
+				},
+				{
+					description:         "authorization header with invalid content",
+					authorizationHeader: "Invalid abcd1234",
+					getKeycloakToken:    false,
+					expectedStatus:      http.StatusUnauthorized,
+				},
+			}
+			for _, clientCredTest := range clientCredTests {
+				// Wrap loop body in anonymous function to properly call the deferred Body.Close()
+				func() {
+					clientCredGetReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.orgNameOrID, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					client := &http.Client{}
+
+					if clientCredTest.getKeycloakToken {
+						apiClientCred := clientcredentials.Config{
+							ClientID:     newClientCred.ClientID,
+							ClientSecret: newClientCred.ClientSecret,
+							TokenURL:     provider.Endpoint().TokenURL,
+						}
+
+						client = apiClientCred.Client(context.Background())
+					} else if clientCredTest.authorizationHeader != "" {
+						clientCredGetReq.Header.Set("Authorization", clientCredTest.authorizationHeader)
+					}
+
+					clientCredResp, err := client.Do(clientCredGetReq)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer func() {
+						err := clientCredResp.Body.Close()
+						if err != nil {
+							panic(err)
+						}
+					}()
+					t.Logf("client cred resp: %#v", clientCredResp)
+
+					if clientCredResp.StatusCode != clientCredTest.expectedStatus {
+						t.Fatalf("%s: client cred got unexpected status code when looking up own org, want: %d, have: %d", clientCredTest.description, clientCredTest.expectedStatus, clientCredResp.StatusCode)
+					}
+				}()
+			}
+
+		}
 
 		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, r)
 		if err != nil {
