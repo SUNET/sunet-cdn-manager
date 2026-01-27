@@ -288,8 +288,14 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 
 		ad := adRef.(cdntypes.AuthData)
 
+		if ad.Username == nil {
+			logger.Error().Msg("consoleDashboardHandler: ad.Username is not set")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		if ad.Superuser {
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username, true))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -304,8 +310,8 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 			}
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
-			logger.Error().Str("username", ad.Username).Msg("user is not superuser or belonging to an organization")
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(ad.Username, false))
+			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belonging to an organization")
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, false))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page for user without access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -425,8 +431,14 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		ad := adRef.(cdntypes.AuthData)
 
+		if ad.Username == nil {
+			logger.Error().Msg("consoleOrgDashboardHandler: ad.Username is not set")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		if ad.Superuser {
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, true))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -438,15 +450,15 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				http.Error(w, "invalid organization name", http.StatusForbidden)
 				return
 			}
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, true))
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		} else {
-			logger.Error().Str("username", ad.Username).Msg("user is not superuser or belongs to an org")
-			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(ad.Username, false))
+			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belongs to an org")
+			err := renderConsolePage(dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, false))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2204,8 +2216,8 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 	}
 
 	return cdntypes.AuthData{
-		Username:  username,
-		UserID:    userID,
+		Username:  &username,
+		UserID:    &userID,
 		OrgID:     orgID,
 		OrgName:   orgName,
 		RoleID:    roleID,
@@ -2406,8 +2418,8 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	logger.Info().Msgf("successful login for userID '%s', username '%s'", userID.String(), username)
 
 	return cdntypes.AuthData{
-		Username:  username,
-		UserID:    userID,
+		Username:  &username,
+		UserID:    &userID,
 		OrgID:     orgID,
 		OrgName:   orgName,
 		RoleID:    roleID,
@@ -2484,8 +2496,8 @@ func jwtToAuthData(tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
 	}
 
 	return cdntypes.AuthData{
-		Username:  "",            // FIXME, make username pointers so it can be nil
-		UserID:    pgtype.UUID{}, // FIXME: this is also nilable pointer
+		Username:  nil,
+		UserID:    nil,
 		OrgID:     &orgID,
 		OrgName:   &orgName,
 		RoleID:    roleID,
@@ -2571,7 +2583,11 @@ func selectUser(dbPool *pgxpool.Pool, userNameOrID string, ad cdntypes.AuthData)
 			return cdnerrors.ErrUnableToParseNameOrID
 		}
 
-		if !ad.Superuser && ad.UserID != userIdent.id {
+		if !ad.Superuser && ad.UserID == nil {
+			return cdnerrors.ErrNotFound
+		}
+
+		if !ad.Superuser && *ad.UserID != userIdent.id {
 			return cdnerrors.ErrNotFound
 		}
 
@@ -2668,7 +2684,10 @@ func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxp
 		}
 
 		// A superuser can change any password and a normal user can only change their own password
-		if !ad.Superuser && ad.UserID != userIdent.id {
+		if !ad.Superuser && ad.UserID == nil {
+			return cdnerrors.ErrForbidden
+		}
+		if !ad.Superuser && *ad.UserID != userIdent.id {
 			return cdnerrors.ErrForbidden
 		}
 
@@ -3060,7 +3079,7 @@ func deleteUser(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthDa
 
 		// A user can not delete itself to protect against locking
 		// yourself out of the system
-		if ad.UserID == userIdent.id {
+		if ad.UserID == nil || *ad.UserID == userIdent.id {
 			return cdnerrors.ErrForbidden
 		}
 

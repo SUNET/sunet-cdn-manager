@@ -10,10 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Authentication data for a given user
+// AuthData represents authentication data for a given user or org client credential.
+// The Username and UserID fields are only set for users, not org client
+// credentials and OrgID/OrgName may be unset for users not currently members
+// of an organization.
 type AuthData struct {
-	Username  string
-	UserID    pgtype.UUID
+	Username  *string
+	UserID    *pgtype.UUID
 	OrgID     *pgtype.UUID
 	OrgName   *string
 	Superuser bool

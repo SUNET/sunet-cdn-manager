@@ -19,7 +19,11 @@ templ ConsolePage(title string, ad cdntypes.AuthData, orgName string, availableO
 						SUNET CDN manager
 					</span>
 					<span class="place-end">
-						{ ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+						if ad.Username != nil {
+							{ *ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+						} else {
+							%%USERNAME MISSING%% <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+						}
 					</span>
 				</header>
 				@NavBar(ad, orgName, availableOrgNames)
