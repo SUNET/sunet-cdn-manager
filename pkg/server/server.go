@@ -2416,6 +2416,84 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	}, nil
 }
 
+func jwtToAuthData(tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
+	var clientCredID, orgID, roleID pgtype.UUID
+	var clientCredName, orgName, roleName string
+	var superuser bool
+
+	// Example content of jwt token:
+	//{
+	//  "exp": 1769522430,
+	//  "iat": 1769522130,
+	//  "jti": "e91b3156-0fc5-4e6f-ba0b-0d22829dce39",
+	//  "iss": "http://localhost:55005/realms/sunet-cdn-manager",
+	//  "aud": "sunet-cdn-manager",
+	//  "sub": "9c6d4e96-0c03-4813-b3e7-8db4f61feb9f",
+	//  "typ": "Bearer",
+	//  "azp": "sunet-cdn-org-client-0f00ba36-ab0e-48ec-a3af-d271484884ca",
+	//  "scope": "",
+	//  "clientHost": "192.168.65.1",
+	//  "clientAddress": "192.168.65.1",
+	//  "client_id": "sunet-cdn-org-client-0f00ba36-ab0e-48ec-a3af-d271484884ca"
+	//}
+	//
+	// The "sub" in a keycloak access token is the UUID of the related
+	// service account. We only store the client_id we selected in our
+	// database so use that instead. It is interesting that the same string
+	// is present in the "azp" field above, but as the azp field is only
+	// really specified for OIDC ID tokens prefer the Oauth2 client_id
+	// instead as this seems more correct for an access token.
+	var clientID string
+	err := jwtToken.Get("client_id", &clientID)
+	if err != nil {
+		return cdntypes.AuthData{}, fmt.Errorf("jwtToAuthData(): looking up client_id failed: %w", err)
+	}
+
+	// The Get() will be happy as long as the claim exists at all, even
+	// with an empty value, so verify it is was not empty.
+	if clientID == "" {
+		return cdntypes.AuthData{}, errors.New("jwtToAuthData(): client_id is empty")
+	}
+
+	err = tx.QueryRow(
+		context.Background(),
+		`SELECT
+			org_keycloak_client_credentials.id,
+			org_keycloak_client_credentials.name,
+			org_keycloak_client_credentials.org_id,
+			orgs.name,
+			org_keycloak_client_credentials.role_id,
+			roles.name,
+			roles.superuser
+		FROM org_keycloak_client_credentials
+		JOIN roles ON org_keycloak_client_credentials.role_id = roles.id
+		LEFT JOIN orgs ON org_keycloak_client_credentials.org_id = orgs.id
+		WHERE org_keycloak_client_credentials.client_id=$1`,
+		clientID,
+	).Scan(
+		&clientCredID,
+		&clientCredName,
+		&orgID,
+		&orgName,
+		&roleID,
+		&roleName,
+		&superuser,
+	)
+	if err != nil {
+		return cdntypes.AuthData{}, err
+	}
+
+	return cdntypes.AuthData{
+		Username:  "",            // FIXME, make username pointers so it can be nil
+		UserID:    pgtype.UUID{}, // FIXME: this is also nilable pointer
+		OrgID:     &orgID,
+		OrgName:   &orgName,
+		RoleID:    roleID,
+		RoleName:  roleName,
+		Superuser: superuser,
+	}, nil
+}
+
 const (
 	cookieName = "sunet-cdn-manager"
 )
@@ -3557,7 +3635,7 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 		}
 
 		if numClientTokens >= clientTokenQuota {
-			logger.Error().Int64("num_client_tokens", numClientTokens).Int64("client_token_quota", clientTokenQuota).Msg("unable to create additional domain as quota has been reached")
+			logger.Error().Int64("num_client_tokens", numClientTokens).Int64("client_token_quota", clientTokenQuota).Msg("unable to create additional credential as quota has been reached")
 			return cdnerrors.ErrOrgClientTokenQuotaHit
 		}
 
@@ -3581,7 +3659,7 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 			return fmt.Errorf("unable to register keycloak client: %w", err)
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, name, client_id, description, registration_access_token) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", tokenUUID, orgIdent.id, name, clientID, description, registrationAccessToken).Scan(&orgClientTokenID)
+		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, registrationAccessToken).Scan(&orgClientTokenID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT org keycloak client token: %w", err)
 		}
@@ -6166,14 +6244,14 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				switch err {
 				case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
 					// The user does not exist, has no password set etc or the password was bad, try again
-					logger.Err(err).Msg("API auth failed")
+					logger.Err(err).Msg("API basic auth failed")
 					sendHumaUnauthorized(logger, api, ctx)
 					return
 				}
 				logger.Err(err).Msg("handleBasicAuth transaction failed")
 				err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 				if err != nil {
-					logger.Err(err).Msg("failed writing error about transaction")
+					logger.Err(err).Msg("failed writing error about user transaction")
 				}
 				return
 			}
@@ -6184,32 +6262,32 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				return
 			}
 
-			_, err := validateKeycloakToken(jwkCache, jwtIssuer, oiConf, token)
+			jwtToken, err := validateKeycloakToken(jwkCache, jwtIssuer, oiConf, token)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate keycloak access token")
 				sendHumaUnauthorized(logger, api, ctx)
 				return
 			}
 
-			//err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			//	ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
-			//	return err
-			//})
-			//if err != nil {
-			//	switch err {
-			//	case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
-			//		// The user does not exist, has no password set etc or the password was bad, try again
-			//		logger.Err(err).Msg("API auth failed")
-			//		sendHumaUnauthorized(logger, api, ctx)
-			//		return
-			//	}
-			//	logger.Err(err).Msg("handleBasicAuth transaction failed")
-			//	err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
-			//	if err != nil {
-			//		logger.Err(err).Msg("failed writing error about transaction")
-			//	}
-			//	return
-			//}
+			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+				ad, err = jwtToAuthData(tx, jwtToken)
+				return err
+			})
+			if err != nil {
+				switch err {
+				case pgx.ErrNoRows:
+					// The client credential does not exist, try again
+					logger.Err(err).Msg("API bearer auth failed")
+					sendHumaUnauthorized(logger, api, ctx)
+					return
+				}
+				logger.Err(err).Msg("handleBearerAuth transaction failed")
+				err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				if err != nil {
+					logger.Err(err).Msg("failed writing error about bearer transaction")
+				}
+				return
+			}
 		default:
 			logger.Error().Msg("no supported type in Authorization header")
 			sendHumaUnauthorized(logger, api, ctx)

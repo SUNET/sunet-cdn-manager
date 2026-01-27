@@ -7,6 +7,7 @@ CREATE TABLE org_keycloak_client_credentials (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),
     org_id uuid NOT NULL REFERENCES orgs(id),
+    role_id uuid NOT NULL REFERENCES roles(id),
     name text NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
     client_id text UNIQUE NOT NULL,
     description text NOT NULL,
