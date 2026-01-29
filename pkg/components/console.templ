@@ -22,7 +22,7 @@ templ ConsolePage(title string, ad cdntypes.AuthData, orgName string, availableO
 						if ad.Username != nil {
 							{ *ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
 						} else {
-							%%USERNAME MISSING%% <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+							Username missing <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
 						}
 					</span>
 				</header>

@@ -3387,7 +3387,7 @@ func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdn
 
 		rows, err := tx.Query(
 			context.Background(),
-			"SELECT id, org_id, client_id, description, registration_access_token FROM org_keycloak_client_credentials WHERE org_id = $1",
+			"SELECT id, name, org_id, client_id, description, registration_access_token FROM org_keycloak_client_credentials WHERE org_id = $1",
 			orgIdent.id,
 		)
 		if err != nil {
@@ -3402,13 +3402,13 @@ func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdn
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("selectOrgClientTokens: transaction failed: %w", err)
+		return nil, fmt.Errorf("selectOrgClientCredentials: transaction failed: %w", err)
 	}
 
 	return orgClientCredentials, nil
 }
 
-type keyCloakClientData struct {
+type keycloakClientData struct {
 	Protocol                  string   `json:"protocol"`
 	ClientID                  string   `json:"clientId"`
 	PublicClient              bool     `json:"publicClient"`
@@ -3418,8 +3418,8 @@ type keyCloakClientData struct {
 	DefaultClientScopes       []string `json:"defaultClientScopes,omitempty"`
 }
 
-func newKeycloakClientReq(clientID string, defaultClientScopes []string) keyCloakClientData {
-	kcd := keyCloakClientData{
+func newKeycloakClientReq(clientID string, defaultClientScopes []string) keycloakClientData {
+	kcd := keycloakClientData{
 		Protocol:                  "openid-connect",
 		ClientID:                  clientID,
 		PublicClient:              false,
@@ -3434,7 +3434,7 @@ func newKeycloakClientReq(clientID string, defaultClientScopes []string) keyCloa
 }
 
 type keycloakClientRegistrationData struct {
-	keyCloakClientData
+	keycloakClientData
 	ID                      string `json:"id"`
 	Secret                  string `json:"secret"`
 	RegistrationAccessToken string `json:"registrationAccessToken"`
@@ -3694,6 +3694,7 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 	ocd := cdntypes.OrgClientCredential{
 		OrgClientCredentialSafe: cdntypes.OrgClientCredentialSafe{
 			ID:          orgClientTokenID,
+			Name:        name,
 			OrgID:       orgID,
 			Description: description,
 			ClientID:    clientID,
@@ -3961,7 +3962,7 @@ func newOrgIdentifier(tx pgx.Tx, input string) (orgIdentifier, error) {
 
 func newServiceIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
 	if input == "" {
-		return serviceIdentifier{}, errors.New("input identifier is empty")
+		return serviceIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id, orgID pgtype.UUID
@@ -4201,7 +4202,7 @@ func newDomainIdentifier(tx pgx.Tx, input string) (domainIdentifier, error) {
 
 func newOriginGroupIdentifier(tx pgx.Tx, input string, inputServiceID pgtype.UUID) (originGroupIdentifier, error) {
 	if input == "" {
-		return originGroupIdentifier{}, errors.New("input identifier is empty")
+		return originGroupIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id, serviceID pgtype.UUID
@@ -4237,7 +4238,7 @@ func newOriginGroupIdentifier(tx pgx.Tx, input string, inputServiceID pgtype.UUI
 
 func newOrgClientCredentialIdentifier(tx pgx.Tx, input string, inputOrgID pgtype.UUID) (orgClientCredentialIdentifier, error) {
 	if input == "" {
-		return orgClientCredentialIdentifier{}, errors.New("input identifier is empty")
+		return orgClientCredentialIdentifier{}, errEmptyInputIdentifier
 	}
 
 	var id, orgID pgtype.UUID
@@ -4253,7 +4254,7 @@ func newOrgClientCredentialIdentifier(tx pgx.Tx, input string, inputOrgID pgtype
 		}
 	} else {
 		if !inputOrgID.Valid {
-			return orgClientCredentialIdentifier{}, cdnerrors.ErrServiceByNameNeedsOrg
+			return orgClientCredentialIdentifier{}, cdnerrors.ErrUnprocessable
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org client credential names are only unique per org)
 		err := tx.QueryRow(context.Background(), "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
@@ -8417,6 +8418,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to setup JWK cache: %w", err)
 	}
 
+	logger.Info().Msg("waiting for JWK cache to be ready")
 	ready := jwkCache.Ready(context.Background(), oiConf.JwksURI)
 	if !ready {
 		return fmt.Errorf("JWK cache is not ready")

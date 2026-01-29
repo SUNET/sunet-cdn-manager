@@ -33,6 +33,7 @@ type Org struct {
 // OrgClientCredentialSafe contains the fields we can share with users via e.g. the API
 type OrgClientCredentialSafe struct {
 	ID          pgtype.UUID `json:"id" doc:"ID of organisation client token, UUIDv4"`
+	Name        string      `json:"name" example:"credential-1" doc:"name of client credential"`
 	OrgID       pgtype.UUID `json:"org_id" doc:"ID of related organization"`
 	ClientID    string      `json:"client_id" doc:"client_id of client credential"`
 	Description string      `json:"description" doc:"Description for client token"`

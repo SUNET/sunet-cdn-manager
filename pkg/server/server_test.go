@@ -1574,33 +1574,35 @@ func TestGetOrgClientCredentials(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -2231,13 +2233,6 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// We need to use PortEndpoint() rather than the simpler Endpoint()
-	// because the varnish container used as a baseline for the validator
-	// container includes "EXPOSE 80 8443" so we end up trying to use
-	// 80/tcp in that case (which is not used at all for the validator
-	// container). Also it is not possible to simply add our own EXPOSE in
-	// the validator Dockerfile with port 8888, it is just appended to the
-	// existing list rather than overriding the existing set.
 	endpoint, err := keycloakC.Endpoint(ctx, "http")
 	if err != nil {
 		t.Fatal(err)
