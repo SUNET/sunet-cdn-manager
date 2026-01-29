@@ -2281,7 +2281,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 	oiConf, err := fetchKeyCloakOpenIDConfig(client, issuerURL.String())
 	if err != nil {
-		t.Fatal("unable to fetch openid-configuration: %w", err)
+		t.Fatalf("unable to fetch openid-configuration: %v", err)
 	}
 
 	jwkCtx, jwkCancel := context.WithCancel(t.Context())
@@ -2450,7 +2450,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 		}
 
-		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, r)
+		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -6345,6 +6345,6 @@ func TestAuthChallenge(t *testing.T) {
 	expectedChallenge := `Basic realm="test realm"`
 	challenge := authChallenge("Basic", "test realm")
 	if challenge != expectedChallenge {
-		t.Fatalf("unexpected challange string, want '%s', have: '%s'", expectedChallenge, challenge)
+		t.Fatalf("unexpected challenge string, want '%s', have: '%s'", expectedChallenge, challenge)
 	}
 }

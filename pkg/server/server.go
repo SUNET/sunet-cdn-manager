@@ -3445,9 +3445,6 @@ func sendHTTPReq(client *http.Client, method string, url string, headers map[str
 	if err != nil {
 		return nil, nil, err
 	}
-	if reqBody != nil {
-		req.Header.Add("Content-Type", "application/json")
-	}
 
 	for k, v := range headers {
 		req.Header.Add(k, v)
@@ -3570,11 +3567,9 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 		return "", "", "", fmt.Errorf("createClientCred: unable to POST registration request: %w", err)
 	}
 
-	clientRegURL, err := url.Parse(regResp.Header.Get("Location"))
-	if err != nil {
-		return "", "", "", fmt.Errorf("createClientCred: unable to parse location URL for registered client: '%s': %w", regResp.Header.Get("Location"), err)
+	if regResp.StatusCode != http.StatusCreated {
+		return "", "", "", fmt.Errorf("createClientCred: unexpected credential creation response: %d", regResp.StatusCode)
 	}
-	fmt.Println("clientRegURL", clientRegURL)
 
 	var regData keycloakClientRegistrationData
 
@@ -6201,8 +6196,8 @@ func decodeBasicAuth(token string) (username, password string, ok bool) {
 // a JWT we just do our own lookup for the ".well-known/openid-configuration"
 // even if this means we do a duplicate HTTP request this way.
 type openidConfig struct {
-	JwksURI              string `json:"jwks_uri"`
-	IntrospectionEndoint string `json:"introspection_endpoint"`
+	JwksURI               string `json:"jwks_uri"`
+	IntrospectionEndpoint string `json:"introspection_endpoint"`
 }
 
 func validateKeycloakToken(c *jwk.Cache, issuer string, oiConf openidConfig, token string) (jwt.Token, error) {
@@ -6622,7 +6617,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
 				orgClientCred, clientSecret, err := insertOrgClientCredential(logger, dbPool, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager)
@@ -6631,7 +6626,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
-						return nil, huma.Error409Conflict("domain already exists")
+						return nil, huma.Error409Conflict("client credential already exists")
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("missing required params")
 					}
@@ -8264,17 +8259,20 @@ func fetchKeyCloakOpenIDConfig(client *http.Client, issuer string) (oiConf openi
 	}
 	confResp, err := client.Get(openidConfigURL)
 	if err != nil {
-		panic(err)
+		return openidConfig{}, fmt.Errorf("unable to GET OpenID config: %w", err)
 	}
 	defer func() {
 		err = errors.Join(err, confResp.Body.Close())
 	}()
 
+	if confResp.StatusCode != http.StatusOK {
+		return openidConfig{}, fmt.Errorf("unexpected status code: %d", confResp.StatusCode)
+	}
+
 	confData, err := io.ReadAll(confResp.Body)
 	if err != nil {
-		fmt.Println(string(confData))
+		return openidConfig{}, fmt.Errorf("unable to read response body: %w", err)
 	}
-	fmt.Println(string(confData))
 
 	err = json.Unmarshal(confData, &oiConf)
 	if err != nil {
