@@ -11,7 +11,7 @@ CREATE TABLE org_keycloak_client_credentials (
     name text NOT NULL CONSTRAINT valid_dns_label CHECK(is_valid_dns_label(name)),
     client_id text UNIQUE NOT NULL,
     description text NOT NULL,
-    registration_access_token text NOT NULL,
+    crypt_registration_access_token bytea NOT NULL,
     UNIQUE(org_id, name)
 );
 

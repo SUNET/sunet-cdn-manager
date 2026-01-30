@@ -36,6 +36,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -512,7 +513,28 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf)
+	a2Settings := newArgon2DefaultSettings()
+
+	salt, err := saltFromHex("36023a78c7d2000ac58604da1b630a9e")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create salt")
+	}
+
+	clientCredKey := argon2.IDKey(
+		[]byte("test-encryption-password"),
+		salt,
+		a2Settings.argonTime,
+		a2Settings.argonMemory,
+		a2Settings.argonThreads,
+		chacha20poly1305.KeySize,
+	)
+
+	clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create client cred AEAD")
+	}
+
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD)
 	if err != nil {
 		return nil, dbPool, err
 	}

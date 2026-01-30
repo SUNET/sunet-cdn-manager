@@ -43,7 +43,7 @@ type OrgClientCredentialSafe struct {
 // fields that can not be shared directly with users.
 type OrgClientCredential struct {
 	OrgClientCredentialSafe
-	RegistrationAccessToken string `json:"registration_access_token"`
+	CryptRegistrationAccessToken []byte `json:"crypt_registration_access_token"`
 }
 
 // NewOrgClientCredential is returned when creating new client creds and this

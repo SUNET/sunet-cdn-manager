@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -63,6 +64,7 @@ import (
 	"github.com/spf13/viper"
 	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -2280,10 +2282,10 @@ func authChallenge(scheme string, realm string) string {
 	return fmt.Sprintf(`%s realm="%s"`, scheme, realm)
 }
 
-func sendHumaUnauthorized(logger *zerolog.Logger, api huma.API, ctx huma.Context) {
-	ctx.AppendHeader(wwwAuthenticateHeader, authChallenge("Basic", apiAuthRealm))
-	ctx.AppendHeader(wwwAuthenticateHeader, authChallenge("Bearer", apiAuthRealm))
-	err := huma.WriteErr(api, ctx, http.StatusUnauthorized, "Unauthorized")
+func sendHumaUnauthorized(logger *zerolog.Logger, api huma.API, humaCtx huma.Context) {
+	humaCtx.AppendHeader(wwwAuthenticateHeader, authChallenge("Basic", apiAuthRealm))
+	humaCtx.AppendHeader(wwwAuthenticateHeader, authChallenge("Bearer", apiAuthRealm))
+	err := huma.WriteErr(api, humaCtx, http.StatusUnauthorized, "Unauthorized")
 	if err != nil {
 		logger.Err(err).Msg("sendHumaUnauthorized: writing auth challenge response")
 	}
@@ -2612,7 +2614,7 @@ type argon2Data struct {
 }
 
 func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, error) {
-	argonSettings := newArgon2DefaultSettings()
+	argon2Settings := newArgon2DefaultSettings()
 
 	// Generate 16 byte (128 bit) salt as
 	// recommended for argon2 in RFC 9106
@@ -2626,13 +2628,13 @@ func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, err
 
 	// Protect access to memory intensive hash calculation to not overwhelm server if handling many concurrect connections.
 	argon2Mutex.Lock()
-	key := argon2.IDKey([]byte(password), salt, argonSettings.argonTime, argonSettings.argonMemory, argonSettings.argonThreads, argonSettings.argonTagSize)
+	key := argon2.IDKey([]byte(password), salt, argon2Settings.argonTime, argon2Settings.argonMemory, argon2Settings.argonThreads, argon2Settings.argonTagSize)
 	argon2Mutex.Unlock()
 
 	return argon2Data{
 		key:            key,
 		salt:           salt,
-		argon2Settings: argonSettings,
+		argon2Settings: argon2Settings,
 	}, nil
 }
 
@@ -2654,6 +2656,37 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 	}
 
 	return keyID, nil
+}
+
+func getClientCredEncryptionKey(conf config.Config) ([]byte, error) {
+	if len(conf.KeycloakClientAdmin.EncryptionSalt) != 32 {
+		return nil, errors.New("getClientCredEncryptionKey: client admin salt must be 32 hex charactrs long")
+	}
+
+	salt, err := saltFromHex(conf.KeycloakClientAdmin.EncryptionSalt)
+	if err != nil {
+		return nil, fmt.Errorf("getClientCredEncryptionKey: cannot decode salt hex: %w", err)
+	}
+
+	return argon2.IDKey(
+		[]byte(conf.KeycloakClientAdmin.EncryptionKey),
+		salt,
+		conf.KeycloakClientAdmin.Argon2Time,
+		conf.KeycloakClientAdmin.Argon2Memory,
+		conf.KeycloakClientAdmin.Argon2Threads,
+		chacha20poly1305.KeySize,
+	), nil
+}
+
+func saltFromHex(hexString string) ([]byte, error) {
+	if len(hexString) != 32 {
+		return nil, fmt.Errorf("SaltFromHex: hex string must be 32 hex characters long")
+	}
+	salt, err := hex.DecodeString(hexString)
+	if err != nil {
+		return nil, fmt.Errorf("SaltFromHex: cannot decode salt hex")
+	}
+	return salt, nil
 }
 
 func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
@@ -3387,7 +3420,7 @@ func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdn
 
 		rows, err := tx.Query(
 			context.Background(),
-			"SELECT id, name, org_id, client_id, description, registration_access_token FROM org_keycloak_client_credentials WHERE org_id = $1",
+			"SELECT id, name, org_id, client_id, description, crypt_registration_access_token FROM org_keycloak_client_credentials WHERE org_id = $1",
 			orgIdent.id,
 		)
 		if err != nil {
@@ -3611,9 +3644,10 @@ func (kccm *keycloakClientManager) deleteClientCred(clientID string, registratio
 	return nil
 }
 
-func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager) (cdntypes.OrgClientCredential, string, error) {
+func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager, clientCredAEAD cipher.AEAD) (cdntypes.OrgClientCredential, string, error) {
 	var orgID, orgClientTokenID pgtype.UUID
 	var clientID, clientSecret, registrationAccessToken string
+	var cryptRegistrationAccessToken []byte
 
 	if !ad.Superuser && ad.OrgID == nil {
 		return cdntypes.OrgClientCredential{}, "", cdnerrors.ErrForbidden
@@ -3673,7 +3707,17 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 			return fmt.Errorf("unable to register keycloak client: %w", err)
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, registrationAccessToken).Scan(&orgClientTokenID)
+		// Encrypt client registration token prior to placing it in the database
+		// Select a random nonce, and leave capacity for the ciphertext.
+		nonce := make([]byte, clientCredAEAD.NonceSize(), clientCredAEAD.NonceSize()+len(registrationAccessToken)+clientCredAEAD.Overhead())
+		if _, err := rand.Read(nonce); err != nil {
+			return fmt.Errorf("unable to create random nonce for client registration token: %w", err)
+		}
+
+		// Encrypt the registration access token and append the ciphertext to the nonce.
+		cryptRegistrationAccessToken = clientCredAEAD.Seal(nonce, nonce, []byte(registrationAccessToken), nil)
+
+		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT org keycloak client token: %w", err)
 		}
@@ -3699,13 +3743,13 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 			Description: description,
 			ClientID:    clientID,
 		},
-		RegistrationAccessToken: registrationAccessToken,
+		CryptRegistrationAccessToken: cryptRegistrationAccessToken,
 	}
 
 	return ocd, clientSecret, nil
 }
 
-func deleteOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
+func deleteOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, clientCredAEAD cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
@@ -3735,17 +3779,30 @@ func deleteOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, ad 
 		}
 
 		var clientID string
-		var registrationAccessToken string
-		err = tx.QueryRow(context.Background(), "DELETE FROM org_keycloak_client_credentials WHERE id = $1 RETURNING id, client_id, registration_access_token", orgClientCredentialIdent.id).Scan(&orgClientCredentialID, &clientID, &registrationAccessToken)
+		var cryptRegistrationAccessToken []byte
+		err = tx.QueryRow(context.Background(), "DELETE FROM org_keycloak_client_credentials WHERE id = $1 RETURNING id, client_id, crypt_registration_access_token", orgClientCredentialIdent.id).Scan(&orgClientCredentialID, &clientID, &cryptRegistrationAccessToken)
 		if err != nil {
 			return fmt.Errorf("unable to DELETE org client credential: %w", err)
+		}
+
+		if len(cryptRegistrationAccessToken) < clientCredAEAD.NonceSize() {
+			return errors.New("deleteOrgClientCredential: ciphertext too short")
+		}
+
+		// Split nonce and ciphertext.
+		nonce, ciphertext := cryptRegistrationAccessToken[:clientCredAEAD.NonceSize()], cryptRegistrationAccessToken[clientCredAEAD.NonceSize():]
+
+		// Decrypt the message and check it wasn't tampered with.
+		registrationAccessToken, err := clientCredAEAD.Open(nil, nonce, ciphertext, nil)
+		if err != nil {
+			return fmt.Errorf("deleteOrgClientCredential: unable to decrypt registration access token: %w", err)
 		}
 
 		// It is not great to perform network calls inside database
 		// transaction but if the request fails we probably want to
 		// roll back the DELETE so we do not get orphaned clients in
 		// keycloak
-		err = kccm.deleteClientCred(clientID, registrationAccessToken)
+		err = kccm.deleteClientCred(clientID, string(registrationAccessToken))
 		if err != nil {
 			return fmt.Errorf("unable to delete org client credential from keycloak service: %w", err)
 		}
@@ -6201,12 +6258,12 @@ type openidConfig struct {
 	IntrospectionEndpoint string `json:"introspection_endpoint"`
 }
 
-func validateKeycloakToken(c *jwk.Cache, issuer string, oiConf openidConfig, token string) (jwt.Token, error) {
+func validateKeycloakToken(ctx context.Context, c *jwk.Cache, issuer string, oiConf openidConfig, token string) (jwt.Token, error) {
 	// https://www.keycloak.org/securing-apps/oidc-layers#_validating_access_tokens
 	//
 	// Even though access tokens in OAuth2 are generally treated as opaque values in
 	// keycloak specifically they are defined as JWTs so lets inspect them as such.
-	keySet, err := c.Lookup(context.Background(), oiConf.JwksURI)
+	keySet, err := c.Lookup(ctx, oiConf.JwksURI)
 	if err != nil {
 		return jwt.New(), fmt.Errorf("validateKeycloakToken: failed to fetch JWKS: %w", err)
 	}
@@ -6220,14 +6277,15 @@ func validateKeycloakToken(c *jwk.Cache, issuer string, oiConf openidConfig, tok
 }
 
 // https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
-func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(ctx huma.Context, next func(huma.Context)) {
-	return func(ctx huma.Context, next func(huma.Context)) {
-		logger := zlog.Ctx(ctx.Context())
+func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(humaCtx huma.Context, next func(huma.Context)) {
+	return func(humaCtx huma.Context, next func(huma.Context)) {
+		ctx := humaCtx.Context()
+		logger := zlog.Ctx(ctx)
 
-		authorizationVal := ctx.Header("Authorization")
+		authorizationVal := humaCtx.Header("Authorization")
 		if authorizationVal == "" {
-			logger.Error().Msg("no Authorization header in request")
-			sendHumaUnauthorized(logger, api, ctx)
+			logger.Info().Msg("no Authorization header in request")
+			sendHumaUnauthorized(logger, api, humaCtx)
 			return
 		}
 
@@ -6241,17 +6299,17 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 		case strings.HasPrefix(authorizationVal, basicPrefix):
 			token := strings.TrimPrefix(authorizationVal, basicPrefix)
 			if len(token) == 0 {
-				sendHumaUnauthorized(logger, api, ctx)
+				sendHumaUnauthorized(logger, api, humaCtx)
 				return
 			}
 
 			username, password, ok := decodeBasicAuth(token)
 			if !ok {
-				sendHumaUnauthorized(logger, api, ctx)
+				sendHumaUnauthorized(logger, api, humaCtx)
 				return
 			}
 
-			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
 				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
 				return err
 			})
@@ -6260,11 +6318,11 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
 					// The user does not exist, has no password set etc or the password was bad, try again
 					logger.Err(err).Msg("API basic auth failed")
-					sendHumaUnauthorized(logger, api, ctx)
+					sendHumaUnauthorized(logger, api, humaCtx)
 					return
 				}
 				logger.Err(err).Msg("handleBasicAuth transaction failed")
-				err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				err = huma.WriteErr(api, humaCtx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 				if err != nil {
 					logger.Err(err).Msg("failed writing error about user transaction")
 				}
@@ -6273,18 +6331,18 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 		case strings.HasPrefix(authorizationVal, bearerPrefix):
 			token := strings.TrimPrefix(authorizationVal, bearerPrefix)
 			if len(token) == 0 {
-				sendHumaUnauthorized(logger, api, ctx)
+				sendHumaUnauthorized(logger, api, humaCtx)
 				return
 			}
 
-			jwtToken, err := validateKeycloakToken(jwkCache, jwtIssuer, oiConf, token)
+			jwtToken, err := validateKeycloakToken(ctx, jwkCache, jwtIssuer, oiConf, token)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate keycloak access token")
-				sendHumaUnauthorized(logger, api, ctx)
+				sendHumaUnauthorized(logger, api, humaCtx)
 				return
 			}
 
-			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
 				ad, err = jwtToAuthData(tx, jwtToken)
 				return err
 			})
@@ -6293,11 +6351,11 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				case pgx.ErrNoRows:
 					// The client credential does not exist, try again
 					logger.Err(err).Msg("API bearer auth failed")
-					sendHumaUnauthorized(logger, api, ctx)
+					sendHumaUnauthorized(logger, api, humaCtx)
 					return
 				}
 				logger.Err(err).Msg("handleBearerAuth transaction failed")
-				err = huma.WriteErr(api, ctx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				err = huma.WriteErr(api, humaCtx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 				if err != nil {
 					logger.Err(err).Msg("failed writing error about bearer transaction")
 				}
@@ -6305,13 +6363,13 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 			}
 		default:
 			logger.Error().Msg("no supported type in Authorization header")
-			sendHumaUnauthorized(logger, api, ctx)
+			sendHumaUnauthorized(logger, api, humaCtx)
 			return
 		}
 
-		ctx = huma.WithValue(ctx, authDataKey{}, ad)
+		humaCtx = huma.WithValue(humaCtx, authDataKey{}, ad)
 
-		next(ctx)
+		next(humaCtx)
 	}
 }
 
@@ -6329,7 +6387,7 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) error {
+func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -6587,6 +6645,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 			for _, cred := range orgClientCredentials {
 				safeOrgClientCreds = append(safeOrgClientCreds, cdntypes.OrgClientCredentialSafe{
 					ID:          cred.ID,
+					Name:        cred.Name,
 					OrgID:       cred.OrgID,
 					ClientID:    cred.ClientID,
 					Description: cred.Description,
@@ -6621,7 +6680,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
-				orgClientCred, clientSecret, err := insertOrgClientCredential(logger, dbPool, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager)
+				orgClientCred, clientSecret, err := insertOrgClientCredential(logger, dbPool, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, clientCredAEAD)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -6638,6 +6697,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				newOrgClientCred := cdntypes.NewOrgClientCredential{
 					OrgClientCredentialSafe: cdntypes.OrgClientCredentialSafe{
 						ID:          orgClientCred.ID,
+						Name:        orgClientCred.Name,
 						OrgID:       orgClientCred.OrgID,
 						ClientID:    orgClientCred.ClientID,
 						Description: orgClientCred.Description,
@@ -6661,7 +6721,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from org client-credentials DELETE handler")
 			}
 
-			_, err := deleteOrgClientCredential(logger, dbPool, ad, kcClientManager, input.Org, input.ClientCredential)
+			_, err := deleteOrgClientCredential(logger, dbPool, clientCredAEAD, ad, kcClientManager, input.Org, input.ClientCredential)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("client-credential not found")
@@ -8424,7 +8484,17 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("JWK cache is not ready")
 	}
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf)
+	clientCredKey, err := getClientCredEncryptionKey(conf)
+	if err != nil {
+		return fmt.Errorf("unable to get client cred encryption key: %w", err)
+	}
+
+	clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
+	if err != nil {
+		return fmt.Errorf("unable to create client cred AEAD: %w", err)
+	}
+
+	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
