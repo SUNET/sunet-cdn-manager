@@ -24,10 +24,10 @@ client_id = "sunet-cdn-manager-admin-client"
 client_secret = "some-secret"
 encryption_key = "some-secret-encryption-key"
 encryption_salt = "36023a78c7d2000ac58604da1b630a9e"
-argon_time = 3
-argon_memory = 65536
-argon_threads = 4
-argon_tag_size = 32
+argon2_time = 3
+argon2_memory = 65536
+argon2_threads = 4
+argon2_tag_size = 32
 
 [domains]
 resolver_address = "127.0.0.1:53"

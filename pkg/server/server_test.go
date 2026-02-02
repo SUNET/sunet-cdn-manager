@@ -2237,7 +2237,7 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	req := testcontainers.ContainerRequest{
 		Image:      "quay.io/keycloak/keycloak:26.0.7",
-		WaitingFor: wait.ForListeningPort("8080/tcp"),
+		WaitingFor: wait.ForHTTP("/realms/master"),
 		Env: map[string]string{
 			"KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
 			"KC_BOOTSTRAP_ADMIN_PASSWORD": "admin",

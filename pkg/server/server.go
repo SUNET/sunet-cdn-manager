@@ -2660,7 +2660,7 @@ func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UU
 
 func getClientCredEncryptionKey(conf config.Config) ([]byte, error) {
 	if len(conf.KeycloakClientAdmin.EncryptionSalt) != 32 {
-		return nil, errors.New("getClientCredEncryptionKey: client admin salt must be 32 hex charactrs long")
+		return nil, errors.New("getClientCredEncryptionKey: client admin salt must be a 32-character hex string")
 	}
 
 	salt, err := saltFromHex(conf.KeycloakClientAdmin.EncryptionSalt)
@@ -2680,11 +2680,11 @@ func getClientCredEncryptionKey(conf config.Config) ([]byte, error) {
 
 func saltFromHex(hexString string) ([]byte, error) {
 	if len(hexString) != 32 {
-		return nil, fmt.Errorf("SaltFromHex: hex string must be 32 hex characters long")
+		return nil, fmt.Errorf("saltFromHex: hex string must be 32 hex characters long")
 	}
 	salt, err := hex.DecodeString(hexString)
 	if err != nil {
-		return nil, fmt.Errorf("SaltFromHex: cannot decode salt hex")
+		return nil, fmt.Errorf("saltFromHex: cannot decode salt hex: %w", err)
 	}
 	return salt, nil
 }
@@ -3424,7 +3424,7 @@ func selectOrgClientCredentials(dbPool *pgxpool.Pool, orgNameOrID string, ad cdn
 			orgIdent.id,
 		)
 		if err != nil {
-			return fmt.Errorf("unable query org_keycloak_client_credentials: %w", err)
+			return fmt.Errorf("unable to query org_keycloak_client_credentials: %w", err)
 		}
 
 		orgClientCredentials, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.OrgClientCredential])
@@ -8467,7 +8467,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 	// request on startup but it is good enough for now.
 	oiConf, err := fetchKeyCloakOpenIDConfig(client, conf.OIDC.Issuer)
 	if err != nil {
-		return fmt.Errorf("unable to parse fetch openid-configuration: %w", err)
+		return fmt.Errorf("unable to fetch openid-configuration: %w", err)
 	}
 
 	jwkCtx, jwkCancel := context.WithCancel(context.Background())

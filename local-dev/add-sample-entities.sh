@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-ipv4-network.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/ip-networks
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-ipv6-network.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/ip-networks
 
-# Create an organisation:
+# Create an organization:
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/create-org.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/orgs
 
 # Assign a domain to the org (this will make the manager start looking for a verification TXT record for that name):
