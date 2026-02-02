@@ -3473,10 +3473,10 @@ type keycloakClientRegistrationData struct {
 	RegistrationAccessToken string `json:"registrationAccessToken"`
 }
 
-func sendHTTPReq(client *http.Client, method string, url string, headers map[string]string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (resp *http.Response, respBody []byte, err error) {
+func sendHTTPReq(client *http.Client, method string, url string, headers map[string]string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (respBody []byte, err error) {
 	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	for k, v := range headers {
@@ -3487,9 +3487,9 @@ func sendHTTPReq(client *http.Client, method string, url string, headers map[str
 		req.URL.RawQuery = queryParams.Encode()
 	}
 
-	resp, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer func() {
 		if resp != nil {
@@ -3499,14 +3499,14 @@ func sendHTTPReq(client *http.Client, method string, url string, headers map[str
 
 	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if resp.StatusCode != expectedStatusCode {
-		return nil, nil, fmt.Errorf("sendHTTPReq: unexpected status code for URL '%s', method '%s', want: %d, have: %d", url, method, expectedStatusCode, resp.StatusCode)
+		return nil, fmt.Errorf("sendHTTPReq: unexpected status code for URL '%s', method '%s', want: %d, have: %d", url, method, expectedStatusCode, resp.StatusCode)
 	}
 
-	return resp, respBody, nil
+	return respBody, nil
 }
 
 // [
@@ -3587,7 +3587,7 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 		return "", "", "", fmt.Errorf("createClientCred: unable to marshal json: %w", err)
 	}
 
-	regResp, regBody, err := sendHTTPReq(
+	regBody, err := sendHTTPReq(
 		kccm.createClient,
 		http.MethodPost,
 		regURL,
@@ -3598,10 +3598,6 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 	)
 	if err != nil {
 		return "", "", "", fmt.Errorf("createClientCred: unable to POST registration request: %w", err)
-	}
-
-	if regResp.StatusCode != http.StatusCreated {
-		return "", "", "", fmt.Errorf("createClientCred: unexpected credential creation response: %d", regResp.StatusCode)
 	}
 
 	var regData keycloakClientRegistrationData
@@ -3715,7 +3711,10 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 		}
 
 		// Encrypt the registration access token and append the ciphertext to the nonce.
-		cryptRegistrationAccessToken = clientCredAEAD.Seal(nonce, nonce, []byte(registrationAccessToken), nil)
+		// Include UUID of the table row as additional data so we fail
+		// to decrypt it if the ciphertext has somehow been moved to
+		// another row.
+		cryptRegistrationAccessToken = clientCredAEAD.Seal(nonce, nonce, []byte(registrationAccessToken), tokenUUID[:])
 
 		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
 		if err != nil {
@@ -3793,7 +3792,7 @@ func deleteOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, cli
 		nonce, ciphertext := cryptRegistrationAccessToken[:clientCredAEAD.NonceSize()], cryptRegistrationAccessToken[clientCredAEAD.NonceSize():]
 
 		// Decrypt the message and check it wasn't tampered with.
-		registrationAccessToken, err := clientCredAEAD.Open(nil, nonce, ciphertext, nil)
+		registrationAccessToken, err := clientCredAEAD.Open(nil, nonce, ciphertext, orgClientCredentialID.Bytes[:])
 		if err != nil {
 			return fmt.Errorf("deleteOrgClientCredential: unable to decrypt registration access token: %w", err)
 		}
@@ -8478,8 +8477,11 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to setup JWK cache: %w", err)
 	}
 
+	jwkCacheReadyCtx, jwkCacheReadyCancel := context.WithTimeout(context.Background(), time.Second*60)
+	defer jwkCacheReadyCancel()
+
 	logger.Info().Msg("waiting for JWK cache to be ready")
-	ready := jwkCache.Ready(context.Background(), oiConf.JwksURI)
+	ready := jwkCache.Ready(jwkCacheReadyCtx, oiConf.JwksURI)
 	if !ready {
 		return fmt.Errorf("JWK cache is not ready")
 	}

@@ -53,12 +53,11 @@ type keycloakClientAdminSettings struct {
 	BaseURL        string `mapstructure:"base_url" validate:"required"`
 	ClientID       string `mapstructure:"client_id" validate:"required"`
 	ClientSecret   string `mapstructure:"client_secret" validate:"required"`
-	EncryptionKey  string `mapstructure:"encryption_key" validate:"required,min=40"`
+	EncryptionKey  string `mapstructure:"encryption_key" validate:"required,min=15"`
 	EncryptionSalt string `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
 	Argon2Time     uint32 `mapstructure:"argon2_time" validate:"required"`
 	Argon2Memory   uint32 `mapstructure:"argon2_memory" validate:"required"`
 	Argon2Threads  uint8  `mapstructure:"argon2_threads" validate:"required"`
-	Argon2TagSize  uint32 `mapstructure:"argon2_tag_size" validate:"required"`
 }
 
 type domainSettings struct {
