@@ -496,19 +496,19 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create varnish template")
+		t.Fatalf("unable to create varnish template: %v", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create haproxy template")
+		t.Fatalf("unable to create haproxy template: %v", err)
 	}
 
 	var argon2Mutex sync.Mutex
 
 	loginCache, err := lru.New[string, struct{}](128)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create LRU login cache")
+		t.Fatalf("unable to create LRU login cache: %v", err)
 	}
 
 	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
@@ -517,7 +517,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	salt, err := saltFromHex("36023a78c7d2000ac58604da1b630a9e")
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create salt")
+		t.Fatalf("unable to create salt: %v", err)
 	}
 
 	clientCredKey := argon2.IDKey(
@@ -531,7 +531,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create client cred AEAD")
+		t.Fatalf("unable to create client cred AEAD: %v", err)
 	}
 
 	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD)
@@ -1630,15 +1630,15 @@ func TestGetOrgClientCredentials(t *testing.T) {
 
 // {"id":"1af03a7c-735a-4717-b48a-988256d5586f","username":"service-account-sunet-cdn-admin-client","emailVerified":false,"createdTimestamp":1767042831875,"enabled":true,"totp":false,"disableableCredentialTypes":[],"requiredActions":[],"notBefore":0}
 type keycloakServiceAccountUser struct {
-	ID                          string   `json:"id"`
-	Username                    string   `json:"username"`
-	EmailVerified               bool     `json:"emailVerified"`
-	CreatedTimestamp            int64    `json:"createdTimestamp"`
-	Enabled                     bool     `json:"enabled"`
-	TOTP                        bool     `json:"totp"`
-	DisabledableCredentialTypes []string `json:"disableableCredentialTypes"`
-	RequiredActions             []string `json:"requiredActions"`
-	NotBefore                   int64    `json:"notBefore"`
+	ID                         string   `json:"id"`
+	Username                   string   `json:"username"`
+	EmailVerified              bool     `json:"emailVerified"`
+	CreatedTimestamp           int64    `json:"createdTimestamp"`
+	Enabled                    bool     `json:"enabled"`
+	TOTP                       bool     `json:"totp"`
+	DisableableCredentialTypes []string `json:"disableableCredentialTypes"`
+	RequiredActions            []string `json:"requiredActions"`
+	NotBefore                  int64    `json:"notBefore"`
 }
 
 // [{"id":"a69f1222-0174-454b-9de8-0a359c063753","clientId":"realm-management","name":"${client_realm-management}","surrogateAuthRequired":false,"enabled":true,"alwaysDisplayInConsole":false,"clientAuthenticatorType":"client-secret","redirectUris":[],"webOrigins":[],"notBefore":0,"bearerOnly":true,"consentRequired":false,"standardFlowEnabled":true,"implicitFlowEnabled":false,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":false,"publicClient":false,"frontchannelLogout":false,"protocol":"openid-connect","attributes":{"realm_client":"true"},"authenticationFlowBindingOverrides":{},"fullScopeAllowed":false,"nodeReRegistrationTimeout":0,"defaultClientScopes":["web-origins","acr","roles","profile","basic","email"],"optionalClientScopes":["address","phone","organization","offline_access","microprofile-jwt"],"access":{"view":true,"configure":true,"manage":true}}]
@@ -2171,7 +2171,7 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 	}
 
 	// Find UUID for client registration policy that allows assigning our
-	// custom client-scope that includes the auidence mapper for new
+	// custom client-scope that includes the audience mapper for new
 	// clients at registration
 	clientRegistrationPolicyURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "components")
 	if err != nil {

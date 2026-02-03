@@ -3644,6 +3644,7 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 	var orgID, orgClientTokenID pgtype.UUID
 	var clientID, clientSecret, registrationAccessToken string
 	var cryptRegistrationAccessToken []byte
+	var clientRegistered bool
 
 	if !ad.Superuser && ad.OrgID == nil {
 		return cdntypes.OrgClientCredential{}, "", cdnerrors.ErrForbidden
@@ -3703,6 +3704,8 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 			return fmt.Errorf("unable to register keycloak client: %w", err)
 		}
 
+		clientRegistered = true
+
 		// Encrypt client registration token prior to placing it in the database
 		// Select a random nonce, and leave capacity for the ciphertext.
 		nonce := make([]byte, clientCredAEAD.NonceSize(), clientCredAEAD.NonceSize()+len(registrationAccessToken)+clientCredAEAD.Overhead())
@@ -3725,6 +3728,13 @@ func insertOrgClientCredential(logger *zerolog.Logger, dbPool *pgxpool.Pool, nam
 	})
 	if err != nil {
 		logger.Err(err).Msg("insertOrgClientCredential transaction failed")
+		if clientRegistered {
+			logger.Info().Msgf("operation failed after client was successfully registered, cleanup orphaned client: %s", clientID)
+			err = kcClientManager.deleteClientCred(clientID, registrationAccessToken)
+			if err != nil {
+				logger.Err(err).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
+			}
+		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == pgUniqueViolation {
@@ -8381,14 +8391,14 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 	}
 	defer dbPool.Close()
 
-	err = dbPool.Ping(context.Background())
+	err = dbPool.Ping(ctx)
 	if err != nil {
 		return fmt.Errorf("unable to ping database connection: %w", err)
 	}
 
 	// Verify that the database appears initialized by 'init' command
 	var rolesExists bool
-	err = dbPool.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
+	err = dbPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
 	if err != nil {
 		return fmt.Errorf("unable to check for roles in the database, is it initialized? (see init command): %w", err)
 	}
@@ -8401,7 +8411,6 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("getSessionStore failed: %w", err)
 	}
 
-	providerCtx := context.Background()
 	client := &http.Client{}
 	if devMode {
 		logger.Info().Msg("disabling cert validation for OIDC discovery due to dev mode")
@@ -8409,9 +8418,9 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- only enabled in --dev mode
 		}
 		client.Transport = tr
-		providerCtx = oidc.ClientContext(context.Background(), client)
 	}
 
+	providerCtx := oidc.ClientContext(ctx, client)
 	provider, err := oidc.NewProvider(providerCtx, conf.OIDC.Issuer)
 	if err != nil {
 		return fmt.Errorf("setting up OIDC provider failed: %w", err)
@@ -8469,15 +8478,12 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to fetch openid-configuration: %w", err)
 	}
 
-	jwkCtx, jwkCancel := context.WithCancel(context.Background())
-	defer jwkCancel()
-
-	jwkCache, err := setupJwkCache(jwkCtx, logger, client, oiConf)
+	jwkCache, err := setupJwkCache(ctx, logger, client, oiConf)
 	if err != nil {
 		return fmt.Errorf("unable to setup JWK cache: %w", err)
 	}
 
-	jwkCacheReadyCtx, jwkCacheReadyCancel := context.WithTimeout(context.Background(), time.Second*60)
+	jwkCacheReadyCtx, jwkCacheReadyCancel := context.WithTimeout(ctx, time.Second*60)
 	defer jwkCacheReadyCancel()
 
 	logger.Info().Msg("waiting for JWK cache to be ready")
