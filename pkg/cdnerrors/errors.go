@@ -23,6 +23,8 @@ var (
 	ErrServiceByNameNeedsOrg         = errors.New("looking up service by name requires org")
 	ErrOriginGroupByNameNeedsService = errors.New("looking up origin group by name requires service")
 	ErrServiceQuotaHit               = errors.New("not allowed to create more services")
+	ErrDomainQuotaHit                = errors.New("not allowed to create more domains")
+	ErrOrgClientTokenQuotaHit        = errors.New("not allowed to create more org client tokens")
 	ErrInvalidVCL                    = errors.New("VCL is invalid")
 	ErrUnknownDomain                 = errors.New("unknown domain name")
 )

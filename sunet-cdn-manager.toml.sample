@@ -17,6 +17,18 @@ client_id = "server-client-id"
 client_secret = "server-client-secret"
 redirect_url = "https://manager.sunet-cdn.localhost:8444/auth/oidc/keycloak/callback"
 
+[keycloak_client_admin]
+realm = "sunet-cdn-manager"
+base_url = "https://keycloak.sunet-cdn.localhost:8443"
+client_id = "sunet-cdn-manager-admin-client"
+client_secret = "some-secret"
+encryption_key = "some-secret-encryption-key"
+encryption_salt = "36023a78c7d2000ac58604da1b630a9f"
+argon2_time = 3
+argon2_memory = 65536
+argon2_threads = 4
+argon2_tag_size = 32
+
 [domains]
 resolver_address = "127.0.0.1:53"
 verify_interval = "2m"

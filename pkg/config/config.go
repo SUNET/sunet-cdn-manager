@@ -17,12 +17,13 @@ import (
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
-	Server    serverSettings
-	DB        dbSettings
-	OIDC      oidcSettings
-	Domains   domainSettings
-	CertMagic certmagicSettings
-	AcmeDNS   acmeDNSConfig
+	Server              serverSettings
+	DB                  dbSettings
+	OIDC                oidcSettings
+	Domains             domainSettings
+	CertMagic           certmagicSettings
+	AcmeDNS             acmeDNSConfig
+	KeycloakClientAdmin keycloakClientAdminSettings `mapstructure:"keycloak_client_admin" validate:"required"`
 }
 
 type serverSettings struct {
@@ -45,6 +46,18 @@ type oidcSettings struct {
 	ClientID     string `mapstructure:"client_id" validate:"required"`
 	ClientSecret string `mapstructure:"client_secret" validate:"required"`
 	RedirectURL  string `mapstructure:"redirect_url" validate:"required"`
+}
+
+type keycloakClientAdminSettings struct {
+	Realm          string `mapstructure:"realm" validate:"required"`
+	BaseURL        string `mapstructure:"base_url" validate:"required"`
+	ClientID       string `mapstructure:"client_id" validate:"required"`
+	ClientSecret   string `mapstructure:"client_secret" validate:"required"`
+	EncryptionKey  string `mapstructure:"encryption_key" validate:"required,min=15"`
+	EncryptionSalt string `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
+	Argon2Time     uint32 `mapstructure:"argon2_time" validate:"required,gt=0"`
+	Argon2Memory   uint32 `mapstructure:"argon2_memory" validate:"required,gt=0"`
+	Argon2Threads  uint8  `mapstructure:"argon2_threads" validate:"required,gt=0"`
 }
 
 type domainSettings struct {

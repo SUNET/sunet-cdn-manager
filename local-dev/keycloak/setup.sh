@@ -164,10 +164,10 @@ realm_management_client_uuid=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
 	"$base_url/admin/realms/$realm/clients?clientId=realm-management" | jq -r .[0].id)
 
-echo "Finding UUID for realm-management manage-clients role"
-manage_clients_role_uuid=$(curl -ks \
+echo "Finding UUID for realm-management create-client role"
+create_client_role_uuid=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
-	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/manage-clients" | jq -r .id)
+	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/create-client" | jq -r .id)
 
 curl -iks -X POST \
 	-H "Authorization: bearer $access_token" \
@@ -176,11 +176,54 @@ curl -iks -X POST \
 	"$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
 [
     {
-        "id":"$manage_clients_role_uuid",
-        "name":"manage-clients",
-        "description":"\${role_manage-clients}"
+        "id":"$create_client_role_uuid",
+        "name":"create-client",
+        "description":"\${role_create-client}"
     }
 ]
+EOF
+
+echo "Creating client-scope for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
+client_scope_uuid=$(curl -iks -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/client-scopes" <<EOF | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//'
+
+{
+  "name": "sunet-cdn-manager-aud",
+  "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+  "type": "none",
+  "protocol": "openid-connect",
+  "attributes": {
+    "display.on.consent.screen": "true",
+    "consent.screen.text": "",
+    "include.in.token.scope": "false",
+    "gui.order": ""
+  }
+}
+EOF
+)
+
+echo "Creating client-scope mapper for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
+curl -iks -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/client-scopes/$client_scope_uuid/protocol-mappers/models" <<EOF
+{
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-audience-mapper",
+  "name": "sunet-cdn-manager-aud",
+  "config": {
+    "included.client.audience": "",
+    "included.custom.audience": "sunet-cdn-manager",
+    "id.token.claim": "false",
+    "access.token.claim": "true",
+    "lightweight.claim": "false",
+    "introspection.token.claim": "true"
+  }
+}
 EOF
 
 echo
