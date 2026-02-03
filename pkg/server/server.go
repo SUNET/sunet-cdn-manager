@@ -1778,7 +1778,7 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 
 			var ad cdntypes.AuthData
 			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
+				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
 				if err != nil {
 					return err
 				}
@@ -2331,7 +2331,7 @@ func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expect
 	return hashedCacheKey
 }
 
-func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (cdntypes.AuthData, error) {
+func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (cdntypes.AuthData, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
@@ -2342,7 +2342,7 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	var roleName string
 
 	err := tx.QueryRow(
-		context.Background(),
+		ctx,
 		`SELECT
 			users.id,
 			users.org_id,
@@ -2430,7 +2430,7 @@ func dbUserLogin(tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, log
 	}, nil
 }
 
-func jwtToAuthData(tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
+func jwtToAuthData(ctx context.Context, tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
 	var clientCredID, orgID, roleID pgtype.UUID
 	var clientCredName, orgName, roleName string
 	var superuser bool
@@ -2470,7 +2470,7 @@ func jwtToAuthData(tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
 	}
 
 	err = tx.QueryRow(
-		context.Background(),
+		ctx,
 		`SELECT
 			org_keycloak_client_credentials.id,
 			org_keycloak_client_credentials.name,
@@ -2689,7 +2689,7 @@ func saltFromHex(hexString string) ([]byte, error) {
 	return salt, nil
 }
 
-func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -2711,7 +2711,7 @@ func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxp
 
 		// We only allow the setting of passwords for users using the "local" auth provider
 		var authProviderName string
-		err = tx.QueryRow(context.Background(), "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
+		err = tx.QueryRow(ctx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
 		if err != nil {
 			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userIdent.id, err)
 		}
@@ -2739,7 +2739,7 @@ func setLocalPassword(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxp
 		// optimal but not sure about a better way since we want to do
 		// the following upsert operation in the transaction.
 		if !ad.Superuser {
-			_, err := dbUserLogin(tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
+			_, err := dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword
@@ -6293,7 +6293,6 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 
 		authorizationVal := humaCtx.Header("Authorization")
 		if authorizationVal == "" {
-			logger.Info().Msg("no Authorization header in request")
 			sendHumaUnauthorized(logger, api, humaCtx)
 			return
 		}
@@ -6319,7 +6318,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 			}
 
 			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
-				ad, err = dbUserLogin(tx, logger, argon2Mutex, loginCache, username, password)
+				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, username, password)
 				return err
 			})
 			if err != nil {
@@ -6352,7 +6351,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 			}
 
 			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
-				ad, err = jwtToAuthData(tx, jwtToken)
+				ad, err = jwtToAuthData(ctx, tx, jwtToken)
 				return err
 			})
 			if err != nil {
@@ -6517,7 +6516,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
 
-			_, err := setLocalPassword(logger, ad, dbPool, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			_, err := setLocalPassword(ctx, logger, ad, dbPool, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrBadOldPassword) {
 					return nil, huma.Error400BadRequest("old password is not correct")
