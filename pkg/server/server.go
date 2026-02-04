@@ -8116,8 +8116,8 @@ type sessionKey struct {
 	EncKey      []byte    `db:"enc_key"`
 }
 
-func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
-	rows, err := dbPool.Query(context.Background(), "SELECT time_created, auth_key, enc_key FROM gorilla_session_keys ORDER BY key_order DESC")
+func getSessionKeys(ctx context.Context, dbPool *pgxpool.Pool) ([]sessionKey, error) {
+	rows, err := dbPool.Query(ctx, "SELECT time_created, auth_key, enc_key FROM gorilla_session_keys ORDER BY key_order DESC")
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for session key: %w", err)
 	}
@@ -8134,8 +8134,8 @@ func getSessionKeys(dbPool *pgxpool.Pool) ([]sessionKey, error) {
 	return sessionKeys, nil
 }
 
-func getSessionStore(logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
-	sessionKeys, err := getSessionKeys(dbPool)
+func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
+	sessionKeys, err := getSessionKeys(ctx, dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
 	}
@@ -8315,12 +8315,18 @@ func setupJwkCache(ctx context.Context, logger zerolog.Logger, client *http.Clie
 	return jwkCache, nil
 }
 
-func fetchKeyCloakOpenIDConfig(client *http.Client, issuer string) (oiConf openidConfig, err error) {
+func fetchKeyCloakOpenIDConfig(ctx context.Context, client *http.Client, issuer string) (oiConf openidConfig, err error) {
 	openidConfigURL, err := url.JoinPath(issuer, ".well-known/openid-configuration")
 	if err != nil {
 		return openidConfig{}, fmt.Errorf("unable to parse keycloak openid-configuration URL: %w", err)
 	}
-	confResp, err := client.Get(openidConfigURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openidConfigURL, nil)
+	if err != nil {
+		return openidConfig{}, fmt.Errorf("unable to create GET req for OpenID config: %w", err)
+	}
+
+	confResp, err := client.Do(req)
 	if err != nil {
 		return openidConfig{}, fmt.Errorf("unable to GET OpenID config: %w", err)
 	}
@@ -8356,8 +8362,10 @@ func newKeycloakClientManager(logger zerolog.Logger, baseURL *url.URL, realm str
 }
 
 func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// runCtx is the main context relating to the running of the server
+	// process. It will be cancelled when told to stop via signals.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 
 	// Exit gracefully on SIGINT or SIGTERM
 	go func(logger zerolog.Logger, cancel context.CancelFunc) {
@@ -8366,7 +8374,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		s := <-sigCh
 		logger.Info().Str("signal", s.String()).Msg("received signal")
 		cancel()
-	}(logger, cancel)
+	}(logger, runCancel)
 
 	conf, err := config.GetConfig(localViper)
 	if err != nil {
@@ -8378,20 +8386,20 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to parse PostgreSQL config string: %w", err)
 	}
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	dbPool, err := pgxpool.NewWithConfig(runCtx, pgConfig)
 	if err != nil {
 		return fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
 
-	err = dbPool.Ping(ctx)
+	err = dbPool.Ping(runCtx)
 	if err != nil {
 		return fmt.Errorf("unable to ping database connection: %w", err)
 	}
 
 	// Verify that the database appears initialized by 'init' command
 	var rolesExists bool
-	err = dbPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
+	err = dbPool.QueryRow(runCtx, "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
 	if err != nil {
 		return fmt.Errorf("unable to check for roles in the database, is it initialized? (see init command): %w", err)
 	}
@@ -8399,7 +8407,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return errors.New("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool)
+	cookieStore, err := getSessionStore(runCtx, logger, dbPool)
 	if err != nil {
 		return fmt.Errorf("getSessionStore failed: %w", err)
 	}
@@ -8415,7 +8423,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		client.Transport = tr
 	}
 
-	providerCtx := oidc.ClientContext(ctx, client)
+	providerCtx := oidc.ClientContext(runCtx, client)
 	provider, err := oidc.NewProvider(providerCtx, conf.OIDC.Issuer)
 	if err != nil {
 		return fmt.Errorf("setting up OIDC provider failed: %w", err)
@@ -8468,17 +8476,17 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 	// provider.Endpoint() does not give access to the JwksURI that we need
 	// for fetching JWT keysets. This does result in a duplicate HTTP
 	// request on startup but it is good enough for now.
-	oiConf, err := fetchKeyCloakOpenIDConfig(client, conf.OIDC.Issuer)
+	oiConf, err := fetchKeyCloakOpenIDConfig(runCtx, client, conf.OIDC.Issuer)
 	if err != nil {
 		return fmt.Errorf("unable to fetch openid-configuration: %w", err)
 	}
 
-	jwkCache, err := setupJwkCache(ctx, logger, client, oiConf)
+	jwkCache, err := setupJwkCache(runCtx, logger, client, oiConf)
 	if err != nil {
 		return fmt.Errorf("unable to setup JWK cache: %w", err)
 	}
 
-	jwkCacheReadyCtx, jwkCacheReadyCancel := context.WithTimeout(ctx, time.Second*60)
+	jwkCacheReadyCtx, jwkCacheReadyCancel := context.WithTimeout(runCtx, time.Second*60)
 	defer jwkCacheReadyCancel()
 
 	logger.Info().Msg("waiting for JWK cache to be ready")
@@ -8508,7 +8516,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 	} else {
 		logger.Info().Msg("domain verification is enabled")
 		wg.Add(1)
-		go domainVerifier(ctx, &wg, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
+		go domainVerifier(runCtx, &wg, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
 	}
 
 	var tlsConfig *tls.Config
@@ -8550,7 +8558,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 			logger.Err(err).Msg("HTTP server Shutdown failure")
 		}
 		close(idleConnsClosed)
-	}(ctx, logger, shutdownDelay)
+	}(runCtx, logger, shutdownDelay)
 
 	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTPS listener")
 
