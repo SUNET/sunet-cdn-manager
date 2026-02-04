@@ -487,7 +487,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		return nil, nil, err
 	}
 
-	cookieStore, err := getSessionStore(logger, dbPool)
+	cookieStore, err := getSessionStore(ctx, logger, dbPool)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2306,7 +2306,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	// Client used for creating/deleting API client credentials in keycloak
 	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc.Client(providerCtx), client)
 
-	oiConf, err := fetchKeyCloakOpenIDConfig(client, issuerURL.String())
+	oiConf, err := fetchKeyCloakOpenIDConfig(ctx, client, issuerURL.String())
 	if err != nil {
 		t.Fatalf("unable to fetch openid-configuration: %v", err)
 	}
