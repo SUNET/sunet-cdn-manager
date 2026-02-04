@@ -48,8 +48,9 @@ func Ptr[T any](v T) *T {
 }
 
 func TestMain(m *testing.M) {
+	ctx := context.Background()
 	var err error
-	pgt, err = postgrestest.Start(context.Background(), postgrestest.WithSQLDriver("pgx"))
+	pgt, err = postgrestest.Start(ctx, postgrestest.WithSQLDriver("pgx"))
 	if err != nil {
 		panic(err)
 	}
@@ -63,6 +64,7 @@ func TestMain(m *testing.M) {
 }
 
 func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
+	ctx := context.Background()
 	// use static UUIDs to get known contents for testing
 	testData := []string{
 		// Organizations
@@ -238,9 +240,9 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO l4lb_node_addresses (id, node_id, address) VALUES ('00000024-0000-0000-0000-000000000008', '00000016-0000-0000-0000-000000000005', '::1350')",
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
 		for _, sql := range testData {
-			_, err := tx.Exec(context.Background(), sql)
+			_, err := tx.Exec(ctx, sql)
 			if err != nil {
 				return err
 			}
@@ -328,18 +330,18 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			var authProviderID pgtype.UUID
 
 			if localUser.orgName != "" {
-				err := tx.QueryRow(context.Background(), "SELECT id FROM orgs WHERE name=$1", localUser.orgName).Scan(&orgID)
+				err := tx.QueryRow(ctx, "SELECT id FROM orgs WHERE name=$1", localUser.orgName).Scan(&orgID)
 				if err != nil {
 					return err
 				}
 			}
 
-			err = tx.QueryRow(context.Background(), "SELECT id FROM auth_providers WHERE name=$1", localUser.authProvider).Scan(&authProviderID)
+			err = tx.QueryRow(ctx, "SELECT id FROM auth_providers WHERE name=$1", localUser.authProvider).Scan(&authProviderID)
 			if err != nil {
 				return err
 			}
 
-			_, err = tx.Exec(context.Background(), "INSERT INTO users (id, org_id, name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
+			_, err = tx.Exec(ctx, "INSERT INTO users (id, org_id, name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
 			if err != nil {
 				return err
 			}
@@ -360,7 +362,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				tagSize := uint32(32)
 
 				key := argon2.IDKey([]byte(localUser.password), salt, timeSize, memorySize, threads, tagSize)
-				_, err = tx.Exec(context.Background(), "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7)", userID, key, salt, timeSize, memorySize, threads, tagSize)
+				_, err = tx.Exec(ctx, "INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ($1, $2, $3, $4, $5, $6, $7)", userID, key, salt, timeSize, memorySize, threads, tagSize)
 				if err != nil {
 					return err
 				}
@@ -409,7 +411,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				}
 			}
 
-			_, err = tx.Exec(context.Background(), "INSERT INTO service_vcls (id, service_version_id, vcl_recv) VALUES($1, $2, $3)", vclID, serviceVersionID, vclRecvContentBytes)
+			_, err = tx.Exec(ctx, "INSERT INTO service_vcls (id, service_version_id, vcl_recv) VALUES($1, $2, $3)", vclID, serviceVersionID, vclRecvContentBytes)
 			if err != nil {
 				return err
 			}
@@ -429,7 +431,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			}
 		}
 
-		_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
+		_, err = insertGorillaSessionKey(ctx, tx, gorillaAuthKey, gorillaEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT user session key: %w", err)
 		}
@@ -453,12 +455,11 @@ type testServerInput struct {
 }
 
 func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpool.Pool, error) {
-	pgurl, err := pgt.CreateDatabase(context.Background())
+	ctx := context.Background()
+	pgurl, err := pgt.CreateDatabase(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	ctx := context.Background()
 
 	pgConfig, err := pgxpool.ParseConfig(pgurl)
 	if err != nil {
@@ -511,7 +512,12 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create LRU login cache: %v", err)
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbPool, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatalf("unable to create dbConn struct: %v", err)
+	}
+
+	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
 
 	a2Settings := newArgon2DefaultSettings()
 
@@ -534,7 +540,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create client cred AEAD: %v", err)
 	}
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD)
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -545,7 +551,8 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 }
 
 func TestServerInit(t *testing.T) {
-	pgurl, err := pgt.CreateDatabase(context.Background())
+	ctx := context.Background()
+	pgurl, err := pgt.CreateDatabase(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,6 +586,7 @@ func TestServerInit(t *testing.T) {
 }
 
 func TestSessionKeyHandlingNoEnc(t *testing.T) {
+	ctx := context.Background()
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -595,8 +603,8 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			_, err = insertGorillaSessionKey(tx, gorillaAuthKey, nil)
+		err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+			_, err = insertGorillaSessionKey(ctx, tx, gorillaAuthKey, nil)
 			if err != nil {
 				return err
 			}
@@ -605,7 +613,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 		})
 	}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	rows, err := dbPool.Query(ctx, "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,6 +652,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 }
 
 func TestSessionKeyHandlingWithEnc(t *testing.T) {
+	ctx := context.Background()
 	ts, dbPool, err := prepareServer(t, testServerInput{encryptedSessionKey: true})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -665,8 +674,8 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-			_, err = insertGorillaSessionKey(tx, gorillaAuthKey, gorillaEncKey)
+		err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+			_, err = insertGorillaSessionKey(ctx, tx, gorillaAuthKey, gorillaEncKey)
 			if err != nil {
 				return err
 			}
@@ -675,7 +684,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 		})
 	}
 
-	rows, err := dbPool.Query(context.Background(), "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
+	rows, err := dbPool.Query(ctx, "SELECT id, time_created, key_order, auth_key, enc_key FROM gorilla_session_keys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1233,6 +1242,7 @@ func TestDeleteUser(t *testing.T) {
 
 	for _, test := range tests {
 		func() {
+			ctx := context.Background()
 			// Verify uses exists prior to deletion
 			var testQuery string
 			if isUUID(test.targetUserIDorName) {
@@ -1243,7 +1253,7 @@ func TestDeleteUser(t *testing.T) {
 
 			var name string
 			var id pgtype.UUID
-			err := dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
+			err := dbPool.QueryRow(ctx, testQuery, test.targetUserIDorName).Scan(&name, &id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1277,7 +1287,7 @@ func TestDeleteUser(t *testing.T) {
 			t.Logf("%s\n", jsonData)
 
 			// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
-			err = dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
+			err = dbPool.QueryRow(ctx, testQuery, test.targetUserIDorName).Scan(&name, &id)
 			if err == nil {
 				if test.expectedStatus == http.StatusNoContent {
 					// The delete seemed successful, why are they still in the db
@@ -1912,12 +1922,13 @@ type keycloakComponentPolicy struct {
 
 // Set up keycloak similarly to the local-dev scripts in this repo
 func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string, realm string) (string, string, error) {
+	ctx := context.Background()
 	adminIssuer, err := url.JoinPath(baseURL.String(), "realms/master")
 	if err != nil {
 		return "", "", err
 	}
 
-	adminProvider, err := oidc.NewProvider(context.Background(), adminIssuer)
+	adminProvider, err := oidc.NewProvider(ctx, adminIssuer)
 	if err != nil {
 		return "", "", err
 	}
@@ -1928,12 +1939,12 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 		Endpoint: adminProvider.Endpoint(),
 	}
 
-	token, err := adminConfig.PasswordCredentialsToken(context.Background(), user, password)
+	token, err := adminConfig.PasswordCredentialsToken(ctx, user, password)
 	if err != nil {
 		return "", "", err
 	}
 
-	adminClient := adminConfig.Client(context.Background(), token)
+	adminClient := adminConfig.Client(ctx, token)
 
 	realmsURL, err := url.JoinPath(baseURL.String(), "admin/realms")
 	if err != nil {
@@ -2287,8 +2298,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	providerCtx := context.Background()
-	provider, err := oidc.NewProvider(providerCtx, issuerURL.String())
+	provider, err := oidc.NewProvider(ctx, issuerURL.String())
 	if err != nil {
 		t.Fatal(fmt.Errorf("setting up OIDC provider failed: %w", err))
 	}
@@ -2304,7 +2314,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	}
 
 	// Client used for creating/deleting API client credentials in keycloak
-	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc.Client(providerCtx), client)
+	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc.Client(ctx), client)
 
 	oiConf, err := fetchKeyCloakOpenIDConfig(ctx, client, issuerURL.String())
 	if err != nil {
@@ -2438,6 +2448,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 			for _, clientCredTest := range clientCredTests {
 				// Wrap loop body in anonymous function to properly call the deferred Body.Close()
 				func() {
+					ctx := context.Background()
 					clientCredGetReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.orgNameOrID, nil)
 					if err != nil {
 						t.Fatal(err)
@@ -2454,7 +2465,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 							TokenURL:     provider.Endpoint().TokenURL,
 						}
 
-						client = apiClientCred.Client(context.Background())
+						client = apiClientCred.Client(ctx)
 					} else if clientCredTest.authorizationHeader != "" {
 						clientCredGetReq.Header.Set("Authorization", clientCredTest.authorizationHeader)
 					}
