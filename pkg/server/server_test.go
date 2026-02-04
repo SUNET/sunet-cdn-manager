@@ -762,33 +762,35 @@ func TestGetUsers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -868,33 +870,35 @@ func TestGetUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.nameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.nameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -992,52 +996,54 @@ func TestPostUsers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newUser := struct {
-			Name string `json:"name"`
-			Role string `json:"role"`
-			Org  string `json:"org,omitempty"`
-		}{
-			Name: test.addedUser,
-			Org:  test.orgIDorName,
-			Role: test.roleIDorName,
-		}
+		func() {
+			newUser := struct {
+				Name string `json:"name"`
+				Role string `json:"role"`
+				Org  string `json:"org,omitempty"`
+			}{
+				Name: test.addedUser,
+				Org:  test.orgIDorName,
+				Role: test.roleIDorName,
+			}
 
-		b, err := json.Marshal(newUser)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/users", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newUser)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/users", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -1104,54 +1110,56 @@ func TestPutUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		putUser := struct {
-			Org  string `json:"org,omitempty"`
-			Role string `json:"role"`
-			Name string `json:"name"`
-		}{
-			Org:  test.updatedOrgIDorName,
-			Role: test.updatedRoleIDorName,
-			Name: test.updatedName,
-		}
+		func() {
+			putUser := struct {
+				Org  string `json:"org,omitempty"`
+				Role string `json:"role"`
+				Name string `json:"name"`
+			}{
+				Org:  test.updatedOrgIDorName,
+				Role: test.updatedRoleIDorName,
+				Name: test.updatedName,
+			}
 
-		b, err := json.Marshal(putUser)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		t.Log(string(b))
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserIDorName, r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(putUser)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			t.Log(string(b))
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserIDorName, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -1224,65 +1232,66 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		// Verify uses exists prior to deletion
-		var testQuery string
-		if isUUID(test.targetUserIDorName) {
-			testQuery = "SELECT name, id FROM users WHERE id = $1"
-		} else {
-			testQuery = "SELECT name, id FROM users WHERE name = $1"
-		}
+		func() {
+			// Verify uses exists prior to deletion
+			var testQuery string
+			if isUUID(test.targetUserIDorName) {
+				testQuery = "SELECT name, id FROM users WHERE id = $1"
+			} else {
+				testQuery = "SELECT name, id FROM users WHERE name = $1"
+			}
 
-		var name string
-		var id pgtype.UUID
-		err := dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserIDorName, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			var name string
+			var id pgtype.UUID
+			err := dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: DELETE user unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Logf("%s\n", jsonData)
-
-		// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
-		err = dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
-		if err == nil {
-			if test.expectedStatus == http.StatusNoContent {
-				// The delete seemed successful, why are they still in the db
-				t.Fatalf("user is not deleted as expected, name: '%s', id: '%s'", name, id)
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserIDorName, nil)
+			if err != nil {
+				t.Fatal(err)
 			}
-		} else {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				t.Fatalf("user deleted pre-check unexpected error: '%s', id: '%s', %s", name, id, err)
-			}
-			if test.expectedStatus != http.StatusNoContent {
-				t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", name, id, err)
-			}
-		}
 
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE user unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
+			err = dbPool.QueryRow(context.Background(), testQuery, test.targetUserIDorName).Scan(&name, &id)
+			if err == nil {
+				if test.expectedStatus == http.StatusNoContent {
+					// The delete seemed successful, why are they still in the db
+					t.Fatalf("user is not deleted as expected, name: '%s', id: '%s'", name, id)
+				}
+			} else {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					t.Fatalf("user deleted pre-check unexpected error: '%s', id: '%s', %s", name, id, err)
+				}
+				if test.expectedStatus != http.StatusNoContent {
+					t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", name, id, err)
+				}
+			}
+		}()
 	}
 }
 
@@ -1349,78 +1358,80 @@ func TestPutPassword(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		patchUser := struct {
-			Old string `json:"old,omitempty"`
-			New string `json:"new,omitempty"`
-		}{
-			Old: test.oldPassword,
-			New: test.newPassword,
-		}
+		func() {
+			patchUser := struct {
+				Old string `json:"old,omitempty"`
+				New string `json:"new,omitempty"`
+			}{
+				Old: test.oldPassword,
+				New: test.newPassword,
+			}
 
-		b, err := json.Marshal(patchUser)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		t.Log(string(b))
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserIDorName+"/local-password", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(patchUser)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT local-password unexpected status code: want %d, got: %d (%s)", test.description, test.expectedStatus, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			t.Log(string(b))
 
-		// Verify old password no longer works
-		statusCode, err := testAuth(t, ts, test.modifiedUserIDorName, test.oldPassword)
-		if err == nil {
-			t.Fatal(errors.New("old password still works, unexpected"))
-		}
-		if statusCode != http.StatusUnauthorized {
-			t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
-		}
-
-		// Verify new password works
-		statusCode, err = testAuth(t, ts, test.modifiedUserIDorName, test.newPassword)
-		if err != nil {
-			if test.shouldSucceed {
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserIDorName+"/local-password", r)
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		if test.shouldSucceed {
-			if statusCode != http.StatusOK {
-				t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+
+			req.Header.Set("Content-Type", "application/json")
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
 			}
-		} else {
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT local-password unexpected status code: want %d, got: %d (%s)", test.description, test.expectedStatus, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			// Verify old password no longer works
+			statusCode, err := testAuth(t, ts, test.modifiedUserIDorName, test.oldPassword)
+			if err == nil {
+				t.Fatal(errors.New("old password still works, unexpected"))
+			}
 			if statusCode != http.StatusUnauthorized {
 				t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
 			}
-		}
+
+			// Verify new password works
+			statusCode, err = testAuth(t, ts, test.modifiedUserIDorName, test.newPassword)
+			if err != nil {
+				if test.shouldSucceed {
+					t.Fatal(err)
+				}
+			}
+			if test.shouldSucceed {
+				if statusCode != http.StatusOK {
+					t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+				}
+			} else {
+				if statusCode != http.StatusUnauthorized {
+					t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
+				}
+			}
+		}()
 	}
 }
 
@@ -1497,33 +1508,35 @@ func TestGetOrgs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET orgs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -2565,33 +2578,35 @@ func TestGetOrg(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -2685,39 +2700,41 @@ func TestGetDomains(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/domains", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/domains", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET '%s' unexpected status code: %d (%s)", test.description, req.URL.String(), resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET '%s' unexpected status code: %d (%s)", test.description, req.URL.String(), resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -2787,39 +2804,41 @@ func TestGetServiceIPs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -2885,48 +2904,50 @@ func TestPostOrganizations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newOrganization := struct {
-			Name string `json:"name"`
-		}{
-			Name: test.addedOrganization,
-		}
+		func() {
+			newOrganization := struct {
+				Name string `json:"name"`
+			}{
+				Name: test.addedOrganization,
+			}
 
-		b, err := json.Marshal(newOrganization)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newOrganization)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("POST orgs unexpected status code: %d (%s)", resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("POST orgs unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3002,39 +3023,41 @@ func TestGetServices(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3127,43 +3150,45 @@ func TestGetService(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if test.serviceNameOrID == "" {
-			t.Fatal("user needs service name or ID for service test")
-		}
+		func() {
+			if test.serviceNameOrID == "" {
+				t.Fatal("user needs service name or ID for service test")
+			}
 
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3256,43 +3281,45 @@ func TestDeleteService(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if test.serviceNameOrID == "" {
-			t.Fatal("user needs service name or ID for service test")
-		}
+		func() {
+			if test.serviceNameOrID == "" {
+				t.Fatal("user needs service name or ID for service test")
+			}
 
-		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3426,51 +3453,53 @@ func TestPostServices(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newService := struct {
-			Name string  `json:"name"`
-			Org  *string `json:"org,omitempty"`
-		}{
-			Name: test.newService,
-		}
+		func() {
+			newService := struct {
+				Name string  `json:"name"`
+				Org  *string `json:"org,omitempty"`
+			}{
+				Name: test.newService,
+			}
 
-		if test.org != "" {
-			newService.Org = &test.org
-		}
+			if test.org != "" {
+				newService.Org = &test.org
+			}
 
-		b, err := json.Marshal(newService)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/services", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newService)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3550,37 +3579,39 @@ func TestDeleteDomain(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if test.domainNameOrID == "" {
-			t.Fatal("user needs domain name or ID for domain test")
-		}
+		func() {
+			if test.domainNameOrID == "" {
+				t.Fatal("user needs domain name or ID for domain test")
+			}
 
-		req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/domains/"+test.domainNameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/domains/"+test.domainNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3629,52 +3660,54 @@ func TestPostDomains(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newDomain := struct {
-			Name string `json:"name"`
-		}{
-			Name: test.newDomain,
-		}
+		func() {
+			newDomain := struct {
+				Name string `json:"name"`
+			}{
+				Name: test.newDomain,
+			}
 
-		b, err := json.Marshal(newDomain)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/domains", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newDomain)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/domains", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -3750,39 +3783,41 @@ func TestGetServiceVersions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4198,64 +4233,66 @@ func TestPostServiceVersion(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newServiceVersion := struct {
-			Org     string                 `json:"org"`
-			Active  bool                   `json:"active"`
-			Domains []string               `json:"domains"`
-			Origins []cdntypes.InputOrigin `json:"origins"`
-			VclRecv string                 `json:"vcl_recv"`
-		}{
-			Org:     test.orgNameOrID,
-			Active:  test.active,
-			Domains: test.domains,
-			Origins: test.origins,
-		}
+		func() {
+			newServiceVersion := struct {
+				Org     string                 `json:"org"`
+				Active  bool                   `json:"active"`
+				Domains []string               `json:"domains"`
+				Origins []cdntypes.InputOrigin `json:"origins"`
+				VclRecv string                 `json:"vcl_recv"`
+			}{
+				Org:     test.orgNameOrID,
+				Active:  test.active,
+				Domains: test.domains,
+				Origins: test.origins,
+			}
 
-		var vclRecvContentBytes []byte
-		if test.vclRecvFile != "" {
-			vclRecvContentBytes, err = os.ReadFile(test.vclRecvFile)
+			var vclRecvContentBytes []byte
+			if test.vclRecvFile != "" {
+				vclRecvContentBytes, err = os.ReadFile(test.vclRecvFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				newServiceVersion.VclRecv = string(vclRecvContentBytes)
+			}
+
+			b, err := json.Marshal(newServiceVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
-			newServiceVersion.VclRecv = string(vclRecvContentBytes)
-		}
 
-		b, err := json.Marshal(newServiceVersion)
-		if err != nil {
-			t.Fatal(err)
-		}
+			t.Log(string(b))
 
-		t.Log(string(b))
+			r := bytes.NewReader(b)
 
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", r)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4352,52 +4389,54 @@ func TestActivateServiceVersion(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		active := struct {
-			Active bool `json:"active"`
-		}{
-			Active: test.active,
-		}
+		func() {
+			active := struct {
+				Active bool `json:"active"`
+			}{
+				Active: test.active,
+			}
 
-		b, err := json.Marshal(active)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		values := req.URL.Query()
-		values.Add("org", test.orgNameOrID)
-		req.URL.RawQuery = values.Encode()
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(active)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4481,39 +4520,41 @@ func TestGetOriginGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET origin groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET origin groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4557,54 +4598,56 @@ func TestPostOriginGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newOriginGroup := struct {
-			Name string `json:"name"`
-		}{
-			Name: test.name,
-		}
+		func() {
+			newOriginGroup := struct {
+				Name string `json:"name"`
+			}{
+				Name: test.name,
+			}
 
-		b, err := json.Marshal(newOriginGroup)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.orgNameOrID != "" {
-			values := req.URL.Query()
-			values.Add("org", test.orgNameOrID)
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newOriginGroup)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST origin group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if test.orgNameOrID != "" {
+				values := req.URL.Query()
+				values.Add("org", test.orgNameOrID)
+				req.URL.RawQuery = values.Encode()
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST origin group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4693,37 +4736,39 @@ func TestGetServiceVersionVCL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		values := req.URL.Query()
-		values.Add("org", test.orgNameOrID)
-		req.URL.RawQuery = values.Encode()
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			values := req.URL.Query()
+			values.Add("org", test.orgNameOrID)
+			req.URL.RawQuery = values.Encode()
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4792,39 +4837,41 @@ func TestGetIPNetworks(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/ip-networks", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if test.family != 0 {
-			values := req.URL.Query()
-			values.Add("family", strconv.Itoa(test.family))
-			req.URL.RawQuery = values.Encode()
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/ip-networks", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			if test.family != 0 {
+				values := req.URL.Query()
+				values.Add("family", strconv.Itoa(test.family))
+				req.URL.RawQuery = values.Encode()
+			}
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -4904,48 +4951,50 @@ func TestPostIPNetworks(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newIPNetwork := struct {
-			Network netip.Prefix `json:"network"`
-		}{
-			Network: test.addedIPNetwork,
-		}
+		func() {
+			newIPNetwork := struct {
+				Network netip.Prefix `json:"network"`
+			}{
+				Network: test.addedIPNetwork,
+			}
 
-		b, err := json.Marshal(newIPNetwork)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/ip-networks", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newIPNetwork)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		t.Logf("%s\n", jsonData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/ip-networks", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5032,33 +5081,35 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET cache-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET cache-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5152,33 +5203,35 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET l4lb-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET l4lb-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5322,67 +5375,69 @@ func TestPostCacheNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newCacheNode := struct {
-			Description string       `json:"description"`
-			Addresses   []netip.Addr `json:"addresses,omitempty"`
-			Name        string       `json:"name"`
-		}{
-			Description: test.cacheNodeDescr,
-			Addresses:   test.addresses,
-			Name:        test.name,
-		}
+		func() {
+			newCacheNode := struct {
+				Description string       `json:"description"`
+				Addresses   []netip.Addr `json:"addresses,omitempty"`
+				Name        string       `json:"name"`
+			}{
+				Description: test.cacheNodeDescr,
+				Addresses:   test.addresses,
+				Name:        test.name,
+			}
 
-		b, err := json.Marshal(newCacheNode)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/cache-nodes", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newCacheNode)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		resultData := struct {
-			Name string `json:"name"`
-		}{}
-
-		if test.expectedStatus == http.StatusCreated {
-			err = json.Unmarshal(jsonData, &resultData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/cache-nodes", r)
 			if err != nil {
-				t.Fatalf("%s: POST cache-nodes unable to unmarshal response: (%s)", test.description, err)
+				t.Fatal(err)
 			}
 
-			if newCacheNode.Name != resultData.Name {
-				t.Fatalf("%s: POST cache-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
-			}
-		}
+			req.Header.Set("Content-Type", "application/json")
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resultData := struct {
+				Name string `json:"name"`
+			}{}
+
+			if test.expectedStatus == http.StatusCreated {
+				err = json.Unmarshal(jsonData, &resultData)
+				if err != nil {
+					t.Fatalf("%s: POST cache-nodes unable to unmarshal response: (%s)", test.description, err)
+				}
+
+				if newCacheNode.Name != resultData.Name {
+					t.Fatalf("%s: POST cache-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+				}
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5441,33 +5496,35 @@ func TestGetCacheNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-nodes", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5548,48 +5605,50 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		maintenance := struct {
-			Maintenance bool `json:"maintenance"`
-		}{
-			Maintenance: test.maintenance,
-		}
+		func() {
+			maintenance := struct {
+				Maintenance bool `json:"maintenance"`
+			}{
+				Maintenance: test.maintenance,
+			}
 
-		b, err := json.Marshal(maintenance)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/maintenance", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(maintenance)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT cache-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/maintenance", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT cache-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5678,48 +5737,50 @@ func TestPutCacheNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		maintenance := struct {
-			NodeGroup string `json:"node-group"`
-		}{
-			NodeGroup: test.cacheNodeGroupNameOrID,
-		}
+		func() {
+			maintenance := struct {
+				NodeGroup string `json:"node-group"`
+			}{
+				NodeGroup: test.cacheNodeGroupNameOrID,
+			}
 
-		b, err := json.Marshal(maintenance)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/node-group", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(maintenance)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/node-group", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5778,33 +5839,35 @@ func TestGetL4LBNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-nodes", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -5892,67 +5955,69 @@ func TestPostL4LBNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newCacheNode := struct {
-			Description string       `json:"description"`
-			Addresses   []netip.Addr `json:"addresses,omitempty"`
-			Name        string       `json:"name"`
-		}{
-			Description: test.l4lbNodeDescr,
-			Addresses:   test.addresses,
-			Name:        test.name,
-		}
+		func() {
+			newCacheNode := struct {
+				Description string       `json:"description"`
+				Addresses   []netip.Addr `json:"addresses,omitempty"`
+				Name        string       `json:"name"`
+			}{
+				Description: test.l4lbNodeDescr,
+				Addresses:   test.addresses,
+				Name:        test.name,
+			}
 
-		b, err := json.Marshal(newCacheNode)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/l4lb-nodes", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newCacheNode)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			r := bytes.NewReader(b)
 
-		resultData := struct {
-			Name string `json:"name"`
-		}{}
-
-		if test.expectedStatus == http.StatusCreated {
-			err = json.Unmarshal(jsonData, &resultData)
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/l4lb-nodes", r)
 			if err != nil {
-				t.Fatalf("%s: POST l4lb-nodes unable to unmarshal response: (%s)", test.description, err)
+				t.Fatal(err)
 			}
 
-			if newCacheNode.Name != resultData.Name {
-				t.Fatalf("%s: POST l4lb-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
-			}
-		}
+			req.Header.Set("Content-Type", "application/json")
 
-		t.Logf("%s\n", jsonData)
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resultData := struct {
+				Name string `json:"name"`
+			}{}
+
+			if test.expectedStatus == http.StatusCreated {
+				err = json.Unmarshal(jsonData, &resultData)
+				if err != nil {
+					t.Fatalf("%s: POST l4lb-nodes unable to unmarshal response: (%s)", test.description, err)
+				}
+
+				if newCacheNode.Name != resultData.Name {
+					t.Fatalf("%s: POST l4lb-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+				}
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -6033,48 +6098,50 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		maintenance := struct {
-			Maintenance bool `json:"maintenance"`
-		}{
-			Maintenance: test.maintenance,
-		}
+		func() {
+			maintenance := struct {
+				Maintenance bool `json:"maintenance"`
+			}{
+				Maintenance: test.maintenance,
+			}
 
-		b, err := json.Marshal(maintenance)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/maintenance", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(maintenance)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT l4lb-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/maintenance", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT l4lb-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -6163,48 +6230,50 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		maintenance := struct {
-			NodeGroup string `json:"node-group"`
-		}{
-			NodeGroup: test.l4lbNodeGroupNameOrID,
-		}
+		func() {
+			maintenance := struct {
+				NodeGroup string `json:"node-group"`
+			}{
+				NodeGroup: test.l4lbNodeGroupNameOrID,
+			}
 
-		b, err := json.Marshal(maintenance)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/node-group", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(maintenance)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/node-group", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -6251,33 +6320,35 @@ func TestGetNodeGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		req, err := http.NewRequest("GET", ts.URL+"/api/v1/node-groups", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+		func() {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/node-groups", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: GET node groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			req.SetBasicAuth(test.username, test.password)
 
-		t.Logf("%s\n", jsonData)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: GET node groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
@@ -6310,50 +6381,52 @@ func TestPostNodeGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newOriginGroup := struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}{
-			Name:        test.name,
-			Description: test.groupDescription,
-		}
+		func() {
+			newOriginGroup := struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}{
+				Name:        test.name,
+				Description: test.groupDescription,
+			}
 
-		b, err := json.Marshal(newOriginGroup)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		t.Log(string(b))
-
-		r := bytes.NewReader(b)
-
-		req, err := http.NewRequest("POST", ts.URL+"/api/v1/node-groups", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		req.SetBasicAuth(test.username, test.password)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != test.expectedStatus {
-			r, err := io.ReadAll(resp.Body)
+			b, err := json.Marshal(newOriginGroup)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST node group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
-		}
 
-		jsonData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			t.Log(string(b))
 
-		t.Logf("%s\n", jsonData)
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/node-groups", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST node group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: %s", test.description, err)
+			}
+
+			t.Logf("%s\n", jsonData)
+		}()
 	}
 }
 
