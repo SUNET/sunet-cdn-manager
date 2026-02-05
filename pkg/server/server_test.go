@@ -1651,7 +1651,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 	}
 }
 
-// {"id":"1af03a7c-735a-4717-b48a-988256d5586f","username":"service-account-sunet-cdn-admin-client","emailVerified":false,"createdTimestamp":1767042831875,"enabled":true,"totp":false,"disableableCredentialTypes":[],"requiredActions":[],"notBefore":0}
+// {"id":"1af03a7c-735a-4717-b48a-988256d5586f","username":"service-account-sunet-cdn-manager-admin-client","emailVerified":false,"createdTimestamp":1767042831875,"enabled":true,"totp":false,"disableableCredentialTypes":[],"requiredActions":[],"notBefore":0}
 type keycloakServiceAccountUser struct {
 	ID                         string   `json:"id"`
 	Username                   string   `json:"username"`
@@ -1866,7 +1866,7 @@ func sendKeycloakReq(t *testing.T, client *http.Client, method string, url strin
 }
 
 // {
-// "name": "sunet-cdn-manager-client-admin",
+// "name": "sunet-cdn-manager-admin-role",
 // "description": "Role used for managing API client credentials",
 // "attributes": {}
 // }
@@ -1969,19 +1969,19 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 
 	// Create oauth2 admin client used by sunet-cdn-manager service for
 	// registering user facing API client credentials
-	clientAdminClientID := "sunet-cdn-admin-client"
+	clientAdminClientID := "sunet-cdn-manager-admin-client"
 	clientAdminUUID, clientAdminSecret, err := createKeycloakAdminClient(t, adminClient, baseURL.String(), realm, clientAdminClientID)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Create role that we can assign to the sunet-cdn-admin-client that grants it permissions to do client creation
+	// Create role that we can assign to the admin client that grants it permissions to do client creation
 	rolesURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "roles")
 	if err != nil {
 		return "", "", err
 	}
 
-	roleName := "sunet-cdn-manager-client-admin"
+	roleName := "sunet-cdn-manager-admin-role"
 
 	kcRole := keycloakRole{
 		Name:        roleName,
@@ -2091,7 +2091,7 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 	t.Log("KC ROLE INFO: ", kcRoleInfo)
 
 	// Apply create-client role as a composite (associated role) to
-	// sunet-cdn-manager-client-admin role. For some reason the roles/
+	// sunet-cdn-manager-admin-role role. For some reason the roles/
 	// endpoint allows us to use the name of the role rather than the UUID
 	// id (which instead uses role-by-id/)
 	compositeRoleURL, err := url.JoinPath(baseURL.String(), "admin/realms", realm, "roles", roleName, "composites")
