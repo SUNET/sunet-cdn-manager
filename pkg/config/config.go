@@ -56,9 +56,6 @@ type keycloakClientAdminSettings struct {
 	ClientSecret   string `mapstructure:"client_secret" validate:"required"`
 	EncryptionKey  string `mapstructure:"encryption_key" validate:"required,min=15"`
 	EncryptionSalt string `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
-	Argon2Time     uint32 `mapstructure:"argon2_time" validate:"required,gt=0"`
-	Argon2Memory   uint32 `mapstructure:"argon2_memory" validate:"required,gt=0"`
-	Argon2Threads  uint8  `mapstructure:"argon2_threads" validate:"required,gt=0"`
 }
 
 type domainSettings struct {
