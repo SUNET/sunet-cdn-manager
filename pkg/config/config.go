@@ -32,13 +32,14 @@ type serverSettings struct {
 }
 
 type dbSettings struct {
-	User           string `validate:"required"`
-	Password       string `validate:"required"`
-	DBName         string `validate:"required"`
-	Host           string `validate:"required"`
-	Port           int    `validate:"required"`
-	SSLMode        string `validate:"required"`
-	CACertFilename string `mapstructure:"ca_cert_filename"`
+	User           string        `validate:"required"`
+	Password       string        `validate:"required"`
+	DBName         string        `validate:"required"`
+	Host           string        `validate:"required"`
+	Port           int           `validate:"required"`
+	SSLMode        string        `validate:"required"`
+	CACertFilename string        `mapstructure:"ca_cert_filename"`
+	QueryTimeout   time.Duration `mapstructure:"query_timeout" validate:"required,gt=5s"`
 }
 
 type oidcSettings struct {

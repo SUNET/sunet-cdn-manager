@@ -275,7 +275,7 @@ const (
 	consoleServiceOrgRedirect = "/console/org/%s/services/%s"
 )
 
-func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -298,7 +298,7 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 		}
 
 		if ad.Superuser {
-			err := renderConsolePage(ctx, dbPool, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -314,7 +314,7 @@ func consoleDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieS
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belonging to an organization")
-			err := renderConsolePage(ctx, dbPool, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, false))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, false))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page for user without access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -405,7 +405,7 @@ func (*strictFetchMetadataMiddleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
-func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -426,7 +426,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -442,7 +442,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 		}
 
 		if ad.Superuser {
-			err := renderConsolePage(ctx, dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -454,7 +454,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				http.Error(w, "invalid organization name", http.StatusForbidden)
 				return
 			}
-			err := renderConsolePage(ctx, dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -462,7 +462,7 @@ func consoleOrgDashboardHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			}
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belongs to an org")
-			err := renderConsolePage(ctx, dbPool, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, false))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, false))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -484,7 +484,7 @@ func getFlashMessageStrings(flashMessages []any) []string {
 	return flashMessageStrings
 }
 
-func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -507,7 +507,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 			return
 		}
 
-		domains, err := selectDomains(ctx, dbPool, ad, orgName)
+		domains, err := selectDomains(ctx, dbc, ad, orgName)
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("domains console: not authorized to view page")
@@ -532,7 +532,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbPool, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render domains page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -541,7 +541,7 @@ func consoleDomainsHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 	}
 }
 
-func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -564,7 +564,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleDomainDeleteHandler: db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -590,7 +590,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		_, err = deleteDomain(ctx, logger, dbPool, ad, domainName)
+		_, err = deleteDomain(ctx, logger, dbc, ad, domainName)
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("domains console: not authorized to delete domain")
@@ -622,7 +622,7 @@ func consoleDomainDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 	}
 }
 
-func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -652,7 +652,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			return
 		}
 
-		_, err := deleteService(ctx, logger, dbPool, orgName, serviceName, ad)
+		_, err := deleteService(ctx, logger, dbc, orgName, serviceName, ad)
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("services console: not authorized to delete service")
@@ -685,7 +685,7 @@ func consoleServiceDeleteHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 	}
 }
 
-func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -708,7 +708,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 			return
 		}
 
-		services, err := selectServices(ctx, dbPool, ad, orgName)
+		services, err := selectServices(ctx, dbc, ad, orgName)
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("services console: not authorized to view page")
@@ -733,7 +733,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbPool, w, r, ad, "Services", orgName, components.ServicesContent(orgName, services, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, services, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -742,7 +742,7 @@ func consoleServicesHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSt
 	}
 }
 
-func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -767,7 +767,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -789,7 +789,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, components.DomainData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, components.DomainData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render domain creation page in GET")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -831,7 +831,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 					}
 				}
 				logger.Err(err).Msg("unable to validate POST create-domain form data")
-				err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render domain creation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -840,7 +840,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 				return
 			}
 
-			_, err = insertDomain(ctx, logger, dbPool, formData.Name, &orgIdent.name, ad)
+			_, err = insertDomain(ctx, logger, dbc, formData.Name, &orgIdent.name, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					domainData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
@@ -848,7 +848,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 					logger.Err(err).Msg("unable to insert domain")
 					domainData.Errors.ServerError = "unable to insert domain"
 				}
-				err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render domain creation page after insert error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -880,7 +880,7 @@ func consoleCreateDomainHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cook
 	}
 }
 
-func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -905,7 +905,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleCreateServiceHandler: db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -914,7 +914,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, nil))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, nil))
 			if err != nil {
 				logger.Err(err).Msg("GET: unable to render service creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -940,7 +940,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service form data")
-				err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("POST: unable to render service creation page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -949,10 +949,10 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 				return
 			}
 
-			_, err = insertService(ctx, logger, dbPool, formData.Name, &orgIdent.name, ad)
+			_, err = insertService(ctx, logger, dbc, formData.Name, &orgIdent.name, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
 					if err != nil {
 						logger.Err(err).Msg("service already exists: unable to render service creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -988,7 +988,7 @@ func consoleCreateServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Coo
 	}
 }
 
-func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleNewOriginFieldsetHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1025,14 +1025,14 @@ func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions
 		validationError := "org name validation failed"
 		validationErrorCode := http.StatusBadRequest
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgStr)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgStr)
 		if err != nil {
 			logger.Err(err).Msg("org name validation failed")
 			http.Error(w, validationError, validationErrorCode)
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbPool, orgIdent, serviceStr)
+		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceStr)
 		if err != nil {
 			logger.Err(err).Msg("service name validation failed")
 			http.Error(w, validationError, validationErrorCode)
@@ -1057,7 +1057,7 @@ func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions
 			}
 		}
 
-		originGroups, err := selectOriginGroups(ctx, dbPool, ad, serviceIdent.name, orgStr)
+		originGroups, err := selectOriginGroups(ctx, dbc, ad, serviceIdent.name, orgStr)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: unable to select service groups")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1085,7 +1085,7 @@ func consoleNewOriginFieldsetHandler(dbPool *pgxpool.Pool, cookieStore *sessions
 	}
 }
 
-func consoleOrgSwitcherHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1121,7 +1121,7 @@ func consoleOrgSwitcherHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cooki
 			validationError := "org name validation failed"
 			validationErrorCode := http.StatusBadRequest
 
-			orgIdent, err := validateOrgName(ctx, logger, dbPool, orgStr)
+			orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgStr)
 			if err != nil {
 				logger.Err(err).Msg("org name validation failed")
 				http.Error(w, validationError, validationErrorCode)
@@ -1152,7 +1152,7 @@ func consoleOrgSwitcherHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Cooki
 	}
 }
 
-func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1184,14 +1184,14 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 
 		ad := adRef.(cdntypes.AuthData)
 
-		serviceVersions, err := selectServiceVersions(ctx, dbPool, ad, serviceName, orgName)
+		serviceVersions, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
 		if err != nil {
 			logger.Error().Msg("console: unable to select service versions")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		err = renderConsolePage(ctx, dbPool, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceName, serviceVersions))
+		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceName, serviceVersions))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1200,7 +1200,7 @@ func consoleServiceHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieSto
 	}
 }
 
-func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1246,7 +1246,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		ad := adRef.(cdntypes.AuthData)
 
-		svc, err := getServiceVersionConfig(ctx, dbPool, ad, orgName, serviceName, serviceVersion)
+		svc, err := getServiceVersionConfig(ctx, dbc, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
 			logger.Err(err).Msg("console: unable to select service version config")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1255,7 +1255,7 @@ func consoleServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.Co
 
 		vclKeyToConf := cdntypes.VclStepsToMap(svc.VclSteps)
 
-		err = renderConsolePage(ctx, dbPool, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
+		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service version page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1303,7 +1303,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 	}
 
 	rows, err := tx.Query(
-		context.Background(),
+		ctx,
 		`SELECT
 			(SELECT
 				array_agg(domains.name ORDER BY domains.name)
@@ -1348,7 +1348,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 	return cloneData, nil
 }
 
-func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1382,28 +1382,28 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 
 		vclSK := cdntypes.NewVclStepKeys()
 
-		domains, err := selectDomains(ctx, dbPool, ad, orgName)
+		domains, err := selectDomains(ctx, dbc, ad, orgName)
 		if err != nil {
 			logger.Error().Msg("console: unable to lookup domains for service version creation")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbPool, orgIdent, serviceName)
+		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up serviceName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		originGroups, err := selectOriginGroups(ctx, dbPool, ad, serviceIdent.name, orgIdent.name)
+		originGroups, err := selectOriginGroups(ctx, dbc, ad, serviceIdent.name, orgIdent.name)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: unable to select service groups")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1422,7 +1422,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					return
 				}
 
-				err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+				err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 					cloneData, err = getServiceVersionCloneData(ctx, tx, ad, orgName, serviceName, cloneVersion)
 					if err != nil {
 						return err
@@ -1436,7 +1436,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 				}
 			}
 
-			err = renderConsolePage(ctx, dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, nil, cloneData, nil, ""))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, nil, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1485,7 +1485,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 
-				err = renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1504,7 +1504,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					VerifyTLS:   formOrigin.OriginVerifyTLS,
 				})
 			}
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbPool, vclValidator, orgName, serviceName, formData.Domains, inputOrigins, false, formData.VclSteps)
+			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, inputOrigins, false, formData.VclSteps)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -1513,7 +1513,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1535,7 +1535,7 @@ func consoleCreateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessi
 	}
 }
 
-func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleActivateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1547,7 +1547,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbPool, orgName)
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1561,7 +1561,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbPool, orgIdent, serviceName)
+		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up serviceName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1597,7 +1597,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
 			if err != nil {
 				logger.Err(err).Msg("unable to render activate-service-version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1623,7 +1623,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST activate-service form data")
-				err := renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, cdnerrors.ErrInvalidFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service version activation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1638,10 +1638,10 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 			}
 
 			if formData.Confirmation {
-				err := activateServiceVersion(ctx, logger, ad, dbPool, orgIdent.name, serviceIdent.name, version)
+				err := activateServiceVersion(ctx, logger, ad, dbc, orgIdent.name, serviceIdent.name, version)
 				if err != nil {
 					logger.Err(err).Msg("service version activation failed")
-					err = renderConsolePage(ctx, dbPool, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, err))
+					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, err))
 					if err != nil {
 						logger.Err(err).Msg("unable to render activate-service-version page on activation failure")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1660,7 +1660,7 @@ func consoleActivateServiceVersionHandler(dbPool *pgxpool.Pool, cookieStore *ses
 	}
 }
 
-func renderConsolePage(ctx context.Context, dbPool *pgxpool.Pool, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
+func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
 	availableOrgNames := []string{}
 	if !ad.Superuser {
 		// The orgName can be empty for users that are not belonging to
@@ -1669,7 +1669,7 @@ func renderConsolePage(ctx context.Context, dbPool *pgxpool.Pool, w http.Respons
 			availableOrgNames = append(availableOrgNames, orgName)
 		}
 	} else {
-		orgs, err := selectOrgs(ctx, dbPool, ad)
+		orgs, err := selectOrgs(ctx, dbc, ad)
 		if err != nil {
 			return fmt.Errorf("unable to select orgs: %w", err)
 		}
@@ -1732,7 +1732,7 @@ type activateServiceVersionForm struct {
 }
 
 // Endpoint used for console login
-func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore) http.HandlerFunc {
+func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1791,7 +1791,8 @@ func loginHandler(dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru
 			}
 
 			var ad cdntypes.AuthData
-			err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+
+			err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
 				if err != nil {
 					return err
@@ -1985,9 +1986,10 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.
 }
 
 // Endpoint used for receiving callback from keycloak server
-func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbPool *pgxpool.Pool) http.HandlerFunc {
+func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
+		ctx := r.Context()
 
 		session := getSession(r, cookieStore)
 		if session.IsNew {
@@ -2014,8 +2016,7 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 			return
 		}
 
-		oauth2Ctx := context.Background()
-		oauth2Ctx = context.WithValue(oauth2Ctx, oauth2.HTTPClient, oauth2HTTPClient)
+		oauth2Ctx := context.WithValue(ctx, oauth2.HTTPClient, oauth2HTTPClient)
 
 		oauth2Token, err := oauth2Config.Exchange(oauth2Ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(ocd.PKCEVerifier))
 		if err != nil {
@@ -2033,7 +2034,7 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 		}
 
 		// Parse and verify ID Token payload.
-		idToken, err := idTokenVerifier.Verify(context.Background(), rawIDToken)
+		idToken, err := idTokenVerifier.Verify(ctx, rawIDToken)
 		if err != nil {
 			logger.Err(err).Msg("unable to verify id_token")
 			http.Error(w, "unable to extract id_token", http.StatusInternalServerError)
@@ -2092,7 +2093,7 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 		}
 
 		// Get AuthData for keycloak user
-		ad, err := keycloakUser(dbPool, logger, idToken.Subject, kcc)
+		ad, err := keycloakUser(ctx, dbc, logger, idToken.Subject, kcc)
 		if err != nil {
 			logger.Err(err).Msg("unable to get keycloak user")
 			switch {
@@ -2129,11 +2130,11 @@ type keycloakClaims struct {
 	PreferredUsername string `json:"preferred_username" validate:"min=1,max=63"`
 }
 
-func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, pgtype.UUID, error) {
+func addKeycloakUser(ctx context.Context, dbc *dbConn, subject, name string) (pgtype.UUID, pgtype.UUID, error) {
 	var userID, keycloakProviderID pgtype.UUID
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		err := tx.QueryRow(context.Background(), "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -2144,7 +2145,7 @@ func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, p
 			return fmt.Errorf("unable to INSERT user from keycloak data: %w", err)
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO auth_provider_keycloak (user_id, subject) VALUES ($1, $2) RETURNING id", userID, subject).Scan(&keycloakProviderID)
+		err = tx.QueryRow(ctx, "INSERT INTO auth_provider_keycloak (user_id, subject) VALUES ($1, $2) RETURNING id", userID, subject).Scan(&keycloakProviderID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT auth_provider_keycloak dataf for new user: %w", err)
 		}
@@ -2158,7 +2159,7 @@ func addKeycloakUser(dbPool *pgxpool.Pool, subject, name string) (pgtype.UUID, p
 	return userID, keycloakProviderID, nil
 }
 
-func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, kcc keycloakClaims) (cdntypes.AuthData, error) {
+func keycloakUser(ctx context.Context, dbc *dbConn, logger *zerolog.Logger, subject string, kcc keycloakClaims) (cdntypes.AuthData, error) {
 	// We keep track of keycloak users via the sub value returned in the ID
 	// token. For keycloak this is a UUID, e.g.
 	// "ab809abb-5bac-4db1-8088-3d340ea23de8" which is the actual user ID in keycloak which
@@ -2169,17 +2170,20 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 	// if the database is lost users are recreated with another UUID and
 	// treated as a new user by us.
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var username string
 	var userID, keycloakProviderID pgtype.UUID
-	err := dbPool.QueryRow(
-		context.Background(),
+	err := dbc.dbPool.QueryRow(
+		dbCtx,
 		"SELECT users.id, users.name FROM users JOIN auth_provider_keycloak ON users.id = auth_provider_keycloak.user_id WHERE auth_provider_keycloak.subject = $1",
 		subject,
 	).Scan(&userID, &username)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// User does not exist, add to database
-			userID, keycloakProviderID, err = addKeycloakUser(dbPool, subject, kcc.PreferredUsername)
+			userID, keycloakProviderID, err = addKeycloakUser(dbCtx, dbc, subject, kcc.PreferredUsername)
 			if err != nil {
 				return cdntypes.AuthData{}, fmt.Errorf("unable to add keycloak user '%s' to database: %w", kcc.PreferredUsername, err)
 			}
@@ -2192,7 +2196,7 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 
 	if username != kcc.PreferredUsername {
 		logger.Info().Str("from", username).Str("to", kcc.PreferredUsername).Msg("keycloak username out of sync, updating local username")
-		_, err := dbPool.Exec(context.Background(), "UPDATE users SET name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
+		_, err := dbc.dbPool.Exec(dbCtx, "UPDATE users SET name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
 		if err != nil {
 			return cdntypes.AuthData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
 		}
@@ -2205,8 +2209,8 @@ func keycloakUser(dbPool *pgxpool.Pool, logger *zerolog.Logger, subject string, 
 	var orgName *string    // same as above
 	var superuser bool
 	var roleName string
-	err = dbPool.QueryRow(
-		context.Background(),
+	err = dbc.dbPool.QueryRow(
+		dbCtx,
 		`SELECT
 			users.id,
 			users.org_id,
@@ -2652,10 +2656,10 @@ func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, err
 	}, nil
 }
 
-func upsertArgon2Tx(tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
+func upsertArgon2Tx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, a2Data argon2Data) (pgtype.UUID, error) {
 	var keyID pgtype.UUID
 	err := tx.QueryRow(
-		context.Background(),
+		ctx,
 		"INSERT INTO user_argon2keys (key, salt, time, memory, threads, tag_size, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (user_id) DO UPDATE SET key = $1, salt = $2, time = $3, memory = $4, threads = $5, tag_size = $6 RETURNING id",
 		a2Data.key,
 		a2Data.salt,
@@ -2703,7 +2707,7 @@ func saltFromHex(hexString string) ([]byte, error) {
 	return salt, nil
 }
 
-func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -2716,16 +2720,19 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 		return pgtype.UUID{}, fmt.Errorf("unable to generate argon2 data from newPassword: %w", err)
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var keyID pgtype.UUID
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse user for local-password: %w", err)
 		}
 
 		// We only allow the setting of passwords for users using the "local" auth provider
 		var authProviderName string
-		err = tx.QueryRow(ctx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
+		err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
 		if err != nil {
 			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userIdent.id, err)
 		}
@@ -2753,14 +2760,14 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 		// optimal but not sure about a better way since we want to do
 		// the following upsert operation in the transaction.
 		if !ad.Superuser {
-			_, err := dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
+			_, err := dbUserLogin(dbCtx, tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword
 			}
 		}
 
-		keyID, err = upsertArgon2Tx(tx, userIdent.id, a2Data)
+		keyID, err = upsertArgon2Tx(dbCtx, tx, userIdent.id, a2Data)
 		if err != nil {
 			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 		}
@@ -2782,18 +2789,21 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 	return keyID, nil
 }
 
-func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, maintenance bool) error {
+func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, cacheNodeNameOrID string, maintenance bool) error {
 	if !ad.Superuser {
 		return cdnerrors.ErrForbidden
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(ctx, tx, cacheNodeNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse cache node ID for maintenance: %w", err)
 		}
 
-		_, err = tx.Exec(context.Background(), "UPDATE cache_nodes SET maintenance = $1 WHERE id = $2", maintenance, cacheNodeIdent.id)
+		_, err = tx.Exec(dbCtx, "UPDATE cache_nodes SET maintenance = $1 WHERE id = $2", maintenance, cacheNodeIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to update maintenance mode for cache node: %w", err)
 		}
@@ -2807,23 +2817,26 @@ func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbPool *
 	return nil
 }
 
-func setCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpool.Pool, cacheNodeNameOrID string, nodeGroupNameOrID string) error {
+func setCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, cacheNodeNameOrID string, nodeGroupNameOrID string) error {
 	if !ad.Superuser {
 		return cdnerrors.ErrForbidden
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(ctx, tx, cacheNodeNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse cacheNodeIdent node ID for node-group: %w", err)
 		}
 
-		nodeGroupIdent, err := newNodeGroupIdentifier(ctx, tx, nodeGroupNameOrID)
+		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse nodeGroupIdent group ID for cache node-group: %w", err)
 		}
 
-		_, err = tx.Exec(context.Background(), "UPDATE cache_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, cacheNodeIdent.id)
+		_, err = tx.Exec(dbCtx, "UPDATE cache_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, cacheNodeIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to set node group for cache node: %w", err)
 		}
@@ -2837,7 +2850,7 @@ func setCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpoo
 	return nil
 }
 
-func selectCacheNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.CacheNode, error) {
+func selectCacheNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.CacheNode, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -2845,7 +2858,7 @@ func selectCacheNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.Aut
 	var rows pgx.Rows
 	var err error
 
-	rows, err = dbPool.Query(
+	rows, err = dbc.dbPool.Query(
 		ctx,
 		`SELECT
 			cache_nodes.id,
@@ -2873,7 +2886,7 @@ func selectCacheNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.Aut
 	return cacheNodes, nil
 }
 
-func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.CacheNode, error) {
+func createCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.CacheNode, error) {
 	if !ad.Superuser {
 		return cdntypes.CacheNode{}, cdnerrors.ErrForbidden
 	}
@@ -2882,8 +2895,11 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 
 	var cacheNodeID pgtype.UUID
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		cacheNodeID, err = insertCacheNodeTx(tx, name, description, addresses, maintenance)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeID, err = insertCacheNodeTx(dbCtx, tx, name, description, addresses, maintenance)
 		if err != nil {
 			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
 		}
@@ -2905,16 +2921,16 @@ func createCacheNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, de
 	}, nil
 }
 
-func insertCacheNodeTx(tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
+func insertCacheNodeTx(ctx context.Context, tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
 	var cacheNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
+	err := tx.QueryRow(ctx, "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
 	}
 
 	for _, address := range addresses {
 		var cacheNodeAddressID pgtype.UUID
-		err = tx.QueryRow(context.Background(), "INSERT INTO cache_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", cacheNodeID, address).Scan(&cacheNodeAddressID)
+		err = tx.QueryRow(ctx, "INSERT INTO cache_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", cacheNodeID, address).Scan(&cacheNodeAddressID)
 		if err != nil {
 			return pgtype.UUID{}, fmt.Errorf("INSERT cache node address failed: %w", err)
 		}
@@ -2923,18 +2939,21 @@ func insertCacheNodeTx(tx pgx.Tx, name string, description string, addresses []n
 	return cacheNodeID, nil
 }
 
-func setL4LBNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpool.Pool, l4lbNodeNameOrID string, maintenance bool) error {
+func setL4LBNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, l4lbNodeNameOrID string, maintenance bool) error {
 	if !ad.Superuser {
 		return cdnerrors.ErrForbidden
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(ctx, tx, l4lbNodeNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for maintenance: %w", err)
 		}
 
-		_, err = tx.Exec(context.Background(), "UPDATE l4lb_nodes SET maintenance = $1 WHERE id = $2", maintenance, l4lbNodeIdent.id)
+		_, err = tx.Exec(dbCtx, "UPDATE l4lb_nodes SET maintenance = $1 WHERE id = $2", maintenance, l4lbNodeIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to update maintenance mode for l4lb node: %w", err)
 		}
@@ -2948,23 +2967,26 @@ func setL4LBNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbPool *p
 	return nil
 }
 
-func setL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpool.Pool, l4lbNodeNameOrID string, nodeGroupNameOrID string) error {
+func setL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, l4lbNodeNameOrID string, nodeGroupNameOrID string) error {
 	if !ad.Superuser {
 		return cdnerrors.ErrForbidden
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(ctx, tx, l4lbNodeNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for node-group: %w", err)
 		}
 
-		nodeGroupIdent, err := newNodeGroupIdentifier(ctx, tx, nodeGroupNameOrID)
+		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse nodeGroupIdent group ID for l4lb node-group: %w", err)
 		}
 
-		_, err = tx.Exec(context.Background(), "UPDATE l4lb_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, l4lbNodeIdent.id)
+		_, err = tx.Exec(dbCtx, "UPDATE l4lb_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, l4lbNodeIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to set node group for l4lb node: %w", err)
 		}
@@ -2978,7 +3000,7 @@ func setL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbPool *pgxpool
 	return nil
 }
 
-func selectL4LBNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.L4LBNode, error) {
+func selectL4LBNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.L4LBNode, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -2986,7 +3008,7 @@ func selectL4LBNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.Auth
 	var rows pgx.Rows
 	var err error
 
-	rows, err = dbPool.Query(
+	rows, err = dbc.dbPool.Query(
 		ctx,
 		`SELECT
 			l4lb_nodes.id,
@@ -3013,7 +3035,7 @@ func selectL4LBNodes(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.Auth
 	return l4lbNodes, nil
 }
 
-func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.L4LBNode, error) {
+func createL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name string, description string, addresses []netip.Addr, maintenance bool) (cdntypes.L4LBNode, error) {
 	if !ad.Superuser {
 		return cdntypes.L4LBNode{}, cdnerrors.ErrForbidden
 	}
@@ -3022,8 +3044,11 @@ func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, des
 
 	var l4lbNodeID pgtype.UUID
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		l4lbNodeID, err = insertL4LBNodeTx(tx, name, description, addresses, maintenance)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeID, err = insertL4LBNodeTx(dbCtx, tx, name, description, addresses, maintenance)
 		if err != nil {
 			return fmt.Errorf("createL4LBNode: INSERT failed: %w", err)
 		}
@@ -3045,16 +3070,16 @@ func createL4LBNode(dbPool *pgxpool.Pool, ad cdntypes.AuthData, name string, des
 	}, nil
 }
 
-func insertL4LBNodeTx(tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
+func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description string, addresses []netip.Addr, maintenance bool) (pgtype.UUID, error) {
 	var l4lbNodeID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
+	err := tx.QueryRow(ctx, "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node failed: %w", err)
 	}
 
 	for _, address := range addresses {
 		var l4lbAddressID pgtype.UUID
-		err = tx.QueryRow(context.Background(), "INSERT INTO l4lb_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", l4lbNodeID, address).Scan(&l4lbAddressID)
+		err = tx.QueryRow(ctx, "INSERT INTO l4lb_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", l4lbNodeID, address).Scan(&l4lbAddressID)
 		if err != nil {
 			return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node IP address failed: %w", err)
 		}
@@ -3063,7 +3088,7 @@ func insertL4LBNodeTx(tx pgx.Tx, name string, description string, addresses []ne
 	return l4lbNodeID, nil
 }
 
-func createUser(ctx context.Context, dbPool *pgxpool.Pool, name string, role string, org *string, ad cdntypes.AuthData) (user, error) {
+func createUser(ctx context.Context, dbc *dbConn, name string, role string, org *string, ad cdntypes.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -3074,25 +3099,29 @@ func createUser(ctx context.Context, dbPool *pgxpool.Pool, name string, role str
 
 	var orgIdent orgIdentifier
 	var roleIdent roleIdentifier
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		if org != nil {
-			orgIdent, err = newOrgIdentifier(ctx, tx, *org)
+			orgIdent, err = newOrgIdentifier(dbCtx, tx, *org)
 			if err != nil {
 				return fmt.Errorf("unable to parse organization for user INSERT: %w", err)
 			}
 		}
 
-		roleIdent, err = newRoleIdentifier(ctx, tx, role)
+		roleIdent, err = newRoleIdentifier(dbCtx, tx, role)
 		if err != nil {
 			return fmt.Errorf("unable to parse role for user INSERT: %w", err)
 		}
 
-		authProviderID, err := authProviderNameToIDTx(tx, "local")
+		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, "local")
 		if err != nil {
 			return fmt.Errorf("unble to resolve authProvider name to ID: %w", err)
 		}
 
-		userID, err = insertUserTx(tx, name, &orgIdent.id, roleIdent.id, authProviderID)
+		userID, err = insertUserTx(dbCtx, tx, name, &orgIdent.id, roleIdent.id, authProviderID)
 		if err != nil {
 			return fmt.Errorf("createUser: INSERT failed: %w", err)
 		}
@@ -3111,14 +3140,17 @@ func createUser(ctx context.Context, dbPool *pgxpool.Pool, name string, role str
 	}, nil
 }
 
-func deleteUser(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthData, userNameOrID string) (pgtype.UUID, error) {
+func deleteUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser {
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var userID pgtype.UUID
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("unable to look up user identifier")
 			return cdnerrors.ErrUnprocessable
@@ -3132,7 +3164,7 @@ func deleteUser(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Poo
 			return cdnerrors.ErrForbidden
 		}
 
-		err = tx.QueryRow(context.Background(), "DELETE FROM users WHERE id = $1 RETURNING id", userIdent.id).Scan(&userID)
+		err = tx.QueryRow(dbCtx, "DELETE FROM users WHERE id = $1 RETURNING id", userIdent.id).Scan(&userID)
 		if err != nil {
 			return fmt.Errorf("unable to DELETE user: %w", err)
 		}
@@ -3147,9 +3179,9 @@ func deleteUser(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Poo
 	return userID, nil
 }
 
-func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
+func insertUserTx(ctx context.Context, tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
 	var userID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
+	err := tx.QueryRow(ctx, "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("INSERT user failed: %w", err)
 	}
@@ -3163,17 +3195,17 @@ func insertUserTx(tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID
 // has changed under their feet at the time of a write. FOR SHARE should be
 // fairly safe since multiple readers can hold them at once, but we need to be
 // careful to not introduce deadlocks if contending with FOR UPDATE calls etc.
-func authProviderNameToIDTx(tx pgx.Tx, name string) (pgtype.UUID, error) {
+func authProviderNameToIDTx(ctx context.Context, tx pgx.Tx, name string) (pgtype.UUID, error) {
 	var authProviderID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "SELECT id FROM auth_providers WHERE name=$1 FOR SHARE", name).Scan(&authProviderID)
+	err := tx.QueryRow(ctx, "SELECT id FROM auth_providers WHERE name=$1 FOR SHARE", name).Scan(&authProviderID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
 	return authProviderID, nil
 }
 
-func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
-	_, err := tx.Exec(context.Background(), "UPDATE users SET name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
+func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
+	_, err := tx.Exec(ctx, "UPDATE users SET name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
 	if err != nil {
 		return fmt.Errorf("unable to update user with id '%s': %w", userID, err)
 	}
@@ -3181,19 +3213,22 @@ func updateUserTx(tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID
 	return nil
 }
 
-func updateUser(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, nameOrID string, org *string, role string) (user, error) {
+func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID string, org *string, role string) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var u user
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(ctx, tx, nameOrID)
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(dbCtx, tx, nameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
 		}
 
-		roleIdent, err := newRoleIdentifier(ctx, tx, role)
+		roleIdent, err := newRoleIdentifier(dbCtx, tx, role)
 		if err != nil {
 			return fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
 		}
@@ -3201,14 +3236,14 @@ func updateUser(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData,
 		// org can be nil when the user should have its org value unset
 		var orgID *pgtype.UUID
 		if org != nil {
-			orgIdent, err := newOrgIdentifier(ctx, tx, *org)
+			orgIdent, err := newOrgIdentifier(dbCtx, tx, *org)
 			if err != nil {
 				return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
 			}
 			orgID = &orgIdent.id
 		}
 
-		err = updateUserTx(tx, userIdent.id, userIdent.name, orgID, roleIdent.id)
+		err = updateUserTx(dbCtx, tx, userIdent.id, userIdent.name, orgID, roleIdent.id)
 		if err != nil {
 			return fmt.Errorf("update failed: %w", err)
 		}
@@ -3227,16 +3262,16 @@ func updateUser(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData,
 	return u, nil
 }
 
-func selectOrgs(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.Org, error) {
+func selectOrgs(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.Org, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(ctx, "SELECT id, name FROM orgs ORDER BY time_created")
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name FROM orgs ORDER BY time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbPool.Query(ctx, "SELECT id, name FROM orgs WHERE id=$1 ORDER BY time_created", *ad.OrgID)
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name FROM orgs WHERE id=$1 ORDER BY time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
@@ -3252,10 +3287,10 @@ func selectOrgs(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData)
 	return orgs, nil
 }
 
-func selectDomains(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Domain, error) {
+func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Domain, error) {
 	domains := []cdntypes.Domain{}
 
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var err error
 		var orgIdent orgIdentifier
 		var lookupOrg pgtype.UUID
@@ -3315,14 +3350,17 @@ func selectDomains(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthDa
 	return domains, nil
 }
 
-func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, ad cdntypes.AuthData, domainNameOrID string) (pgtype.UUID, error) {
+func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var domainID pgtype.UUID
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		domainIdent, err := newDomainIdentifier(ctx, tx, domainNameOrID)
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		domainIdent, err := newDomainIdentifier(dbCtx, tx, domainNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("unable to look up domain identifier")
 			return cdnerrors.ErrUnprocessable
@@ -3334,7 +3372,7 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 			return cdnerrors.ErrNotFound
 		}
 
-		err = tx.QueryRow(context.Background(), "DELETE FROM domains WHERE id = $1 RETURNING id", domainIdent.id).Scan(&domainID)
+		err = tx.QueryRow(dbCtx, "DELETE FROM domains WHERE id = $1 RETURNING id", domainIdent.id).Scan(&domainID)
 		if err != nil {
 			return fmt.Errorf("unable to DELETE domain: %w", err)
 		}
@@ -3349,9 +3387,9 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 	return domainID, nil
 }
 
-func selectServiceIPs(ctx context.Context, dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
+func selectServiceIPs(ctx context.Context, dbc *dbConn, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
 	sAddrs := serviceAddresses{}
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
 		if orgNameOrID != "" {
 			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
@@ -3375,7 +3413,7 @@ func selectServiceIPs(ctx context.Context, dbPool *pgxpool.Pool, serviceNameOrID
 			AllocatedAddresses: []serviceAddress{},
 		}
 
-		rows, err := tx.Query(context.Background(), "SELECT address FROM service_ip_addresses WHERE service_id=$1", serviceIdent.id)
+		rows, err := tx.Query(ctx, "SELECT address FROM service_ip_addresses WHERE service_id=$1", serviceIdent.id)
 		if err != nil {
 			return fmt.Errorf("unable to SELECT IP addresses for organization by id: %w", err)
 		}
@@ -3396,10 +3434,10 @@ func selectServiceIPs(ctx context.Context, dbPool *pgxpool.Pool, serviceNameOrID
 	return sAddrs, nil
 }
 
-func selectOrg(ctx context.Context, dbPool *pgxpool.Pool, orgNameOrID string, ad cdntypes.AuthData) (cdntypes.Org, error) {
+func selectOrg(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes.AuthData) (cdntypes.Org, error) {
 	o := cdntypes.Org{}
 
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnableToParseNameOrID
@@ -3421,10 +3459,10 @@ func selectOrg(ctx context.Context, dbPool *pgxpool.Pool, orgNameOrID string, ad
 	return o, nil
 }
 
-func selectSafeOrgClientCredentials(ctx context.Context, dbPool *pgxpool.Pool, orgNameOrID string, ad cdntypes.AuthData) ([]cdntypes.OrgClientCredentialSafe, error) {
+func selectSafeOrgClientCredentials(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes.AuthData) ([]cdntypes.OrgClientCredentialSafe, error) {
 	safeOrgClientCredentials := []cdntypes.OrgClientCredentialSafe{}
 
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnableToParseNameOrID
@@ -3656,7 +3694,7 @@ func (kccm *keycloakClientManager) deleteClientCred(clientID string, registratio
 	return nil
 }
 
-func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager, clientCredAEAD cipher.AEAD) (cdntypes.NewOrgClientCredential, error) {
+func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager, clientCredAEAD cipher.AEAD) (cdntypes.NewOrgClientCredential, error) {
 	var orgID, orgClientTokenID pgtype.UUID
 	var clientID, clientSecret, registrationAccessToken string
 	var clientRegistered bool
@@ -3665,8 +3703,11 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 		return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrForbidden
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -3683,13 +3724,13 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 		// Verify we are not hitting the limit of how many client tokens the
 		// org allows, do "FOR UPDATE" to lock out any concurrently
 		// running function until we are done with counting rows.
-		err = tx.QueryRow(context.Background(), "SELECT client_token_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&clientTokenQuota)
+		err = tx.QueryRow(dbCtx, "SELECT client_token_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&clientTokenQuota)
 		if err != nil {
 			return err
 		}
 
 		var numClientTokens int64
-		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id=$1", orgIdent.id).Scan(&numClientTokens)
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id=$1", orgIdent.id).Scan(&numClientTokens)
 		if err != nil {
 			return err
 		}
@@ -3734,7 +3775,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 		// another row.
 		cryptRegistrationAccessToken := clientCredAEAD.Seal(nonce, nonce, []byte(registrationAccessToken), tokenUUID[:])
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
+		err = tx.QueryRow(dbCtx, "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT org keycloak client token: %w", err)
 		}
@@ -3773,16 +3814,19 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 	return nocd, nil
 }
 
-func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, clientCredAEAD cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
+func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, clientCredAEAD cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var orgClientCredentialID pgtype.UUID
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
 		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("unable to look up org identifier")
 				return cdnerrors.ErrUnprocessable
@@ -3790,7 +3834,7 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 			orgID = orgIdent.id
 		}
 
-		orgClientCredentialIdent, err := newOrgClientCredentialIdentifier(ctx, tx, orgClientCredentialNameOrID, orgID)
+		orgClientCredentialIdent, err := newOrgClientCredentialIdentifier(dbCtx, tx, orgClientCredentialNameOrID, orgID)
 		if err != nil {
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
@@ -3810,7 +3854,7 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 
 		var clientID string
 		var cryptRegistrationAccessToken []byte
-		err = tx.QueryRow(context.Background(), "DELETE FROM org_keycloak_client_credentials WHERE id = $1 RETURNING id, client_id, crypt_registration_access_token", orgClientCredentialIdent.id).Scan(&orgClientCredentialID, &clientID, &cryptRegistrationAccessToken)
+		err = tx.QueryRow(dbCtx, "DELETE FROM org_keycloak_client_credentials WHERE id = $1 RETURNING id, client_id, crypt_registration_access_token", orgClientCredentialIdent.id).Scan(&orgClientCredentialID, &clientID, &cryptRegistrationAccessToken)
 		if err != nil {
 			return fmt.Errorf("unable to DELETE org client credential: %w", err)
 		}
@@ -3847,12 +3891,16 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbPo
 	return orgClientCredentialID, nil
 }
 
-func insertOrg(dbPool *pgxpool.Pool, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
+func insertOrg(ctx context.Context, dbc *dbConn, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
-	err := dbPool.QueryRow(context.Background(), "INSERT INTO orgs (name) VALUES ($1) RETURNING id", name).Scan(&id)
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := dbc.dbPool.QueryRow(dbCtx, "INSERT INTO orgs (name) VALUES ($1) RETURNING id", name).Scan(&id)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to INSERT organization: %w", err)
 	}
@@ -3860,9 +3908,9 @@ func insertOrg(dbPool *pgxpool.Pool, name string, ad cdntypes.AuthData) (pgtype.
 	return id, nil
 }
 
-func selectServices(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
+func selectServices(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
 	var services []cdntypes.Service
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var err error
 		var orgIdent orgIdentifier
 		var lookupOrg pgtype.UUID
@@ -3922,10 +3970,10 @@ func selectServices(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthD
 	return services, nil
 }
 
-func selectService(ctx context.Context, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (cdntypes.Service, error) {
+func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (cdntypes.Service, error) {
 	s := cdntypes.Service{}
 
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
 		var err error
 
@@ -4364,7 +4412,7 @@ type serviceIPAddr struct {
 	Address   netip.Addr
 }
 
-func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, requestedV6 int) ([]serviceIPAddr, error) {
+func allocateServiceIPs(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, requestedV6 int) ([]serviceIPAddr, error) {
 	if requestedV4 == 0 && requestedV6 == 0 {
 		return nil, errors.New("must allocate at least one address")
 	}
@@ -4372,7 +4420,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	// Get available networks, order by network, FOR UPDATE to lock out
 	// any concurrently runnnig allocateServiceIPs() from allocating addresses at
 	// the same time.
-	rows, err := tx.Query(context.Background(), "SELECT id, network FROM ip_networks ORDER BY network FOR UPDATE")
+	rows, err := tx.Query(ctx, "SELECT id, network FROM ip_networks ORDER BY network FOR UPDATE")
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for networks: %w", err)
 	}
@@ -4384,7 +4432,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 
 	// Collect all currently used addresses, FOR SHARE since we probably
 	// dont want anyone changing these during allocation as well.
-	rows, err = tx.Query(context.Background(), "SELECT address FROM service_ip_addresses ORDER BY address FOR SHARE")
+	rows, err = tx.Query(ctx, "SELECT address FROM service_ip_addresses ORDER BY address FOR SHARE")
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for service addresses: %w", err)
 	}
@@ -4461,7 +4509,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 
 	for _, allocIP := range allocatedIPs {
 		var serviceIPID pgtype.UUID
-		err = tx.QueryRow(context.Background(), "INSERT INTO service_ip_addresses (service_id, network_id, address) VALUES ($1, $2, $3) returning id", serviceID, allocIP.networkID, allocIP.Address).Scan(&serviceIPID)
+		err = tx.QueryRow(ctx, "INSERT INTO service_ip_addresses (service_id, network_id, address) VALUES ($1, $2, $3) returning id", serviceID, allocIP.networkID, allocIP.Address).Scan(&serviceIPID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to insert ip %s into service_ip_addresses: %w", allocIP.Address, err)
 		}
@@ -4470,7 +4518,7 @@ func allocateServiceIPs(tx pgx.Tx, serviceID pgtype.UUID, requestedV4 int, reque
 	return allocatedIPs, nil
 }
 
-func insertOriginGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, serviceNameOrID string, orgNameOrID string, name string) (cdntypes.OriginGroup, error) {
+func insertOriginGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, serviceNameOrID string, orgNameOrID string, name string) (cdntypes.OriginGroup, error) {
 	if !ad.Superuser {
 		if ad.OrgID == nil {
 			logger.Error().Msg("insertOriginGroup: not superuser or member of an org")
@@ -4478,15 +4526,18 @@ func insertOriginGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.
 		}
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var originGroup cdntypes.OriginGroup
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
 			return cdnerrors.ErrUnprocessable
 		}
 
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgIdent.id)
+		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("unable to validate org id")
 			return cdnerrors.ErrUnprocessable
@@ -4504,7 +4555,7 @@ func insertOriginGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.
 		// group as this could affect the configuration of already
 		// existing service versions.
 		defaultGroup := false
-		originGroupID, err := insertOriginGroupTx(tx, serviceIdent.id, defaultGroup, name)
+		originGroupID, err := insertOriginGroupTx(dbCtx, tx, serviceIdent.id, defaultGroup, name)
 		if err != nil {
 			return fmt.Errorf("insertOriginGroup: unable to create default origin group: %w", err)
 		}
@@ -4529,12 +4580,12 @@ func insertOriginGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.
 	return originGroup, nil
 }
 
-func insertOriginGroupTx(tx pgx.Tx, serviceID pgtype.UUID, defaultGroup bool, name string) (pgtype.UUID, error) {
+func insertOriginGroupTx(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID, defaultGroup bool, name string) (pgtype.UUID, error) {
 	// As default origin groups affects the content of configuration for
 	// already saved service versions we do not support changing the
 	// default origin group.
 	var originGroupID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO service_origin_groups (service_id, default_group, name) VALUES ($1, $2, $3) returning id", serviceID, defaultGroup, name).Scan(&originGroupID)
+	err := tx.QueryRow(ctx, "INSERT INTO service_origin_groups (service_id, default_group, name) VALUES ($1, $2, $3) returning id", serviceID, defaultGroup, name).Scan(&originGroupID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -4547,9 +4598,9 @@ func insertOriginGroupTx(tx pgx.Tx, serviceID pgtype.UUID, defaultGroup bool, na
 	return originGroupID, nil
 }
 
-func selectOriginGroups(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.OriginGroup, error) {
+func selectOriginGroups(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.OriginGroup, error) {
 	originGroups := []cdntypes.OriginGroup{}
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
 		if orgNameOrID != "" {
 			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
@@ -4602,13 +4653,13 @@ func selectOriginGroupsTx(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID)
 	return originGroups, nil
 }
 
-func selectNodeGroups(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData) ([]cdntypes.NodeGroup, error) {
+func selectNodeGroups(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.NodeGroup, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
 
 	nodeGroups := []cdntypes.NodeGroup{}
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var err error
 		nodeGroups, err = selectNodeGroupsTx(ctx, tx)
 		if err != nil {
@@ -4641,15 +4692,18 @@ func selectNodeGroupsTx(ctx context.Context, tx pgx.Tx) ([]cdntypes.NodeGroup, e
 	return nodeGroups, nil
 }
 
-func insertNodeGroup(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, name string, description string) (cdntypes.NodeGroup, error) {
+func insertNodeGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, name string, description string) (cdntypes.NodeGroup, error) {
 	if !ad.Superuser {
 		logger.Error().Msg("insertNodeGroup: not superuser")
 		return cdntypes.NodeGroup{}, cdnerrors.ErrForbidden
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var nodeGroup cdntypes.NodeGroup
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		nodeGroupID, err := insertNodeGroupTx(tx, name, description)
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		nodeGroupID, err := insertNodeGroupTx(dbCtx, tx, name, description)
 		if err != nil {
 			return fmt.Errorf("insertNodeGroup: unable to create node group: %w", err)
 		}
@@ -4674,9 +4728,9 @@ func insertNodeGroup(logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpo
 	return nodeGroup, nil
 }
 
-func insertNodeGroupTx(tx pgx.Tx, name string, description string) (pgtype.UUID, error) {
+func insertNodeGroupTx(ctx context.Context, tx pgx.Tx, name string, description string) (pgtype.UUID, error) {
 	var nodeGroupID pgtype.UUID
-	err := tx.QueryRow(context.Background(), "INSERT INTO node_groups (name, description) VALUES ($1, $2) returning id", name, description).Scan(&nodeGroupID)
+	err := tx.QueryRow(ctx, "INSERT INTO node_groups (name, description) VALUES ($1, $2) returning id", name, description).Scan(&nodeGroupID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -4689,7 +4743,7 @@ func insertNodeGroupTx(tx pgx.Tx, name string, description string) (pgtype.UUID,
 	return nodeGroupID, nil
 }
 
-func insertDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
+func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
 
@@ -4707,8 +4761,11 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 		return cdntypes.Domain{}, cdnerrors.ErrUnprocessable
 	}
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifier(ctx, tx, *orgNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err = newOrgIdentifier(dbCtx, tx, *orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -4723,13 +4780,13 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 		// Verify we are not hitting the limit of how many domains the
 		// org allows, do "FOR UPDATE" to lock out any concurrently
 		// running function until we are done with counting rows.
-		err = tx.QueryRow(context.Background(), "SELECT domain_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&domainQuota)
+		err = tx.QueryRow(dbCtx, "SELECT domain_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&domainQuota)
 		if err != nil {
 			return err
 		}
 
 		var numDomains int64
-		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
 		if err != nil {
 			return err
 		}
@@ -4745,7 +4802,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 			return fmt.Errorf("failed generating verification token: %w", err)
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO domains (name, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", name, verificationToken, orgIdent.id).Scan(&domainID)
+		err = tx.QueryRow(dbCtx, "INSERT INTO domains (name, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", name, verificationToken, orgIdent.id).Scan(&domainID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT domain: %w", err)
 		}
@@ -4773,7 +4830,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.P
 	return d, nil
 }
 
-func insertService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, name string, orgNameOrID *string, ad cdntypes.AuthData) (pgtype.UUID, error) {
+func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
 	var orgIdent orgIdentifier
@@ -4789,8 +4846,11 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 		return pgtype.UUID{}, cdnerrors.ErrUnprocessable
 	}
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifier(ctx, tx, *orgNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err = newOrgIdentifier(dbCtx, tx, *orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -4805,13 +4865,13 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 		// Verify we are not hitting the limit of how many services the
 		// org allows, do "FOR UPDATE" to lock out any concurrently
 		// running function until we are done with counting rows.
-		err = tx.QueryRow(context.Background(), "SELECT service_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&serviceQuota)
+		err = tx.QueryRow(dbCtx, "SELECT service_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&serviceQuota)
 		if err != nil {
 			return err
 		}
 
 		var numServices int64
-		err = tx.QueryRow(context.Background(), "SELECT COUNT(*) FROM services WHERE org_id=$1", orgIdent.id).Scan(&numServices)
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM services WHERE org_id=$1", orgIdent.id).Scan(&numServices)
 		if err != nil {
 			return err
 		}
@@ -4826,24 +4886,24 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 		// SELECT is protected by the FOR UPDATE select above, so is
 		// safe from concurrent service creation.
 		var uidRange pgtype.Range[pgtype.Int8]
-		err = tx.QueryRow(context.Background(), "SELECT COALESCE((SELECT int8range(upper(uid_range), upper(uid_range)+10000) FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000020000))").Scan(&uidRange)
+		err = tx.QueryRow(dbCtx, "SELECT COALESCE((SELECT int8range(upper(uid_range), upper(uid_range)+10000) FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000020000))").Scan(&uidRange)
 		if err != nil {
 			return err
 		}
 
-		err = tx.QueryRow(context.Background(), "INSERT INTO services (name, org_id, uid_range) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, uidRange).Scan(&serviceID)
+		err = tx.QueryRow(dbCtx, "INSERT INTO services (name, org_id, uid_range) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, uidRange).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service: %w", err)
 		}
 
 		// Allocate 1 IPv4 and 1 IPv6 address for the service
-		_, err := allocateServiceIPs(tx, serviceID, 1, 1)
+		_, err := allocateServiceIPs(dbCtx, tx, serviceID, 1, 1)
 		if err != nil {
 			return fmt.Errorf("unable to allocate service IPs: %w", err)
 		}
 
 		// Create a default origin group, this is the only time it is valid to make it the default group
-		_, err = insertOriginGroupTx(tx, serviceID, true, "default")
+		_, err = insertOriginGroupTx(dbCtx, tx, serviceID, true, "default")
 		if err != nil {
 			return fmt.Errorf("insertService: unable to create default origin group: %w", err)
 		}
@@ -4864,16 +4924,19 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 	return serviceID, nil
 }
 
-func deleteService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (pgtype.UUID, error) {
+func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
 
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
 	var serviceID pgtype.UUID
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
 		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("unable to look up org identifier")
 				return cdnerrors.ErrUnprocessable
@@ -4881,7 +4944,7 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 			orgID = orgIdent.id
 		}
 
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
+		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgID)
 		if err != nil {
 			logger.Err(err).Msg("unable to look up service identifier")
 			return cdnerrors.ErrUnprocessable
@@ -4893,7 +4956,7 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.
 			return cdnerrors.ErrNotFound
 		}
 
-		err = tx.QueryRow(context.Background(), "DELETE FROM services WHERE id = $1 RETURNING id", serviceIdent.id).Scan(&serviceID)
+		err = tx.QueryRow(dbCtx, "DELETE FROM services WHERE id = $1 RETURNING id", serviceIdent.id).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to DELETE service: %w", err)
 		}
@@ -4948,7 +5011,7 @@ func selectCacheNodeTx(ctx context.Context, tx pgx.Tx, cacheNodeID pgtype.UUID) 
 	return cacheNode, nil
 }
 
-func selectCacheNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, confTemplates configTemplates, cacheNodeNameOrID string) (cdntypes.CacheNodeConfig, error) {
+func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, confTemplates configTemplates, cacheNodeNameOrID string) (cdntypes.CacheNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
 		return cdntypes.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
@@ -4959,7 +5022,7 @@ func selectCacheNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntype
 
 	// Usage of JOIN with subqueries based on
 	// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
-	rows, err := dbPool.Query(
+	rows, err := dbc.dbPool.Query(
 		ctx,
 		`SELECT
 		       orgs.id AS org_id,
@@ -5135,7 +5198,7 @@ func selectCacheNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntype
 
 	// Include what service networks have been added to the system so we
 	// can create firewall rules on the cache nodes.
-	rows, err = dbPool.Query(
+	rows, err = dbc.dbPool.Query(
 		ctx,
 		`SELECT network FROM ip_networks ORDER BY network`,
 	)
@@ -5148,7 +5211,7 @@ func selectCacheNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntype
 		return cdntypes.CacheNodeConfig{}, fmt.Errorf("pgx.CollectRows of IP networks for cache node config failed: %w", err)
 	}
 
-	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		cacheNodeIdent, err := newCacheNodeIdentifier(ctx, tx, cacheNodeNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnableToParseNameOrID
@@ -5275,7 +5338,7 @@ type serviceIPInfo struct {
 	OriginTLSStatus    []bool
 }
 
-func selectL4LBNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, l4lbNodeNameOrID string) (cdntypes.L4LBNodeConfig, error) {
+func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lbNodeNameOrID string) (cdntypes.L4LBNodeConfig, error) {
 	if !ad.Superuser && ad.RoleName != "node" {
 		return cdntypes.L4LBNodeConfig{}, cdnerrors.ErrForbidden
 	}
@@ -5285,7 +5348,7 @@ func selectL4LBNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes
 	l4lbNode := cdntypes.L4LBNode{}
 	cacheNodes := []cdntypes.CacheNode{}
 
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		l4lbNodeIdent, err := newL4LBNodeIdentifier(ctx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnableToParseNameOrID
@@ -5374,12 +5437,12 @@ func selectL4LBNodeConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes
 	return lnc, nil
 }
 
-func selectServiceVersions(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, error) {
+func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, error) {
 	var rows pgx.Rows
 
 	var err error
 	serviceVersions := []cdntypes.ServiceVersion{}
-	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
 
 		var orgID pgtype.UUID
@@ -5440,7 +5503,7 @@ func selectServiceVersions(ctx context.Context, dbPool *pgxpool.Pool, ad cdntype
 	return serviceVersions, nil
 }
 
-func getServiceVersionConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, orgNameOrID string, serviceNameOrID string, version int64) (cdntypes.ServiceVersionConfig, error) {
+func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string, serviceNameOrID string, version int64) (cdntypes.ServiceVersionConfig, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -5450,7 +5513,7 @@ func getServiceVersionConfig(ctx context.Context, dbPool *pgxpool.Pool, ad cdnty
 	}
 
 	var svc cdntypes.ServiceVersionConfig
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
@@ -5549,14 +5612,14 @@ type serviceVersionInsertResult struct {
 	vclID         pgtype.UUID
 }
 
-func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier) (*pgtype.UUID, error) {
+func deactivatePreviousServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceIdent serviceIdentifier) (*pgtype.UUID, error) {
 	var deactivatedServiceVersionID *pgtype.UUID
 
 	// Start with finding out if there even is any active version at all,
 	// if not there is nothing more to do.
 	var found bool
 	err := tx.QueryRow(
-		context.Background(),
+		ctx,
 		"SELECT TRUE FROM service_versions WHERE service_id=$1 AND active=true FOR UPDATE",
 		serviceIdent.id,
 	).Scan(&found)
@@ -5568,7 +5631,7 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	}
 
 	err = tx.QueryRow(
-		context.Background(),
+		ctx,
 		"UPDATE service_versions SET active=false WHERE service_id=$1 AND active=true returning id",
 		serviceIdent.id,
 	).Scan(&deactivatedServiceVersionID)
@@ -5579,13 +5642,13 @@ func deactivatePreviousServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifie
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
 
 	err := tx.QueryRow(
-		context.Background(),
+		ctx,
 		"UPDATE services SET version_counter=version_counter+1 WHERE id=$1 RETURNING version_counter",
 		serviceIdent.id,
 	).Scan(&versionCounter)
@@ -5595,14 +5658,14 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 
 	// If the new version is expected to be active we need to deactivate the currently active version
 	if active {
-		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(tx, serviceIdent)
+		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(ctx, tx, serviceIdent)
 		if err != nil {
 			return serviceVersionInsertResult{}, err
 		}
 	}
 
 	err = tx.QueryRow(
-		context.Background(),
+		ctx,
 		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
 		serviceIdent.id,
 		versionCounter,
@@ -5617,7 +5680,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 		// Map domain name to correct ID
 		var domainID pgtype.UUID
 		err = tx.QueryRow(
-			context.Background(),
+			ctx,
 			"SELECT id FROM domains WHERE name=$1 AND org_id=$2 AND verified=$3",
 			domain,
 			orgIdent.id,
@@ -5632,7 +5695,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 
 		var serviceDomainID pgtype.UUID
 		err = tx.QueryRow(
-			context.Background(),
+			ctx,
 			"INSERT INTO service_domains (service_version_id, domain_id) VALUES ($1, $2) RETURNING id",
 			serviceVersionID,
 			domainID,
@@ -5647,7 +5710,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	for _, origin := range origins {
 		var serviceOriginID pgtype.UUID
 		err = tx.QueryRow(
-			context.Background(),
+			ctx,
 			"INSERT INTO service_origins (service_version_id, origin_group_id, host, port, tls, verify_tls) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
 			serviceVersionID,
 			origin.OriginGroupID,
@@ -5664,7 +5727,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 
 	var serviceVclID pgtype.UUID
 	err = tx.QueryRow(
-		context.Background(),
+		ctx,
 		`INSERT INTO service_vcls (
 		service_version_id,
 		vcl_recv,
@@ -5725,7 +5788,7 @@ func insertServiceVersionTx(tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serv
 	return res, nil
 }
 
-func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbPool *pgxpool.Pool, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, inputOrigins []cdntypes.InputOrigin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, inputOrigins []cdntypes.InputOrigin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -5736,14 +5799,17 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 
 	var serviceVersionResult serviceVersionInsertResult
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
 			return cdnerrors.ErrUnprocessable
 		}
 
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgIdent.id)
+		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("looking up service failed")
 			return cdnerrors.ErrUnprocessable
@@ -5764,7 +5830,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		// validation.
 		var serviceIPAddrs []netip.Addr
 		err = tx.QueryRow(
-			ctx,
+			dbCtx,
 			"SELECT array_agg(address ORDER BY address) AS service_ip_addresses FROM service_ip_addresses WHERE service_id = $1",
 			serviceIdent.id,
 		).Scan(&serviceIPAddrs)
@@ -5774,13 +5840,13 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		}
 
 		// We also need to validate/convert input origin groups
-		origins, err := validateInputOrigins(ctx, tx, inputOrigins, serviceIdent.id)
+		origins, err := validateInputOrigins(dbCtx, tx, inputOrigins, serviceIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("validating input origins")
 			return cdnerrors.ErrUnprocessable
 		}
 
-		originGroups, err := selectOriginGroupsTx(ctx, tx, serviceIdent.id)
+		originGroups, err := selectOriginGroupsTx(dbCtx, tx, serviceIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("looking up origin groups failed")
 			return cdnerrors.ErrUnprocessable
@@ -5805,7 +5871,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			return fmt.Errorf("VCL validation failed: %w", err)
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(tx, orgIdent, serviceIdent, domains, origins, active, vcls)
+		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, origins, active, vcls)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -5819,7 +5885,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 	return serviceVersionResult, nil
 }
 
-func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbPool *pgxpool.Pool, orgNameOrID string, serviceNameOrID string, version int64) error {
+func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, version int64) error {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -5828,14 +5894,17 @@ func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdnt
 		}
 	}
 
-	err := pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("unable to validate org id")
 			return cdnerrors.ErrUnprocessable
 		}
 
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgIdent.id)
+		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("unable to validate org id")
 			return cdnerrors.ErrUnprocessable
@@ -5849,7 +5918,7 @@ func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdnt
 			}
 		}
 
-		_, err = activateServiceVersionTx(tx, serviceIdent, version)
+		_, err = activateServiceVersionTx(dbCtx, tx, serviceIdent, version)
 		if err != nil {
 			return fmt.Errorf("unable to activate service version with version: %w", err)
 		}
@@ -5866,14 +5935,14 @@ func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdnt
 	return nil
 }
 
-func activateServiceVersionTx(tx pgx.Tx, serviceIdent serviceIdentifier, version int64) (pgtype.UUID, error) {
-	_, err := deactivatePreviousServiceVersionTx(tx, serviceIdent)
+func activateServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceIdent serviceIdentifier, version int64) (pgtype.UUID, error) {
+	_, err := deactivatePreviousServiceVersionTx(ctx, tx, serviceIdent)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
 
 	var activatedServiceVersionID pgtype.UUID
-	err = tx.QueryRow(context.Background(), "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceIdent.id, version).Scan(&activatedServiceVersionID)
+	err = tx.QueryRow(ctx, "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceIdent.id, version).Scan(&activatedServiceVersionID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
@@ -6109,7 +6178,7 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	return b.String(), nil
 }
 
-func selectNetworks(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthData, family int) ([]ipNetwork, error) {
+func selectNetworks(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, family int) ([]ipNetwork, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -6118,7 +6187,7 @@ func selectNetworks(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthD
 	var err error
 
 	if family == 0 {
-		rows, err = dbPool.Query(ctx, "SELECT id, network FROM ip_networks ORDER BY network")
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, network FROM ip_networks ORDER BY network")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for all networks: %w", err)
 		}
@@ -6126,7 +6195,7 @@ func selectNetworks(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthD
 		if _, ok := validNetworkFamilies[family]; !ok {
 			return nil, errors.New("invalid network family")
 		}
-		rows, err = dbPool.Query(ctx, "SELECT id, network FROM ip_networks WHERE family(network) = $1 ORDER BY network", family)
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, network FROM ip_networks WHERE family(network) = $1 ORDER BY network", family)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for networks: %w", err)
 		}
@@ -6140,12 +6209,16 @@ func selectNetworks(ctx context.Context, dbPool *pgxpool.Pool, ad cdntypes.AuthD
 	return ipNetworks, nil
 }
 
-func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthData) (ipNetwork, error) {
+func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cdntypes.AuthData) (ipNetwork, error) {
 	var id pgtype.UUID
 	if !ad.Superuser {
 		return ipNetwork{}, cdnerrors.ErrForbidden
 	}
-	err := dbPool.QueryRow(context.Background(), "INSERT INTO ip_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := dbc.dbPool.QueryRow(dbCtx, "INSERT INTO ip_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -6167,7 +6240,7 @@ func insertNetwork(dbPool *pgxpool.Pool, network netip.Prefix, ad cdntypes.AuthD
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -6200,25 +6273,25 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
 		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get("/", consoleDashboardHandler(dbPool, cookieStore))
-		r.Get("/org/{org}", consoleOrgDashboardHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/domains", consoleDomainsHandler(dbPool, cookieStore))
-		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
-		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/services", consoleServicesHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/services/{service}", consoleServiceHandler(dbPool, cookieStore))
-		r.Delete("/org/{org}/services/{service}", consoleServiceDeleteHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
-		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbPool, cookieStore))
-		r.Get("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, confTemplates))
-		r.Post("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbPool, cookieStore, vclValidator, confTemplates))
-		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
-		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbPool, cookieStore))
+		r.Get("/", consoleDashboardHandler(dbc, cookieStore))
+		r.Get("/org/{org}", consoleOrgDashboardHandler(dbc, cookieStore))
+		r.Get("/org/{org}/domains", consoleDomainsHandler(dbc, cookieStore))
+		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbc, cookieStore))
+		r.Get("/org/{org}/create/domain", consoleCreateDomainHandler(dbc, cookieStore))
+		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbc, cookieStore))
+		r.Get("/org/{org}/services", consoleServicesHandler(dbc, cookieStore))
+		r.Get("/org/{org}/services/{service}", consoleServiceHandler(dbc, cookieStore))
+		r.Delete("/org/{org}/services/{service}", consoleServiceDeleteHandler(dbc, cookieStore))
+		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
+		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
+		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc, cookieStore))
+		r.Get("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
+		r.Post("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
+		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
+		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		// htmx helpers
-		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbPool, cookieStore))
-		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbPool, cookieStore))
+		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
+		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -6236,8 +6309,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 	router.Route("/auth", func(r chi.Router) {
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Get("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
-		r.Post("/login", loginHandler(dbPool, argon2Mutex, loginCache, cookieStore))
+		r.Get("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
+		r.Post("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
 		r.Get("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
@@ -6256,7 +6329,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbPool *pgxpool.Poo
 			}
 
 			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, oauth2Config))
-			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbPool))
+			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbc))
 		}
 	})
 
@@ -6309,7 +6382,7 @@ func validateKeycloakToken(ctx context.Context, c *jwk.Cache, issuer string, oiC
 }
 
 // https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
-func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(humaCtx huma.Context, next func(huma.Context)) {
+func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(humaCtx huma.Context, next func(huma.Context)) {
 	return func(humaCtx huma.Context, next func(huma.Context)) {
 		ctx := humaCtx.Context()
 		logger := zlog.Ctx(ctx)
@@ -6346,7 +6419,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				return
 			}
 
-			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+			err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, username, password)
 				return err
 			})
@@ -6373,7 +6446,7 @@ func newAPIAuthMiddleware(api huma.API, dbPool *pgxpool.Pool, argon2Mutex *sync.
 				return
 			}
 
-			err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+			err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 				ad, err = jwtToAuthData(ctx, tx, jwtToken)
 				return err
 			})
@@ -6418,7 +6491,7 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD) error {
+func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD) error {
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
@@ -6448,7 +6521,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 
 		api := humachi.New(r, config)
 
-		api.UseMiddleware(newAPIAuthMiddleware(api, dbPool, argon2Mutex, loginCache, jwkCache, jwtIssuer, oiConf))
+		api.UseMiddleware(newAPIAuthMiddleware(api, dbc, argon2Mutex, loginCache, jwkCache, jwtIssuer, oiConf))
 
 		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
 		) (*usersOutput, error) {
@@ -6460,7 +6533,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from users handler")
 			}
 
-			users, err := selectUsers(ctx, dbPool, logger, ad)
+			users, err := selectUsers(ctx, dbc.dbPool, logger, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6486,7 +6559,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from user GET handler")
 			}
 
-			user, err := selectUser(ctx, dbPool, input.User, ad)
+			user, err := selectUser(ctx, dbc.dbPool, input.User, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6521,7 +6594,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				user, err := createUser(ctx, dbPool, input.Body.Name, input.Body.Role, input.Body.Org, ad)
+				user, err := createUser(ctx, dbc, input.Body.Name, input.Body.Role, input.Body.Org, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -6549,7 +6622,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
 
-			_, err := setLocalPassword(ctx, logger, ad, dbPool, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			_, err := setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrBadOldPassword) {
 					return nil, huma.Error400BadRequest("old password is not correct")
@@ -6567,7 +6640,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from user PATCH handler")
 			}
 
-			user, err := updateUser(ctx, dbPool, ad, input.User, input.Body.Org, input.Body.Role)
+			user, err := updateUser(ctx, dbc, ad, input.User, input.Body.Org, input.Body.Role)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6591,7 +6664,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from user DELETE handler")
 			}
 
-			_, err := deleteUser(ctx, logger, dbPool, ad, input.User)
+			_, err := deleteUser(ctx, logger, dbc, ad, input.User)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound(userNotFound)
@@ -6614,7 +6687,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from orgs GET handler")
 			}
 
-			orgs, err := selectOrgs(ctx, dbPool, ad)
+			orgs, err := selectOrgs(ctx, dbc, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6640,7 +6713,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from organization GET handler")
 			}
 
-			org, err := selectOrg(ctx, dbPool, input.Org, ad)
+			org, err := selectOrg(ctx, dbc, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6667,7 +6740,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from organization client tokens GET handler")
 			}
 
-			safeOrgClientCredentials, err := selectSafeOrgClientCredentials(ctx, dbPool, input.Org, ad)
+			safeOrgClientCredentials, err := selectSafeOrgClientCredentials(ctx, dbc, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("organization client credentials not found")
@@ -6706,7 +6779,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
-				newOrgClientCred, err := insertOrgClientCredential(ctx, logger, dbPool, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, clientCredAEAD)
+				newOrgClientCred, err := insertOrgClientCredential(ctx, logger, dbc, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, clientCredAEAD)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -6737,7 +6810,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from org client-credentials DELETE handler")
 			}
 
-			_, err := deleteOrgClientCredential(ctx, logger, dbPool, clientCredAEAD, ad, kcClientManager, input.Org, input.ClientCredential)
+			_, err := deleteOrgClientCredential(ctx, logger, dbc, clientCredAEAD, ad, kcClientManager, input.Org, input.ClientCredential)
 			if err != nil {
 				logger.Err(err).Msg("unable to delete client-credential")
 				switch {
@@ -6762,7 +6835,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from domains GET handler")
 			}
 
-			domains, err := selectDomains(ctx, dbPool, ad, input.Org)
+			domains, err := selectDomains(ctx, dbc, ad, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6788,7 +6861,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from domain DELETE handler")
 			}
 
-			_, err := deleteDomain(ctx, logger, dbPool, ad, input.Domain)
+			_, err := deleteDomain(ctx, logger, dbc, ad, input.Domain)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("domain not found")
@@ -6834,7 +6907,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from organization POST handler: %w")
 				}
 
-				domain, err := insertDomain(ctx, logger, dbPool, input.Body.Name, &input.Org, ad)
+				domain, err := insertDomain(ctx, logger, dbc, input.Body.Name, &input.Org, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -6865,7 +6938,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from services GET handler")
 			}
 
-			oAddrs, err := selectServiceIPs(ctx, dbPool, input.Service, input.Org, ad)
+			oAddrs, err := selectServiceIPs(ctx, dbc, input.Service, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -6904,7 +6977,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from organization POST handler: %w")
 				}
 
-				id, err := insertOrg(dbPool, input.Body.Name, ad)
+				id, err := insertOrg(ctx, dbc, input.Body.Name, ad)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -6930,7 +7003,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from services GET handler")
 			}
 
-			services, err := selectServices(ctx, dbPool, ad, input.Org)
+			services, err := selectServices(ctx, dbc, ad, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to query for services")
@@ -6957,7 +7030,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from service GET handler")
 			}
 
-			services, err := selectService(ctx, dbPool, input.Org, input.Service, ad)
+			services, err := selectService(ctx, dbc, input.Org, input.Service, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("service not found")
@@ -6986,7 +7059,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from service DELETE handler")
 			}
 
-			_, err := deleteService(ctx, logger, dbPool, input.Org, input.Service, ad)
+			_, err := deleteService(ctx, logger, dbc, input.Org, input.Service, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("service not found")
@@ -7024,7 +7097,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from service POST handler")
 				}
 
-				id, err := insertService(ctx, logger, dbPool, input.Body.Name, &input.Body.Org, ad)
+				id, err := insertService(ctx, logger, dbc, input.Body.Name, &input.Body.Org, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -7058,7 +7131,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
 
-			serviceVersions, err := selectServiceVersions(ctx, dbPool, ad, input.Service, input.Org)
+			serviceVersions, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7104,7 +7177,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbPool, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
+				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -7154,7 +7227,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, huma.Error422UnprocessableEntity("active must be true")
 			}
 
-			err := activateServiceVersion(ctx, logger, ad, dbPool, input.Org, input.Service, input.Version)
+			err := activateServiceVersion(ctx, logger, ad, dbc, input.Org, input.Service, input.Version)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
@@ -7180,7 +7253,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
 
-			svc, err := getServiceVersionConfig(ctx, dbPool, ad, input.Org, input.Service, input.Version)
+			svc, err := getServiceVersionConfig(ctx, dbc, ad, input.Org, input.Service, input.Version)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7225,7 +7298,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from origin-groups GET handler")
 			}
 
-			originGroups, err := selectOriginGroups(ctx, dbPool, ad, input.Service, input.Org)
+			originGroups, err := selectOriginGroups(ctx, dbc, ad, input.Service, input.Org)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7268,7 +7341,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from origin group POST handler")
 				}
 
-				originGroup, err := insertOriginGroup(ctx, logger, ad, dbPool, input.Service, input.Org, input.Body.Name)
+				originGroup, err := insertOriginGroup(ctx, logger, ad, dbc, input.Service, input.Org, input.Body.Name)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -7298,7 +7371,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from cache-node-configs GET handler")
 			}
 
-			cnc, err := selectCacheNodeConfig(ctx, dbPool, ad, confTemplates, input.CacheNode)
+			cnc, err := selectCacheNodeConfig(ctx, dbc, ad, confTemplates, input.CacheNode)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7328,7 +7401,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from l4lb-node-configs GET handler")
 			}
 
-			lnc, err := selectL4LBNodeConfig(ctx, dbPool, ad, input.L4LBNode)
+			lnc, err := selectL4LBNodeConfig(ctx, dbc, ad, input.L4LBNode)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7368,7 +7441,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				}
 			}
 
-			networks, err := selectNetworks(ctx, dbPool, ad, family)
+			networks, err := selectNetworks(ctx, dbc, ad, family)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -7406,7 +7479,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from networks POST handler")
 				}
 
-				ipNet, err := insertNetwork(dbPool, input.Body.Network, ad)
+				ipNet, err := insertNetwork(ctx, dbc, input.Body.Network, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
@@ -7434,7 +7507,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from cache-nodes GET handler")
 			}
 
-			cacheNodes, err := selectCacheNodes(ctx, dbPool, ad)
+			cacheNodes, err := selectCacheNodes(ctx, dbc, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -7480,7 +7553,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					addresses = append(addresses, netip.Addr(address))
 				}
 
-				cacheNode, err := createCacheNode(dbPool, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
+				cacheNode, err := createCacheNode(ctx, dbc, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -7506,7 +7579,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from cache-nodes maintenance PUT handler")
 			}
 
-			err := setCacheNodeMaintenance(ctx, ad, dbPool, input.CacheNode, input.Body.Maintenance)
+			err := setCacheNodeMaintenance(ctx, ad, dbc, input.CacheNode, input.Body.Maintenance)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to modify resource")
@@ -7528,7 +7601,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from cache-nodes node group PUT handler")
 			}
 
-			err := setCacheNodeGroup(ctx, ad, dbPool, input.L4LBNode, input.Body.NodeGroup)
+			err := setCacheNodeGroup(ctx, ad, dbc, input.L4LBNode, input.Body.NodeGroup)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7549,7 +7622,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from l4lb-nodes GET handler")
 			}
 
-			l4lbNodes, err := selectL4LBNodes(ctx, dbPool, ad)
+			l4lbNodes, err := selectL4LBNodes(ctx, dbc, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -7595,7 +7668,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					addresses = append(addresses, netip.Addr(address))
 				}
 
-				l4lbNode, err := createL4LBNode(dbPool, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
+				l4lbNode, err := createL4LBNode(ctx, dbc, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
 					if errors.Is(err, cdnerrors.ErrForbidden) {
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
@@ -7621,7 +7694,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from l4lb-nodes maintenance PUT handler")
 			}
 
-			err := setL4LBNodeMaintenance(ctx, ad, dbPool, input.L4LBNode, input.Body.Maintenance)
+			err := setL4LBNodeMaintenance(ctx, ad, dbc, input.L4LBNode, input.Body.Maintenance)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to modify resource")
@@ -7643,7 +7716,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from l4lb-nodes node group PUT handler")
 			}
 
-			err := setL4LBNodeGroup(ctx, ad, dbPool, input.L4LBNode, input.Body.NodeGroup)
+			err := setL4LBNodeGroup(ctx, ad, dbc, input.L4LBNode, input.Body.NodeGroup)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7665,7 +7738,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 				return nil, errors.New("unable to read auth data from node-groups GET handler")
 			}
 
-			nodeGroups, err := selectNodeGroups(ctx, dbPool, ad)
+			nodeGroups, err := selectNodeGroups(ctx, dbc, ad)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7705,7 +7778,7 @@ func setupHumaAPI(router chi.Router, dbPool *pgxpool.Pool, argon2Mutex *sync.Mut
 					return nil, errors.New("unable to read auth data from node group POST handler")
 				}
 
-				nodeGroup, err := insertNodeGroup(logger, ad, dbPool, input.Body.Name, input.Body.Description)
+				nodeGroup, err := insertNodeGroup(ctx, logger, ad, dbc, input.Body.Name, input.Body.Description)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -7988,13 +8061,18 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to run migrations: %w", err)
 	}
 
-	dbPool, err := pgxpool.NewWithConfig(context.Background(), pgConfig)
+	initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer initCancel()
+
+	dbPool, err := pgxpool.NewWithConfig(initCtx, pgConfig)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
 
-	// We get away with a local version of the argon2 mutex here because Init() is only called when first initializing the database, so there is no possibility of concurrent calls to argon2 calculations.
+	// We get away with a local version of the argon2 mutex here because
+	// Init() is only called when first initializing the database, so there
+	// is no possibility of concurrent calls to argon2 calculations.
 	var initArgon2Mutex sync.Mutex
 
 	a2Data, err := passwordToArgon2(&initArgon2Mutex, password)
@@ -8025,10 +8103,10 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		}
 	}
 
-	err = pgx.BeginFunc(context.Background(), dbPool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(initCtx, dbPool, func(tx pgx.Tx) error {
 		// Verify there are no roles present
 		var rolesExists bool
-		err := tx.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
+		err := tx.QueryRow(initCtx, "SELECT EXISTS(SELECT 1 FROM roles)").Scan(&rolesExists)
 		if err != nil {
 			return fmt.Errorf("checking if there are any roles failed: %w", err)
 		}
@@ -8041,19 +8119,19 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		// roles there are no users either. So now we can create an initial
 		// admin role and user.
 		var adminRoleID pgtype.UUID
-		err = tx.QueryRow(context.Background(), "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&adminRoleID)
+		err = tx.QueryRow(initCtx, "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&adminRoleID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
 		}
 
 		// Add role used by ordinary users
-		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "user")
+		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", "user")
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user role '%s': %w", u.Role, err)
 		}
 
 		// Add role used by cache and l4lb nodes to fetch config
-		_, err = tx.Exec(context.Background(), "INSERT INTO roles (name) VALUES ($1)", "node")
+		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", "node")
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial node role '%s': %w", u.Role, err)
 		}
@@ -8061,7 +8139,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		var localAuthProviderID pgtype.UUID
 		for _, authProviderName := range authProviderNames {
 			var authProviderID pgtype.UUID
-			err = tx.QueryRow(context.Background(), "INSERT INTO auth_providers (name) VALUES ($1) RETURNING id", authProviderName).Scan(&authProviderID)
+			err = tx.QueryRow(initCtx, "INSERT INTO auth_providers (name) VALUES ($1) RETURNING id", authProviderName).Scan(&authProviderID)
 			if err != nil {
 				return fmt.Errorf("unable to INSERT auth provider '%s': %w", authProviderName, err)
 			}
@@ -8070,19 +8148,19 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			}
 		}
 
-		userID, err := insertUserTx(tx, u.Name, nil, adminRoleID, localAuthProviderID)
+		userID, err := insertUserTx(initCtx, tx, u.Name, nil, adminRoleID, localAuthProviderID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user: %w", err)
 		}
 
-		_, err = upsertArgon2Tx(tx, userID, a2Data)
+		_, err = upsertArgon2Tx(initCtx, tx, userID, a2Data)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user password: %w", err)
 		}
 
 		u.ID = userID
 
-		_, err = insertGorillaSessionKey(tx, gorillaSessionAuthKey, gorillaSessionEncKey)
+		_, err = insertGorillaSessionKey(initCtx, tx, gorillaSessionAuthKey, gorillaSessionEncKey)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user session key: %w", err)
 		}
@@ -8107,12 +8185,12 @@ func generateRandomKey(length int) ([]byte, error) {
 	return b, nil
 }
 
-func insertGorillaSessionKey(tx pgx.Tx, authKey []byte, encKey []byte) (pgtype.UUID, error) {
+func insertGorillaSessionKey(ctx context.Context, tx pgx.Tx, authKey []byte, encKey []byte) (pgtype.UUID, error) {
 	var sessionKeyID pgtype.UUID
 
 	// key_order is either the current max key_order value + 1 or 0 if no rows exist
 	err := tx.QueryRow(
-		context.Background(),
+		ctx,
 		"INSERT INTO gorilla_session_keys (auth_key, enc_key, key_order) SELECT $1, $2, COALESCE(MAX(key_order)+1,0) FROM gorilla_session_keys RETURNING id",
 		authKey,
 		encKey,
@@ -8375,6 +8453,29 @@ func newKeycloakClientManager(logger zerolog.Logger, baseURL *url.URL, realm str
 	}
 }
 
+type dbConn struct {
+	dbPool       *pgxpool.Pool
+	queryTimeout time.Duration
+}
+
+func newDBConn(dbPool *pgxpool.Pool, queryTimeout time.Duration) (*dbConn, error) {
+	if dbPool == nil {
+		return nil, errors.New("dbPool must not be nil")
+	}
+
+	return &dbConn{
+		dbPool:       dbPool,
+		queryTimeout: queryTimeout,
+	}, nil
+}
+
+// detachedContext is used in functions that want to modify the database. We
+// give such functions a chance to complete the database requests instead of
+// instantly getting cancelled in case the server is told to shut down.
+func (dbc *dbConn) detachedContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), dbc.queryTimeout)
+}
+
 func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	// runCtx is the main context relating to the running of the server
 	// process. It will be cancelled when told to stop via signals.
@@ -8483,7 +8584,12 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to create LRU login cache: %w", err)
 	}
 
-	router := newChiRouter(conf, logger, dbPool, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
+	dbc, err := newDBConn(dbPool, conf.DB.QueryTimeout)
+	if err != nil {
+		return fmt.Errorf("unable to create db conn struct: %w", err)
+	}
+
+	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
 
 	// Fetch openid-configuration from keycloak manually (even if already
 	// done by oidc.NewProvider() above) because the struct returned by
@@ -8519,7 +8625,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to create client cred AEAD: %w", err)
 	}
 
-	err = setupHumaAPI(router, dbPool, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD)
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
@@ -8555,7 +8661,7 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		Addr:         conf.Server.Addr,
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: conf.DB.QueryTimeout + 5*time.Second,
 		ErrorLog:     log.New(&zerologErrorWriter{&logger}, "", 0),
 	}
 
@@ -8567,9 +8673,14 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 
 		logger.Info().Msgf("sleeping for %s then calling Shutdown()", shutdownDelay)
 		time.Sleep(shutdownDelay)
-		if err := srv.Shutdown(context.Background()); err != nil {
+
+		// Do not wait indefinitely for shutdown
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer shutdownCancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
 			// Error from closing listeners, or context timeout:
-			logger.Err(err).Msg("HTTP server Shutdown failure")
+			logger.Err(err).Msg("HTTP server Shutdown() failure")
 		}
 		close(idleConnsClosed)
 	}(runCtx, logger, shutdownDelay)
