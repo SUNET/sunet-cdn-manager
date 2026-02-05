@@ -2253,6 +2253,8 @@ type argon2Settings struct {
 	argonTagSize uint32
 }
 
+// Keep in mind that if you change these values existing encryption keys
+// derived from these settings will not match anymore.
 func newArgon2DefaultSettings() argon2Settings {
 	argon2Settings := argon2Settings{}
 	// https://datatracker.ietf.org/doc/rfc9106/
@@ -2686,12 +2688,14 @@ func getClientCredEncryptionKey(conf config.Config) ([]byte, error) {
 		return nil, fmt.Errorf("getClientCredEncryptionKey: cannot decode salt hex: %w", err)
 	}
 
+	argon2Settings := newArgon2DefaultSettings()
+
 	return argon2.IDKey(
 		[]byte(conf.KeycloakClientAdmin.EncryptionKey),
 		salt,
-		conf.KeycloakClientAdmin.Argon2Time,
-		conf.KeycloakClientAdmin.Argon2Memory,
-		conf.KeycloakClientAdmin.Argon2Threads,
+		argon2Settings.argonTime,
+		argon2Settings.argonMemory,
+		argon2Settings.argonThreads,
 		chacha20poly1305.KeySize,
 	), nil
 }
