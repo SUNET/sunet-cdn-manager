@@ -6495,11 +6495,13 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD) error {
+func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD, serverURL *url.URL) error {
+	apiURL := serverURL.JoinPath("api")
+
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
 		config.Servers = []*huma.Server{
-			{URL: "https://manager.cdn.example.se/api"},
+			{URL: apiURL.String()},
 		}
 
 		config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
@@ -8629,7 +8631,12 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to create client cred AEAD: %w", err)
 	}
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD)
+	serverURL, err := url.Parse(conf.Server.URL)
+	if err != nil {
+		return fmt.Errorf("unable to parse server URL '%s': %w", conf.Server.URL, err)
+	}
+
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD, serverURL)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
