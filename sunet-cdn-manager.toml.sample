@@ -1,4 +1,5 @@
 [server]
+url = "https://manager.sunet-cdn.localhost:8444"
 addr = "127.0.0.1:8444"
 vcl_validation_url = "http://localhost:8888/validate-vcl"
 

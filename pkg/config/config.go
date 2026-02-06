@@ -27,6 +27,7 @@ type Config struct {
 }
 
 type serverSettings struct {
+	URL              string `validate:"required,https_url"`
 	Addr             string `validate:"required"`
 	VCLValidationURL string `mapstructure:"vcl_validation_url" validate:"required"`
 }

@@ -540,12 +540,19 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create client cred AEAD: %v", err)
 	}
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD)
+	ts := httptest.NewUnstartedServer(router)
+
+	serverURL, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatalf("unable to parse testserver URL: %v", err)
+	}
+
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD, serverURL)
 	if err != nil {
 		return nil, dbPool, err
 	}
 
-	ts := httptest.NewServer(router)
+	ts.Start()
 
 	return ts, dbPool, nil
 }
