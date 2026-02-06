@@ -28,7 +28,7 @@ export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
 
 Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
 (specifically for running
-[sunet-vcl-validator](https://github.com/SUNET/sunet-vcl-validator)). This
+[sunet-vcl-validator](https://github.com/SUNET/sunet-vcl-validator) and keycloak). This
 means you also need to be able to run containers for these tests to work.
 
 ### Setting up a local dev enviroment
