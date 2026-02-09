@@ -68,6 +68,8 @@ templ Dashboard(dashData cdntypes.DashboardData) {
 				<p>Domain quota: { dashData.DomainUsed }/{ dashData.DomainQuota }</p>
 				<p>Service quota: { dashData.ServiceUsed }/{ dashData.ServiceQuota }</p>
 				<p>Org API token quota: { dashData.ClientCredsUsed }/{ dashData.ClientCredsQuota }</p>
+			} else {
+				<p>This is the root dashboard, select an organization from the sidebar to manage a given org.</p>
 			}
 		}
 	</div>

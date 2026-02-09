@@ -498,8 +498,14 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 
 		dashData, err := getOrgDashboardData(ctx, dbc, ad, orgIdent)
 		if err != nil {
-			logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up dashboard data failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("consoleOrgDashboardHandler: forbidden from looking up dashboard data")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			default:
+				logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up dashboard data failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
