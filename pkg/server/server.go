@@ -298,7 +298,7 @@ func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 		}
 
 		if ad.Superuser {
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -314,7 +314,7 @@ func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belonging to an organization")
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(*ad.Username, false))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(cdntypes.DashboardData{ResourceAccess: false}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page for user without access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -405,6 +405,61 @@ func (*strictFetchMetadataMiddleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
+func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, org orgIdentifier) (cdntypes.DashboardData, error) {
+	var serviceQuota, servicesUsed, domainQuota, domainsUsed, clientTokenQuota, clientTokensUsed int64
+
+	// Must be either superuser or a member of an org
+	if !ad.Superuser && ad.OrgID == nil {
+		return cdntypes.DashboardData{}, cdnerrors.ErrForbidden
+	}
+
+	// If not a superuser make sure the org membership matches the queried org
+	if !ad.Superuser && *ad.OrgID != org.id {
+		return cdntypes.DashboardData{}, cdnerrors.ErrForbidden
+	}
+
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		err := tx.QueryRow(
+			ctx,
+			`SELECT
+			   orgs.service_quota,
+			   (SELECT COUNT(*) FROM services WHERE services.org_id = orgs.id),
+			   orgs.domain_quota,
+			   (SELECT COUNT(*) FROM domains WHERE domains.org_id = orgs.id),
+			   orgs.client_token_quota,
+			   (SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_keycloak_client_credentials.org_id = orgs.id)
+			 FROM orgs WHERE id=$1`,
+			org.id,
+		).Scan(
+			&serviceQuota,
+			&servicesUsed,
+			&domainQuota,
+			&domainsUsed,
+			&clientTokenQuota,
+			&clientTokensUsed,
+		)
+		if err != nil {
+			return fmt.Errorf("unable to get quota usage: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.DashboardData{}, fmt.Errorf("getOrgDashboardData transaction failed: %w", err)
+	}
+
+	return cdntypes.DashboardData{
+		ResourceAccess:   true,
+		OrgDashboard:     true,
+		ServiceUsed:      servicesUsed,
+		ServiceQuota:     serviceQuota,
+		DomainUsed:       domainsUsed,
+		DomainQuota:      domainQuota,
+		ClientCredsUsed:  clientTokensUsed,
+		ClientCredsQuota: clientTokenQuota,
+	}, nil
+}
+
 func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -441,8 +496,15 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			return
 		}
 
+		dashData, err := getOrgDashboardData(ctx, dbc, ad, orgIdent)
+		if err != nil {
+			logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up dashboard data failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		if ad.Superuser {
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -454,7 +516,7 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				http.Error(w, "invalid organization name", http.StatusForbidden)
 				return
 			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, true))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -462,7 +524,7 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			}
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belongs to an org")
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(*ad.Username, false))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

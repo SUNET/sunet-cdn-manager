@@ -319,3 +319,14 @@ func (ds DomainString) String() string {
 // Organization names must be a valid DNS label so this is can not collide
 // with a real name.
 const OrgNotSelected = "-- not selected --"
+
+type DashboardData struct {
+	ResourceAccess   bool
+	OrgDashboard     bool
+	ServiceQuota     int64
+	ServiceUsed      int64
+	DomainQuota      int64
+	DomainUsed       int64
+	ClientCredsQuota int64
+	ClientCredsUsed  int64
+}

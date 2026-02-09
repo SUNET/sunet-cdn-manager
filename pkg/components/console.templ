@@ -59,11 +59,16 @@ templ picoCssLinks() {
 	<link rel="stylesheet" href="/css/pico-settings.css"/>
 }
 
-templ Dashboard(username string, resourceAccess bool) {
+templ Dashboard(dashData cdntypes.DashboardData) {
 	<div>
-		<p>Hello { username }!</p>
-		if !resourceAccess {
+		if !dashData.ResourceAccess {
 			<p>You do not have access to any resources</p>
+		} else {
+			if dashData.OrgDashboard {
+				<p>Domain quota: { dashData.DomainUsed }/{ dashData.DomainQuota }</p>
+				<p>Service quota: { dashData.ServiceUsed }/{ dashData.ServiceQuota }</p>
+				<p>Org API token quota: { dashData.ClientCredsUsed }/{ dashData.ClientCredsQuota }</p>
+			}
 		}
 	</div>
 }
