@@ -176,11 +176,14 @@ func NewVclStepKeys() VclStepKeys {
 	return vclSK
 }
 
-// Helper function to convert the VclSteps struct to a map for dynamic lookups at runtime
-func VclStepsToMap(vclSteps VclSteps) map[string]string {
+// VclStepsToMap is a helper function to convert the VclSteps struct to a map
+// for dynamic lookups at runtime, also returns order of keys to keep this in
+// sync with the struct.
+func VclStepsToMap(vclSteps VclSteps) (map[string]string, []string) {
 	vclSK := NewVclStepKeys()
 
 	vclKeyToConf := map[string]string{}
+	keyOrder := []string{}
 
 	// Loop over all VCL step fields, and if they are non-nil and not empty string add them to map
 	val := reflect.ValueOf(&vclSteps)
@@ -191,12 +194,13 @@ func VclStepsToMap(vclSteps VclSteps) map[string]string {
 			if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
 				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
 					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
+					keyOrder = append(keyOrder, vclSK.FieldToKey[field.Name])
 				}
 			}
 		}
 	}
 
-	return vclKeyToConf
+	return vclKeyToConf, keyOrder
 }
 
 // Used to turn e.g. "VclRecv" or "VCLRecv" into "vcl_recv"
