@@ -1321,9 +1321,9 @@ func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 			return
 		}
 
-		vclKeyToConf := cdntypes.VclStepsToMap(svc.VclSteps)
+		vclKeyToConf, keyOrder := cdntypes.VclStepsToMap(svc.VclSteps)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf))
+		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf, keyOrder))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service version page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

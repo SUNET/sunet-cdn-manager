@@ -262,46 +262,92 @@ templ CreateServiceContent(orgName string, err error) {
 	}
 }
 
-templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string) {
-	<table>
-		<tr>
-			<th>ID</th>
-			<th>Service ID</th>
-			<th>Version</th>
-			<th>Active</th>
-			for k := range vclKeyToConf {
-				<th>{ k }</th>
-			}
-			<th>Origins</th>
-			<th>Domains</th>
-		</tr>
-		<tr>
-			<td>{ sv.ID.String() }</td>
-			<td>{ sv.ServiceID.String() }</td>
-			<td>{ strconv.FormatInt(sv.Version, 10) }</td>
-			<td>{ strconv.FormatBool(sv.Active) }</td>
-			for _, conf := range vclKeyToConf {
-				<td>{ conf }</td>
-			}
-			<td>
+templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string, vclKeyOrder []string) {
+	<article>
+		<header>
+			<strong>Version details</strong>
+		</header>
+		<table>
+			<tr>
+				<th scope="row">Version</th>
+				<td>{ strconv.FormatInt(sv.Version, 10) }</td>
+			</tr>
+			<tr>
+				<th scope="row">Active</th>
+				<td>
+					if sv.Active {
+						<span aria-hidden="true">✅ </span>Yes
+					} else {
+						<span aria-hidden="true">❌ </span>No
+					}
+				</td>
+			</tr>
+		</table>
+	</article>
+	<article>
+		<header>
+			<strong>Origins</strong>
+		</header>
+		if len(sv.Origins) == 0 {
+			<p>No origins configured</p>
+		} else {
+			<table>
+				<tr>
+					<th scope="col">Host</th>
+					<th scope="col">Port</th>
+					<th scope="col">TLS</th>
+					<th scope="col">Verify TLS</th>
+				</tr>
 				for _, origin := range sv.Origins {
-					<ul>
-						<li>Host: { origin.Host }</li>
-						<li>Port: { strconv.Itoa(origin.Port) }</li>
-						<li>TLS: { strconv.FormatBool(origin.TLS) }</li>
-						<li>Verify TLS: { strconv.FormatBool(origin.VerifyTLS) }</li>
-					</ul>
+					<tr>
+						<td>{ origin.Host }</td>
+						<td>{ strconv.Itoa(origin.Port) }</td>
+						<td>
+							if origin.TLS {
+								<span aria-hidden="true">✅ </span>Enabled
+							} else {
+								<span aria-hidden="true">❌ </span>Disabled
+							}
+						</td>
+						<td>
+							if origin.VerifyTLS {
+								<span aria-hidden="true">✅ </span>Enabled
+							} else {
+								<span aria-hidden="true">❌ </span>Disabled
+							}
+						</td>
+					</tr>
 				}
-			</td>
-			<td>
+			</table>
+		}
+	</article>
+	<article>
+		<header>
+			<strong>Domains</strong>
+		</header>
+		if len(sv.Domains) == 0 {
+			<p>No domains configured</p>
+		} else {
+			<ul>
 				for _, domain := range sv.Domains {
-					<ul>
-						<li>Domain: { domain.String() }</li>
-					</ul>
+					<li>{ domain.String() }</li>
 				}
-			</td>
-		</tr>
-	</table>
+			</ul>
+		}
+	</article>
+	if len(vclKeyToConf) != 0 {
+		<article>
+			<header>
+				<strong>VCL configuration</strong>
+			</header>
+			for _, k := range vclKeyOrder {
+				<details>
+					<summary>{ k }</summary>
+					<pre><code>{ vclKeyToConf[k] }</code></pre>
+				</details>
+			}
+		</article>
+	}
 }
 
 templ OriginFieldSet(orgName string, serviceName string, index int, numFields int, submittedOrigin *cdntypes.CreateServiceVersionOrigin, cloneOrigin cdntypes.Origin, originGroups []cdntypes.OriginGroup, htmxRequest bool) {
@@ -514,9 +560,9 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 		{{
 			var vclStepsMap map[string]string
 			if submittedData != nil {
-				vclStepsMap = cdntypes.VclStepsToMap(submittedData.VclSteps)
+				vclStepsMap, _ = cdntypes.VclStepsToMap(submittedData.VclSteps)
 			} else {
-				vclStepsMap = cdntypes.VclStepsToMap(cloneData.VclSteps)
+				vclStepsMap, _ = cdntypes.VclStepsToMap(cloneData.VclSteps)
 			}
 		}}
 		<article>

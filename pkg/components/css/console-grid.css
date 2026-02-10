@@ -29,7 +29,7 @@ The goal is:
 	height: 100vh;
 }
 
-header {
+.console-grid > header {
 	grid-area: header;
 	background: var(--sunet-orange);
 	padding-top: var(--space-medium);
@@ -45,7 +45,7 @@ header {
 	place-self: self-end;
 }
 
-header a {
+.console-grid > header a {
 	color: var(--header-color);
 	text-decoration-color: var(--header-color);
 }
