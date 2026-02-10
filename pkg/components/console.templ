@@ -133,9 +133,9 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 				<tr>
 					<td>{ domain.Name }</td>
 					if domain.Verified {
-						<td>✅</td>
+						<td><span aria-hidden="true">✅ </span>Yes</td>
 					} else {
-						<td>⏳</td>
+						<td><span aria-hidden="true">⏳ </span>In progress</td>
 					}
 					<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
 					<td>
