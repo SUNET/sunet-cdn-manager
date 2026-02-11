@@ -79,11 +79,13 @@ var templateFS embed.FS
 
 // Keys used for flash message storing
 var flashMessageKeys = struct {
-	domains  string
-	services string
+	apiTokens string
+	domains   string
+	services  string
 }{
-	domains:  "_flash_domains",
-	services: "_flash_services",
+	apiTokens: "_flash_api_tokens",
+	domains:   "_flash_domains",
+	services:  "_flash_services",
 }
 
 const (
@@ -95,8 +97,9 @@ const (
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
 
-	consolePath  = "/console"
-	api403String = "not allowed to access resource"
+	consolePath                 = "/console"
+	api403String                = "not allowed to access resource"
+	consoleNeedOrgMembershipMsg = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
 	sunetTxtTag       = "sunet-cdn-verification"
@@ -579,7 +582,7 @@ func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("domains console: not authorized to view page")
-				http.Error(w, "not allowed to view this page, you need to be a member of an organization", http.StatusForbidden)
+				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
 				return
 			}
 			logger.Err(err).Msg("domains console: database lookup failed")
@@ -690,6 +693,296 @@ func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 	}
 }
 
+func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(cdntypes.AuthData)
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgClientCreds, err := selectSafeOrgClientCredentials(ctx, dbc, orgName, ad)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden), errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("api tokens console: not authorized to view page")
+				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
+			default:
+				logger.Err(err).Msg("api tokens console: database lookup failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		// If someone has been redirected from api token creation we will
+		// have a flash message to tell the user so.
+		flashMessages := session.Flashes(flashMessageKeys.apiTokens)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("consoleAPITokensHandler: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, "API Tokens", orgName, components.APITokensContent(orgName, orgClientCreds, flashMessageStrings, tokenURL, serverURL))
+		if err != nil {
+			logger.Err(err).Msg("unable to render api-tokens page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(cdntypes.AuthData)
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg("console: missing org name in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleAPITokenDeleteHandler: db request for looking up orgName failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil {
+				logger.Error().Msg("consoleAPITokenDeleteHandler: user is not superuser and not member of any org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			} else if *ad.OrgName != orgIdent.name {
+				logger.Error().Msg("consoleAPITokenDeleteHandler: user is not superuser and not member of the matching org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+		}
+
+		apiTokenName := chi.URLParam(r, "api-token")
+		if apiTokenName == "" {
+			logger.Error().Msg("console: missing api-token name in URL")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEAD, ad, kccm, orgName, apiTokenName)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("api-tokens console: not authorized to delete API token")
+				http.Error(w, "not allowed to delete api-token", http.StatusForbidden)
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("api-tokens console: API token not found")
+				http.Error(w, "api-token not found", http.StatusNotFound)
+			default:
+				logger.Err(err).Msg("API token console: API token deletion failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("API token '%s' deleted!", apiTokenName), flashMessageKeys.apiTokens)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		// Use StatusSeeOther (303) here to make htmx hx-delete AJAX
+		// request replace original DELETE method with GET when
+		// following the redirect.
+		redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "api-tokens")
+		if err != nil {
+			logger.Err(err).Msg("api-tokens console: unable to create redirect URL")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		validatedRedirect(redirectURL, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		title := "Add API token"
+
+		session := getSession(r, cookieStore)
+
+		adRef, ok := session.Values["ad"]
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad := adRef.(cdntypes.AuthData)
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("db request for looking up orgName failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil {
+				logger.Error().Msg("consoleCreateAPITokenHandler: not member of org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+			if *ad.OrgName != orgIdent.name {
+				logger.Error().Msg("consoleCreateAPITokenHandler: not member of correct org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateAPITokenContent(orgIdent.name, components.APITokenData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render api-token creation page in GET")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			err := r.ParseForm()
+			if err != nil {
+				logger.Err(err).Msg("unable to parse create-api-token POST form")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := createAPITokenForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-api-token form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			apiTokenData := components.APITokenData{
+				APITokenFormFields: components.APITokenFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						if fieldError.Tag() == "dns_rfc1035_label" {
+							apiTokenData.Errors.Name = "not a valid DNS label"
+						} else {
+							apiTokenData.Errors.Name = fieldError.Error()
+						}
+					case "Description":
+						apiTokenData.Errors.Description = fieldError.Error()
+					}
+				}
+				logger.Err(err).Msg("unable to validate POST create-api-token form data")
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateAPITokenContent(orgIdent.name, apiTokenData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render api-token creation page in POST")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				return
+			}
+
+			newClientCred, err := insertOrgClientCredential(ctx, logger, dbc, formData.Name, formData.Description, orgIdent.name, ad, kccm, clientCredAEAD)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					apiTokenData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
+				} else {
+					logger.Err(err).Msg("unable to insert API token")
+					apiTokenData.Errors.ServerError = "unable to insert API token"
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateAPITokenContent(orgIdent.name, apiTokenData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render API token creation page after insert error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("API token '%s' added!", formData.Name), flashMessageKeys.apiTokens)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "api-tokens")
+			if err != nil {
+				logger.Err(err).Msg("consoleCreateAPITokenHandler: unable to create redirect URL")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.NewAPITokenContent(orgIdent.name, newClientCred, redirectURL))
+			if err != nil {
+				logger.Err(err).Msg("consoleCreateAPITokenHandler: unable to render new API token page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-api-token handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
 func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -780,7 +1073,7 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("services console: not authorized to view page")
-				http.Error(w, "not allowed to view this page, you need to be a member of an organization", http.StatusForbidden)
+				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
 				return
 			}
 			logger.Err(err).Msg("services console: database lookup failed")
@@ -1793,6 +2086,14 @@ type createDomainForm struct {
 	// Domain name length validation needs to be kept in sync with the CHECK
 	// constraints in the domains table, see the migrations module.
 	Name string `schema:"name" validate:"min=1,max=253,fqdn"`
+}
+
+type createAPITokenForm struct {
+	// API token name length validation needs to be kept in sync with the CHECK
+	// constraints in the org_keycloak_client_credentials table, see the
+	// migrations module.
+	Name        string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
+	Description string `schema:"description" validate:"min=1,max=255"`
 }
 
 type activateServiceVersionForm struct {
@@ -6312,7 +6613,7 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -6361,6 +6662,10 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Post("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
 		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
+		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, cookieStore, tokenURL, serverURL))
+		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEAD, kccm))
+		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, clientCredAEAD, kccm))
+		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, clientCredAEAD, kccm))
 		// htmx helpers
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
 		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
@@ -8663,8 +8968,6 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to create db conn struct: %w", err)
 	}
 
-	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode)
-
 	// Fetch openid-configuration from keycloak manually (even if already
 	// done by oidc.NewProvider() above) because the struct returned by
 	// provider.Endpoint() does not give access to the JwksURI that we need
@@ -8699,10 +9002,17 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to create client cred AEAD: %w", err)
 	}
 
+	parsedTokenURL, err := url.Parse(provider.Endpoint().TokenURL)
+	if err != nil {
+		return fmt.Errorf("unable to parse token URL: %w", err)
+	}
+
 	serverURL, err := url.Parse(conf.Server.URL)
 	if err != nil {
 		return fmt.Errorf("unable to parse server URL '%s': %w", conf.Server.URL, err)
 	}
+
+	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEAD, kcClientManager, parsedTokenURL, serverURL)
 
 	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD, serverURL)
 	if err != nil {

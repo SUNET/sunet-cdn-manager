@@ -517,8 +517,6 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create dbConn struct: %v", err)
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false)
-
 	a2Settings := newArgon2DefaultSettings()
 
 	salt, err := saltFromHex("36023a78c7d2000ac58604da1b630a9f")
@@ -540,12 +538,20 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create client cred AEAD: %v", err)
 	}
 
-	ts := httptest.NewUnstartedServer(router)
+	ts := httptest.NewUnstartedServer(nil)
 
-	serverURL, err := url.Parse(ts.URL)
+	// ts.URL is not filled in until ts.Start() is called, but we need the
+	// server URL to fill in the router we want to pass as the handler, so
+	// extract it manually here (the same way Start() fills in the URL
+	// field).
+	serverURL, err := url.Parse("http://" + ts.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("unable to parse testserver URL: %v", err)
 	}
+
+	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEAD, tsi.kcClientManager, &url.URL{}, serverURL)
+
+	ts.Config.Handler = router
 
 	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD, serverURL)
 	if err != nil {

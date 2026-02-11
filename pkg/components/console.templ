@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
+	"net/url"
 	"strconv"
 )
 
@@ -98,6 +99,7 @@ templ NavBar(ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
 						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s", orgName)) }>Dashboard</a></li>
 						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/domains", orgName)) }>Domains</a></li>
 						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) }>Services</a></li>
+						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/api-tokens", orgName)) }>API tokens</a></li>
 					}
 				</ul>
 			</nav>
@@ -152,7 +154,57 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 			}
 		</table>
 	}
-	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>Add domain</a>
+	<p>
+		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>Add domain</a>
+	</p>
+}
+
+templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCredentialSafe, flashMessages []string, tokenURL *url.URL, serverURL *url.URL) {
+	@flashMessagesComponent(flashMessages)
+	if len(orgClientCreds) == 0 {
+		<div>No API tokens added</div>
+	} else {
+		<table>
+			<tr>
+				<th>Name</th>
+				<th>Client ID</th>
+				<th>Actions</th>
+			</tr>
+			for _, orgClientCred := range orgClientCreds {
+				<tr>
+					<td>{ orgClientCred.Name }</td>
+					<td>{ orgClientCred.ClientID }</td>
+					<td>
+						<button
+							type="button"
+							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/api-tokens/%s", orgName, orgClientCred.Name))) }
+							hx-target="body"
+							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", orgClientCred.Name) }
+						>
+							Delete
+						</button>
+					</td>
+				</tr>
+			}
+		</table>
+	}
+	<p>
+		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) }>Add API token</a>
+	</p>
+	<div>
+		<p>To get an access token for use with the API:</p>
+		<pre>
+			<code>
+				{ tokenCurlCommand(tokenURL) }
+			</code>
+		</pre>
+		<p>To use the access token to list existing API tokens:</p>
+		<pre>
+			<code>
+				{ apiSampleCurlCommand(serverURL, orgName) }
+			</code>
+		</pre>
+	</div>
 }
 
 templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages []string) {
@@ -240,6 +292,47 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 		<span class="error">{ dData.Errors.Name }</span>
 		<button type="submit">Add domain</button>
 	</form>
+}
+
+templ CreateAPITokenContent(orgName string, atData APITokenData) {
+	<span class="error">{ atData.Errors.ServerError }</span>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) }>
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter API token name..." value={ atData.Name }/>
+		</label>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter a description..." value={ atData.Description }/>
+		</label>
+		<span class="error">{ atData.Errors.Name }</span>
+		<span class="error">{ atData.Errors.Description }</span>
+		<button type="submit">Add API token</button>
+	</form>
+}
+
+templ NewAPITokenContent(orgName string, newOrgCred cdntypes.NewOrgClientCredential, returnURL string) {
+	<article>
+		<header>Token "{ newOrgCred.Name }" created successfully</header>
+		<p>Client ID:</p>
+		<pre><code>{ newOrgCred.ClientID }</code></pre>
+		<p>Client secret (will only be shown once):</p>
+		<pre><code id="api-secret">{ newOrgCred.ClientSecret }</code></pre>
+		<button
+			_="on click
+              writeText(#api-secret's textContent) into the navigator's clipboard
+              then put 'Copied!' into me
+              then wait 2s
+              then put 'Copy Secret' into me"
+		>
+			Copy Secret
+		</button>
+		<footer>
+			<button hx-get={ returnURL } hx-target="body" class="secondary">
+				Done
+			</button>
+		</footer>
+	</article>
 }
 
 templ CreateServiceContent(orgName string, err error) {
