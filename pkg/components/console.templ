@@ -562,6 +562,21 @@ templ deleteOriginButton(index string, disabled bool) {
 }
 
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+	if err != nil {
+		<article id="error-message" aria-label="Error">
+			switch  {
+				case errors.Is(err, cdnerrors.ErrInvalidFormData):
+					<div><strong>Error:</strong> Invalid form data</div>
+				case errors.Is(err, cdnerrors.ErrInvalidVCL):
+					<header>
+						<strong>Error:</strong> Invalid VCL data
+					</header>
+					<pre>{ errDetails }</pre>
+				default:
+					<div><strong>Error:</strong> Service version creation failed</div>
+			}
+		</article>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>
 		<article>
 			<fieldset>
@@ -673,17 +688,6 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 		</article>
 		<button type="submit">Add service version</button>
 	</form>
-	if err != nil {
-		switch  {
-			case errors.Is(err, cdnerrors.ErrInvalidFormData):
-				<div>Invalid form data</div>
-			case errors.Is(err, cdnerrors.ErrInvalidVCL):
-				<div>Invalid VCL data</div>
-				<pre>{ errDetails }</pre>
-			default:
-				<div>Service version creation failed</div>
-		}
-	}
 }
 
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
