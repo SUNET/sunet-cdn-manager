@@ -751,7 +751,7 @@ func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tok
 	}
 }
 
-func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
+func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -800,7 +800,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 			return
 		}
 
-		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEAD, ad, kccm, orgName, apiTokenName)
+		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEADs, ad, kccm, orgName, apiTokenName)
 		if err != nil {
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
@@ -3047,26 +3047,34 @@ func upsertArgon2Tx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, a2Data a
 	return keyID, nil
 }
 
-func getClientCredEncryptionKey(conf config.Config) ([]byte, error) {
+func getClientCredEncryptionKeys(conf config.Config) ([][]byte, error) {
 	if len(conf.KeycloakClientAdmin.EncryptionSalt) != 32 {
-		return nil, errors.New("getClientCredEncryptionKey: client admin salt must be a 32-character hex string")
+		return nil, errors.New("getClientCredEncryptionKeys: client admin salt must be a 32-character hex string")
 	}
 
 	salt, err := saltFromHex(conf.KeycloakClientAdmin.EncryptionSalt)
 	if err != nil {
-		return nil, fmt.Errorf("getClientCredEncryptionKey: cannot decode salt hex: %w", err)
+		return nil, fmt.Errorf("getClientCredEncryptionKeys: cannot decode salt hex: %w", err)
 	}
 
 	argon2Settings := newArgon2DefaultSettings()
 
-	return argon2.IDKey(
-		[]byte(conf.KeycloakClientAdmin.EncryptionKey),
-		salt,
-		argon2Settings.argonTime,
-		argon2Settings.argonMemory,
-		argon2Settings.argonThreads,
-		chacha20poly1305.KeySize,
-	), nil
+	encKeys := [][]byte{}
+	for _, password := range conf.KeycloakClientAdmin.EncryptionPasswords {
+		encKeys = append(
+			encKeys,
+			argon2.IDKey(
+				[]byte(password),
+				salt,
+				argon2Settings.argonTime,
+				argon2Settings.argonMemory,
+				argon2Settings.argonThreads,
+				chacha20poly1305.KeySize,
+			),
+		)
+	}
+
+	return encKeys, nil
 }
 
 func saltFromHex(hexString string) ([]byte, error) {
@@ -4187,9 +4195,14 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	return nocd, nil
 }
 
-func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, clientCredAEAD cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
+func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, clientCredAEADs []cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
+	}
+
+	if len(clientCredAEADs) == 0 {
+		logger.Error().Msg("deleteOrgClientCredential: no client credential AEADs configured")
+		return pgtype.UUID{}, fmt.Errorf("no client credential AEADs configured")
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
@@ -4232,16 +4245,36 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 			return fmt.Errorf("unable to DELETE org client credential: %w", err)
 		}
 
-		if len(cryptRegistrationAccessToken) < clientCredAEAD.NonceSize() {
+		// Since we expect all AEADs to be of the same type, just compare nonce
+		// size of the first one even if it is not the one used for
+		// encrypting this specific ciphertext.
+		if len(cryptRegistrationAccessToken) < clientCredAEADs[0].NonceSize() {
 			return errors.New("deleteOrgClientCredential: ciphertext too short")
 		}
 
-		// Split nonce and ciphertext.
-		nonce, ciphertext := cryptRegistrationAccessToken[:clientCredAEAD.NonceSize()], cryptRegistrationAccessToken[clientCredAEAD.NonceSize():]
+		// Split nonce and ciphertext. Same here: all AEADs are the
+		// same type, so just use the first entry for fetching the
+		// nonce size
+		nonce, ciphertext := cryptRegistrationAccessToken[:clientCredAEADs[0].NonceSize()], cryptRegistrationAccessToken[clientCredAEADs[0].NonceSize():]
 
-		// Decrypt the message and check it wasn't tampered with.
-		registrationAccessToken, err := clientCredAEAD.Open(nil, nonce, ciphertext, orgClientCredentialID.Bytes[:])
-		if err != nil {
+		// Decrypt the message and check it wasn't tampered with potentially trying all configured encryption passwords.
+		var registrationAccessToken []byte
+		decryptionSuccessful := false
+
+		// We expect the last password in the encryption password list
+		// to be used for encrypting new values, so check the list
+		// backwards when doing decryption.
+		for i := len(clientCredAEADs) - 1; i >= 0; i-- {
+			registrationAccessToken, err = clientCredAEADs[i].Open(nil, nonce, ciphertext, orgClientCredentialID.Bytes[:])
+			if err != nil {
+				logger.Debug().Err(err).Int("key_offset", i).Msg("deleteOrgClientCredential: unable to decrypt registration access token with offset")
+				continue
+			}
+			decryptionSuccessful = true
+			break
+		}
+		if !decryptionSuccessful {
+			// We expect err to be set to the last err seen in decryption here
 			return fmt.Errorf("deleteOrgClientCredential: unable to decrypt registration access token: %w", err)
 		}
 
@@ -4262,6 +4295,130 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	}
 
 	return orgClientCredentialID, nil
+}
+
+func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, clientCredAEADs []cipher.AEAD) (cdntypes.OrgClientRegistrationTokenReEncryptResult, error) {
+	if !ad.Superuser {
+		return cdntypes.OrgClientRegistrationTokenReEncryptResult{}, cdnerrors.ErrForbidden
+	}
+
+	// We can only attempt reencryption if there is at least two encryption passwords in the config file
+	if len(clientCredAEADs) < 2 {
+		return cdntypes.OrgClientRegistrationTokenReEncryptResult{}, cdnerrors.ErrReEncryptionMissingPassword
+	}
+
+	// Use custom timeout here rather than calling dbc.detachedContext()
+	// since it might take longer
+	dbCtx, cancel := dbc.detachedContextWithDuration(ctx, time.Minute*2)
+	defer cancel()
+
+	// We use the last encryption password in the configuration file for
+	// encryption
+	encryptionClientCredAEAD := clientCredAEADs[len(clientCredAEADs)-1]
+
+	reEncryptRes := cdntypes.OrgClientRegistrationTokenReEncryptResult{}
+
+	startTime := time.Now()
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		// Fetch all registration access tokens and related id so we
+		// can attempt reencryption (the id is needed as well since we
+		// use that for additional data). Do FOR UPDATE to lock out
+		// concurrent modifications to the data until this transaction
+		// is complete.
+		var id pgtype.UUID
+		var cryptRegistrationAccessToken []byte
+		rows, err := tx.Query(dbCtx, "SELECT id, crypt_registration_access_token FROM org_keycloak_client_credentials FOR UPDATE")
+		if err != nil {
+			return fmt.Errorf("failed selecting encrypted registration tokens: %w", err)
+		}
+		_, err = pgx.ForEachRow(rows, []any{&id, &cryptRegistrationAccessToken}, func() error {
+			reEncryptRes.TotalTokens++
+
+			// Since we expect all AEADs to be of the same type, just compare nonce
+			// size of the first one even if it is not the one used for
+			// encrypting this specific ciphertext.
+			if len(cryptRegistrationAccessToken) < clientCredAEADs[0].NonceSize() {
+				logger.Error().
+					Str("id", id.String()).
+					Int("token_length", len(cryptRegistrationAccessToken)).
+					Int("required_nonce_size", clientCredAEADs[0].NonceSize()).
+					Msg("reEncryptOrgClientCredentials: cryptRegistrationAccessToken too short to contain nonce")
+				reEncryptRes.FailedTokens++
+				return nil
+			}
+
+			// Split nonce and ciphertext. Same here: all AEADs are the
+			// same type, so just use the first entry for fetching the
+			// nonce size
+			oldNonce, oldCiphertext := cryptRegistrationAccessToken[:clientCredAEADs[0].NonceSize()], cryptRegistrationAccessToken[clientCredAEADs[0].NonceSize():]
+
+			// As the goal is to reencrypt with the last password
+			// in the list, keep track of what offset that is so we
+			// can tell if a value is already encrypted with that
+			// one, in that case we do not need to encrypt again.
+			latestPasswordOffset := len(clientCredAEADs) - 1
+
+			// We expect the last password in the encryption password list
+			// to be used for encrypting new values, so check the list
+			// backwards when doing decryption to hopefully skip
+			// unnecessary decryption work.
+			decryptionSuccessful := false
+			var registrationAccessTokenBytes []byte
+			successfulOffset := 0
+			var lastErr error
+			for i := latestPasswordOffset; i >= 0; i-- {
+				registrationAccessTokenBytes, err = clientCredAEADs[i].Open(nil, oldNonce, oldCiphertext, id.Bytes[:])
+				if err != nil {
+					logger.Debug().Err(err).Str("id", id.String()).Int("password_offset", i).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token")
+					lastErr = err
+					continue
+				}
+				decryptionSuccessful = true
+				successfulOffset = i
+				break
+			}
+			if !decryptionSuccessful {
+				logger.Err(lastErr).Str("id", id.String()).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token with any available encryption passwords")
+				reEncryptRes.FailedTokens++
+				return nil
+			}
+
+			if successfulOffset == latestPasswordOffset {
+				logger.Info().Str("id", id.String()).Msg("token already encrypted with latest password")
+				reEncryptRes.SkippedTokens++
+				return nil
+			}
+
+			// Select a new random nonce so we dont accidentally reuse nonce+key more than once
+			newNonce := make([]byte, encryptionClientCredAEAD.NonceSize(), encryptionClientCredAEAD.NonceSize()+len(registrationAccessTokenBytes)+encryptionClientCredAEAD.Overhead())
+			if _, err := rand.Read(newNonce); err != nil {
+				return fmt.Errorf("unable to create new random nonce for client registration token re-encryption: %w", err)
+			}
+
+			newCryptRegistrationAccessToken := encryptionClientCredAEAD.Seal(newNonce, newNonce, registrationAccessTokenBytes, id.Bytes[:])
+
+			_, err = tx.Exec(dbCtx, "UPDATE org_keycloak_client_credentials SET crypt_registration_access_token = $1 WHERE id = $2", newCryptRegistrationAccessToken, id)
+			if err != nil {
+				return fmt.Errorf("unable to UPDATE org keycloak client token: %w", err)
+			}
+
+			reEncryptRes.UpdatedTokens++
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed iterating over registration tokens: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Err(err).Msg("reEncryptOrgClientCredentials transaction failed")
+		return cdntypes.OrgClientRegistrationTokenReEncryptResult{}, fmt.Errorf("reEncryptOrgClientCredentials transaction failed: %w", err)
+	}
+	reEncryptRes.Duration = time.Since(startTime)
+
+	return reEncryptRes, nil
 }
 
 func insertOrg(ctx context.Context, dbc *dbConn, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
@@ -6613,7 +6770,7 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 	}, nil
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -6641,6 +6798,9 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 	strictFetch := &strictFetchMetadataMiddleware{}
 	antiCSRF := http.NewCrossOriginProtection()
 
+	// We use the last configured encryption password for encrypting new values
+	encryptionClientCredAEAD := clientCredAEADs[len(clientCredAEADs)-1]
+
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
 		r.Use(strictFetch.Handler)
@@ -6663,9 +6823,9 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, cookieStore, tokenURL, serverURL))
-		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEAD, kccm))
-		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, clientCredAEAD, kccm))
-		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, clientCredAEAD, kccm))
+		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEADs, kccm))
+		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
+		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
 		// htmx helpers
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
 		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
@@ -6868,8 +7028,11 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEAD cipher.AEAD, serverURL *url.URL) error {
+func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEADs []cipher.AEAD, serverURL *url.URL) error {
 	apiURL := serverURL.JoinPath("api")
+
+	// Use the last available encryption password for encrypting new values
+	encryptionClientCredAEAD := clientCredAEADs[len(clientCredAEADs)-1]
 
 	router.Route("/api", func(r chi.Router) {
 		config := huma.DefaultConfig("SUNET CDN API", "0.0.1")
@@ -7158,7 +7321,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
-				newOrgClientCred, err := insertOrgClientCredential(ctx, logger, dbc, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, clientCredAEAD)
+				newOrgClientCred, err := insertOrgClientCredential(ctx, logger, dbc, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, encryptionClientCredAEAD)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -7177,6 +7340,48 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 		)
 
+		postReEncryptOrgClientRegistrationTokens := "/v1/re-encrypt-org-client-registration-tokens" // #nosec G101 -- Not a hardcoded credential
+		huma.Register(
+			api,
+			huma.Operation{
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postReEncryptOrgClientRegistrationTokens, &reEncryptOrgClientCredentialsOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postReEncryptOrgClientRegistrationTokens, &reEncryptOrgClientCredentialsOutput{}),
+				Method:        http.MethodPost,
+				Path:          postReEncryptOrgClientRegistrationTokens,
+				DefaultStatus: http.StatusOK,
+			},
+			func(ctx context.Context, _ *struct{},
+			) (*reEncryptOrgClientCredentialsOutput, error) {
+				logger := zlog.Ctx(ctx)
+
+				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+				if !ok {
+					return nil, errors.New("unable to read auth data for org client cred reg tokens re-encryption POST handler")
+				}
+
+				reEncryptRes, err := reEncryptOrgClientCredentials(ctx, logger, dbc, ad, clientCredAEADs)
+				if err != nil {
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
+						return nil, huma.Error403Forbidden("only superusers can re-encrypt client registration tokens")
+					case errors.Is(err, cdnerrors.ErrReEncryptionMissingPassword):
+						return nil, huma.Error500InternalServerError("must have at least two encryption passwords in server config")
+					}
+					logger.Err(err).Msg("unable to add re-encrypt client credential registration tokens")
+					return nil, err
+				}
+
+				if reEncryptRes.FailedTokens != 0 {
+					logger.Error().Int64("total", reEncryptRes.TotalTokens).Int64("updated", reEncryptRes.UpdatedTokens).Int64("skipped", reEncryptRes.SkippedTokens).Int64("failed", reEncryptRes.FailedTokens).Msg("at least one re-encryption attempt failed")
+					return nil, errors.New("at least one re-encryption failed, check logs")
+				}
+
+				resp := &reEncryptOrgClientCredentialsOutput{}
+				resp.Body = reEncryptRes
+				return resp, nil
+			},
+		)
+
 		huma.Delete(api, "/v1/orgs/{org}/client-credentials/{client-credential}", func(ctx context.Context, input *struct {
 			Org              string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 			ClientCredential string `path:"client-credential" example:"1" doc:"Client credentials ID or name" minLength:"1" maxLength:"63"`
@@ -7189,7 +7394,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from org client-credentials DELETE handler")
 			}
 
-			_, err := deleteOrgClientCredential(ctx, logger, dbc, clientCredAEAD, ad, kcClientManager, input.Org, input.ClientCredential)
+			_, err := deleteOrgClientCredential(ctx, logger, dbc, clientCredAEADs, ad, kcClientManager, input.Org, input.ClientCredential)
 			if err != nil {
 				logger.Err(err).Msg("unable to delete client-credential")
 				switch {
@@ -8305,6 +8510,10 @@ type newOrgClientCredentialOutput struct {
 	Body cdntypes.NewOrgClientCredential
 }
 
+type reEncryptOrgClientCredentialsOutput struct {
+	Body cdntypes.OrgClientRegistrationTokenReEncryptResult
+}
+
 type orgClientCredentialsOutput struct {
 	Body []cdntypes.OrgClientCredentialSafe
 }
@@ -8855,7 +9064,15 @@ func (dbc *dbConn) detachedContext(parent context.Context) (context.Context, con
 	return context.WithTimeout(context.WithoutCancel(parent), dbc.queryTimeout)
 }
 
-func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
+func (dbc *dbConn) detachedContextWithDuration(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
+func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
+	if debug {
+		logger = logger.Level(zerolog.DebugLevel)
+	}
+
 	// runCtx is the main context relating to the running of the server
 	// process. It will be cancelled when told to stop via signals.
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -8992,14 +9209,29 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("JWK cache is not ready")
 	}
 
-	clientCredKey, err := getClientCredEncryptionKey(conf)
+	clientCredKeys, err := getClientCredEncryptionKeys(conf)
 	if err != nil {
 		return fmt.Errorf("unable to get client cred encryption key: %w", err)
 	}
 
-	clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
-	if err != nil {
-		return fmt.Errorf("unable to create client cred AEAD: %w", err)
+	clientCredAEADs := []cipher.AEAD{}
+	clientCredNonceSize := 0
+	for i, clientCredKey := range clientCredKeys {
+		clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
+		if err != nil {
+			return fmt.Errorf("unable to create client cred AEAD for encryption password with offset %d: %w", i, err)
+		}
+		// As the code that manages client cred re-encryption expects
+		// the nonce size to be the same for all AEADs in the slice,
+		// verify this here in case that ever changes.
+		if i == 0 {
+			clientCredNonceSize = clientCredAEAD.NonceSize()
+		} else {
+			if clientCredAEAD.NonceSize() != clientCredNonceSize {
+				return fmt.Errorf("the code expects all clientCred nonce sizes to be the same: prev: %d, cur: %d", clientCredNonceSize, clientCredAEAD.NonceSize())
+			}
+		}
+		clientCredAEADs = append(clientCredAEADs, clientCredAEAD)
 	}
 
 	parsedTokenURL, err := url.Parse(provider.Endpoint().TokenURL)
@@ -9012,9 +9244,9 @@ func Run(localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownD
 		return fmt.Errorf("unable to parse server URL '%s': %w", conf.Server.URL, err)
 	}
 
-	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEAD, kcClientManager, parsedTokenURL, serverURL)
+	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEADs, kcClientManager, parsedTokenURL, serverURL)
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEAD, serverURL)
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEADs, serverURL)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}

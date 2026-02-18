@@ -24,7 +24,7 @@ realm = "sunet-cdn-manager"
 base_url = "https://keycloak.sunet-cdn.localhost:8443"
 client_id = "sunet-cdn-manager-admin-client"
 client_secret = "some-secret"
-encryption_key = "some-secret-encryption-key"
+encryption_passwords = [ "some-secret-encryption-password-old", "some-secret-encryption-password-new" ]
 encryption_salt = "36023a78c7d2000ac58604da1b630a9f"
 
 [domains]

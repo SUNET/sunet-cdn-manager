@@ -14,6 +14,11 @@ var serverCmd = &cobra.Command{
 	Long: `This runs the manager server which exposes
 API endpoints and user interface for managing the SUNET CDN service.`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		debug, err := cmd.Flags().GetBool("debug")
+		if err != nil {
+			return err
+		}
+
 		devMode, err := cmd.Flags().GetBool("dev")
 		if err != nil {
 			return err
@@ -44,7 +49,7 @@ API endpoints and user interface for managing the SUNET CDN service.`,
 			return err
 		}
 
-		err = server.Run(localViper, cdnLogger, devMode, shutdownDelay, disableDomainVerification, disableAcme, tlsCertFile, tlsKeyFile)
+		err = server.Run(debug, localViper, cdnLogger, devMode, shutdownDelay, disableDomainVerification, disableAcme, tlsCertFile, tlsKeyFile)
 		if err != nil {
 			cdnLogger.Fatal().Err(err).Msg("unable to start")
 		}
