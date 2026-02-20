@@ -27,6 +27,8 @@ var (
 	ErrOrgClientTokenQuotaHit        = errors.New("not allowed to create more org client tokens")
 	ErrInvalidVCL                    = errors.New("VCL is invalid")
 	ErrUnknownDomain                 = errors.New("unknown domain name")
+	ErrReEncryptionMissingPassword   = errors.New("re-encryption needs at least two configured encryption passwords")
+	ErrReEncryptionFailed            = errors.New("re-encryption failed for at least one token")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a

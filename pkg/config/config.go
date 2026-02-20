@@ -51,12 +51,12 @@ type oidcSettings struct {
 }
 
 type keycloakClientAdminSettings struct {
-	Realm          string `mapstructure:"realm" validate:"required"`
-	BaseURL        string `mapstructure:"base_url" validate:"required"`
-	ClientID       string `mapstructure:"client_id" validate:"required"`
-	ClientSecret   string `mapstructure:"client_secret" validate:"required"`
-	EncryptionKey  string `mapstructure:"encryption_key" validate:"required,min=15"`
-	EncryptionSalt string `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
+	Realm               string   `mapstructure:"realm" validate:"required"`
+	BaseURL             string   `mapstructure:"base_url" validate:"required"`
+	ClientID            string   `mapstructure:"client_id" validate:"required"`
+	ClientSecret        string   `mapstructure:"client_secret" validate:"required"`
+	EncryptionPasswords []string `mapstructure:"encryption_passwords" validate:"required,gt=0,unique,dive,min=15"`
+	EncryptionSalt      string   `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
 }
 
 type domainSettings struct {

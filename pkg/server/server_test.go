@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -524,18 +525,30 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create salt: %v", err)
 	}
 
-	clientCredKey := argon2.IDKey(
-		[]byte("test-encryption-password"),
-		salt,
-		a2Settings.argonTime,
-		a2Settings.argonMemory,
-		a2Settings.argonThreads,
-		chacha20poly1305.KeySize,
-	)
+	// Assign two passwords so we do not fail the test for the re-encryption endpoint
+	encryptionPasswords := []string{
+		"test-encryption-password-1",
+		"test-encryption-password-2",
+	}
 
-	clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
-	if err != nil {
-		t.Fatalf("unable to create client cred AEAD: %v", err)
+	var clientCredAEADs []cipher.AEAD
+
+	for _, encPassword := range encryptionPasswords {
+		clientCredKey := argon2.IDKey(
+			[]byte(encPassword),
+			salt,
+			a2Settings.argonTime,
+			a2Settings.argonMemory,
+			a2Settings.argonThreads,
+			chacha20poly1305.KeySize,
+		)
+
+		clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
+		if err != nil {
+			t.Fatalf("unable to create client cred AEAD: %v", err)
+		}
+
+		clientCredAEADs = append(clientCredAEADs, clientCredAEAD)
 	}
 
 	ts := httptest.NewUnstartedServer(nil)
@@ -549,11 +562,11 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to parse testserver URL: %v", err)
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEAD, tsi.kcClientManager, &url.URL{}, serverURL)
+	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
 
 	ts.Config.Handler = router
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEAD, serverURL)
+	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEADs, serverURL)
 	if err != nil {
 		return nil, dbPool, err
 	}
@@ -2501,6 +2514,44 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 				}()
 			}
 
+		}
+
+		// Attempt re-encryption prior to DELETE
+		reEncryptReq, err := http.NewRequest("POST", ts.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reEncryptReq.SetBasicAuth(test.username, test.password)
+
+		reEncryptResp, err := http.DefaultClient.Do(reEncryptReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reEncryptResp.Body.Close()
+
+		if reEncryptResp.StatusCode != http.StatusOK {
+			r, err := io.ReadAll(reEncryptResp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("%s: POST org client credentials re-encryption unexpected status code: %d (%s)", test.description, reEncryptResp.StatusCode, string(r))
+		}
+
+		reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
+		if err != nil {
+			t.Fatalf("%s: POST org client credentials re-encryption failed to parse body: %s", test.description, err)
+		}
+
+		var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
+
+		if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
+			t.Fatalf("%s: failed to decode re-encryption response JSON: %v (body: %s)", test.description, err, string(reEncryptBody))
+		}
+
+		// Since the token was created above (so using the last password in the list) we expect to skip it
+		if reEncryptResult.TotalTokens != 1 || reEncryptResult.UpdatedTokens != 0 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
+			t.Fatalf("%s: invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", test.description, reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
 		}
 
 		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)

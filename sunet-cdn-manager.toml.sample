@@ -24,7 +24,13 @@ realm = "sunet-cdn-manager"
 base_url = "https://keycloak.sunet-cdn.localhost:8443"
 client_id = "sunet-cdn-manager-admin-client"
 client_secret = "some-secret"
-encryption_key = "some-secret-encryption-key"
+# Only a single encryption password is needed. If you later need to rotate the
+# password you can add a new password to the end of the list. This then allows
+# you to call the re-encrypt endpoint in the API which reencrypts all existing
+# tokens in the database. After reencryption you can clean up the older
+# password from the config. It is always the last password in the list that is
+# used for encrypting new tokens.
+encryption_passwords = [ "some-secret-encryption-password" ]
 encryption_salt = "36023a78c7d2000ac58604da1b630a9f"
 
 [domains]

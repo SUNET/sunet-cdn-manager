@@ -30,7 +30,7 @@ func main() {
 	}
 
 	// Logger used for all output
-	logger := zerolog.New(os.Stderr).With().
+	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel).With().
 		Str("service", "sunet-cdn-manager").
 		Str("hostname", hostname).
 		Str("server_version", version).
