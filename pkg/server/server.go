@@ -4318,6 +4318,11 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 
 	reEncryptRes := cdntypes.OrgClientRegistrationTokenReEncryptResult{}
 
+	type cryptToken struct {
+		id    pgtype.UUID
+		crypt []byte
+	}
+
 	startTime := time.Now()
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Fetch all registration access tokens and related id so we
@@ -4325,32 +4330,47 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 		// use that for additional data). Do FOR UPDATE to lock out
 		// concurrent modifications to the data until this transaction
 		// is complete.
-		var id pgtype.UUID
-		var cryptRegistrationAccessToken []byte
-		rows, err := tx.Query(dbCtx, "SELECT id, crypt_registration_access_token FROM org_keycloak_client_credentials FOR UPDATE")
+
+		var cryptoTokens []cryptToken
+		rows, err := tx.Query(dbCtx, "SELECT id, crypt_registration_access_token FROM org_keycloak_client_credentials ORDER BY id FOR UPDATE")
 		if err != nil {
 			return fmt.Errorf("failed selecting encrypted registration tokens: %w", err)
 		}
-		_, err = pgx.ForEachRow(rows, []any{&id, &cryptRegistrationAccessToken}, func() error {
-			reEncryptRes.TotalTokens++
 
+		{
+			// Scope temporary id/cryptRegistrationAccessToken
+			// so we dont accidentally use them further down when
+			// we iterate over cryptoTokens.
+			var id pgtype.UUID
+			var cryptRegistrationAccessToken []byte
+			_, err = pgx.ForEachRow(rows, []any{&id, &cryptRegistrationAccessToken}, func() error {
+				cryptoTokens = append(cryptoTokens, cryptToken{id: id, crypt: cryptRegistrationAccessToken})
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("failed iterating over registration tokens: %w", err)
+			}
+		}
+
+		reEncryptRes.TotalTokens = int64(len(cryptoTokens))
+		for _, ct := range cryptoTokens {
 			// Since we expect all AEADs to be of the same type, just compare nonce
 			// size of the first one even if it is not the one used for
 			// encrypting this specific ciphertext.
-			if len(cryptRegistrationAccessToken) < clientCredAEADs[0].NonceSize() {
+			if len(ct.crypt) < clientCredAEADs[0].NonceSize() {
 				logger.Error().
-					Str("id", id.String()).
-					Int("token_length", len(cryptRegistrationAccessToken)).
+					Str("id", ct.id.String()).
+					Int("token_length", len(ct.crypt)).
 					Int("required_nonce_size", clientCredAEADs[0].NonceSize()).
 					Msg("reEncryptOrgClientCredentials: cryptRegistrationAccessToken too short to contain nonce")
 				reEncryptRes.FailedTokens++
-				return nil
+				continue
 			}
 
 			// Split nonce and ciphertext. Same here: all AEADs are the
 			// same type, so just use the first entry for fetching the
 			// nonce size
-			oldNonce, oldCiphertext := cryptRegistrationAccessToken[:clientCredAEADs[0].NonceSize()], cryptRegistrationAccessToken[clientCredAEADs[0].NonceSize():]
+			oldNonce, oldCiphertext := ct.crypt[:clientCredAEADs[0].NonceSize()], ct.crypt[clientCredAEADs[0].NonceSize():]
 
 			// As the goal is to reencrypt with the last password
 			// in the list, keep track of what offset that is so we
@@ -4367,9 +4387,9 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 			successfulOffset := 0
 			var lastErr error
 			for i := latestPasswordOffset; i >= 0; i-- {
-				registrationAccessTokenBytes, err = clientCredAEADs[i].Open(nil, oldNonce, oldCiphertext, id.Bytes[:])
+				registrationAccessTokenBytes, err = clientCredAEADs[i].Open(nil, oldNonce, oldCiphertext, ct.id.Bytes[:])
 				if err != nil {
-					logger.Debug().Err(err).Str("id", id.String()).Int("password_offset", i).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token")
+					logger.Debug().Err(err).Str("id", ct.id.String()).Int("password_offset", i).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token")
 					lastErr = err
 					continue
 				}
@@ -4378,15 +4398,15 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 				break
 			}
 			if !decryptionSuccessful {
-				logger.Err(lastErr).Str("id", id.String()).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token with any available encryption passwords")
+				logger.Err(lastErr).Str("id", ct.id.String()).Msg("reEncryptOrgClientCredentials: unable to decrypt registration access token with any available encryption passwords")
 				reEncryptRes.FailedTokens++
-				return nil
+				continue
 			}
 
 			if successfulOffset == latestPasswordOffset {
-				logger.Info().Str("id", id.String()).Msg("token already encrypted with latest password")
+				logger.Info().Str("id", ct.id.String()).Msg("token already encrypted with latest password")
 				reEncryptRes.SkippedTokens++
-				return nil
+				continue
 			}
 
 			// Select a new random nonce so we don't accidentally reuse nonce+key more than once
@@ -4395,19 +4415,14 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 				return fmt.Errorf("unable to create new random nonce for client registration token re-encryption: %w", err)
 			}
 
-			newCryptRegistrationAccessToken := encryptionClientCredAEAD.Seal(newNonce, newNonce, registrationAccessTokenBytes, id.Bytes[:])
+			newCryptRegistrationAccessToken := encryptionClientCredAEAD.Seal(newNonce, newNonce, registrationAccessTokenBytes, ct.id.Bytes[:])
 
-			_, err = tx.Exec(dbCtx, "UPDATE org_keycloak_client_credentials SET crypt_registration_access_token = $1 WHERE id = $2", newCryptRegistrationAccessToken, id)
+			_, err = tx.Exec(dbCtx, "UPDATE org_keycloak_client_credentials SET crypt_registration_access_token = $1 WHERE id = $2", newCryptRegistrationAccessToken, ct.id)
 			if err != nil {
 				return fmt.Errorf("unable to UPDATE org keycloak client token: %w", err)
 			}
 
 			reEncryptRes.UpdatedTokens++
-
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("failed iterating over registration tokens: %w", err)
 		}
 
 		return nil
