@@ -453,18 +453,19 @@ type testServerInput struct {
 	jwkCache            *jwk.Cache
 	jwtIssuer           string
 	oiConf              openidConfig
+	encryptionPasswords []string
+	dbPool              *pgxpool.Pool
 }
 
-func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpool.Pool, error) {
-	ctx := context.Background()
+func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encryptedSessionKey bool) (*pgxpool.Pool, error) {
 	pgurl, err := pgt.CreateDatabase(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	pgConfig, err := pgxpool.ParseConfig(pgurl)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Make sure tests do not hang even if they only have access to a single db connection
@@ -474,23 +475,46 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
-		return nil, nil, errors.New("unable to create database pool")
+		return nil, fmt.Errorf("unable to create database pool: %w", err)
 	}
-
-	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
 
 	err = migrations.Up(logger, pgConfig)
 	if err != nil {
-		return nil, nil, err
+		dbPool.Close()
+		return nil, err
 	}
 
-	err = populateTestData(dbPool, tsi.encryptedSessionKey)
+	err = populateTestData(dbPool, encryptedSessionKey)
 	if err != nil {
-		return nil, nil, err
+		dbPool.Close()
+		return nil, err
 	}
 
-	cookieStore, err := getSessionStore(ctx, logger, dbPool)
+	return dbPool, nil
+}
+
+func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpool.Pool, error) {
+	ctx := context.Background()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	dbPoolCreated := false
+
+	// If no dbpool has been created ahead of time create a new one
+	if tsi.dbPool == nil {
+		var err error
+		tsi.dbPool, err = initDatabase(ctx, t, logger, tsi.encryptedSessionKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		dbPoolCreated = true
+	}
+
+	cookieStore, err := getSessionStore(ctx, logger, tsi.dbPool)
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		return nil, nil, err
 	}
 
@@ -498,11 +522,17 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		t.Fatalf("unable to create varnish template: %v", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		t.Fatalf("unable to create haproxy template: %v", err)
 	}
 
@@ -510,11 +540,17 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	loginCache, err := lru.New[string, struct{}](128)
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		t.Fatalf("unable to create LRU login cache: %v", err)
 	}
 
-	dbc, err := newDBConn(dbPool, 30*time.Second)
+	dbc, err := newDBConn(tsi.dbPool, 30*time.Second)
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		t.Fatalf("unable to create dbConn struct: %v", err)
 	}
 
@@ -522,18 +558,21 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	salt, err := saltFromHex("36023a78c7d2000ac58604da1b630a9f")
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
 		t.Fatalf("unable to create salt: %v", err)
 	}
 
-	// Assign two passwords so we do not fail the test for the re-encryption endpoint
-	encryptionPasswords := []string{
-		"test-encryption-password-1",
-		"test-encryption-password-2",
+	if len(tsi.encryptionPasswords) == 0 {
+		tsi.encryptionPasswords = []string{
+			"test-encryption-password",
+		}
 	}
 
 	var clientCredAEADs []cipher.AEAD
 
-	for _, encPassword := range encryptionPasswords {
+	for _, encPassword := range tsi.encryptionPasswords {
 		clientCredKey := argon2.IDKey(
 			[]byte(encPassword),
 			salt,
@@ -545,6 +584,9 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 		clientCredAEAD, err := chacha20poly1305.NewX(clientCredKey)
 		if err != nil {
+			if dbPoolCreated {
+				tsi.dbPool.Close()
+			}
 			t.Fatalf("unable to create client cred AEAD: %v", err)
 		}
 
@@ -559,6 +601,10 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 	// field).
 	serverURL, err := url.Parse("http://" + ts.Listener.Addr().String())
 	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
+		ts.Close()
 		t.Fatalf("unable to parse testserver URL: %v", err)
 	}
 
@@ -568,12 +614,21 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEADs, serverURL)
 	if err != nil {
-		return nil, dbPool, err
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
+		ts.Close()
+		return nil, nil, err
 	}
 
 	ts.Start()
 
-	return ts, dbPool, nil
+	// We only return the dbPool if it was created here, otherwise the
+	// caller is expected to handle closing themselves
+	if dbPoolCreated {
+		return ts, tsi.dbPool, nil
+	}
+	return ts, nil, nil
 }
 
 func TestServerInit(t *testing.T) {
@@ -2279,7 +2334,9 @@ func setupKeycloak(t *testing.T, baseURL *url.URL, user string, password string,
 	return clientAdminClientID, clientAdminSecret, nil
 }
 
-func TestPostDeleteOrgClientCredentials(t *testing.T) {
+func createKeycloakContainer(ctx context.Context, t *testing.T) (*oidc.Provider, *keycloakClientManager, *url.URL, *jwk.Cache, openidConfig, context.CancelFunc) {
+	t.Helper()
+
 	req := testcontainers.ContainerRequest{
 		Image:      "quay.io/keycloak/keycloak:26.0.7",
 		WaitingFor: wait.ForHTTP("/realms/master"),
@@ -2290,7 +2347,6 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		Cmd: []string{"start-dev"},
 	}
 
-	ctx := context.Background()
 	keycloakC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
@@ -2348,14 +2404,29 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	}
 
 	jwkCtx, jwkCancel := context.WithCancel(t.Context())
-	defer jwkCancel()
 
 	jwkCache, err := setupJwkCache(jwkCtx, logger, client, oiConf)
 	if err != nil {
 		t.Fatalf("unable to setup JWK cache: %s", err)
 	}
 
-	ts, dbPool, err := prepareServer(t, testServerInput{kcClientManager: kcClientManager, jwkCache: jwkCache, jwtIssuer: issuerURL.String(), oiConf: oiConf})
+	return provider, kcClientManager, issuerURL, jwkCache, oiConf, jwkCancel
+}
+
+func TestPostDeleteOrgClientCredentials(t *testing.T) {
+	ctx := context.Background()
+	provider, kcClientManager, issuerURL, jwkCache, oiConf, jwkCancelFunc := createKeycloakContainer(ctx, t)
+	defer jwkCancelFunc()
+
+	// Assign two passwords so we do not fail the test request to the
+	// re-encryption endpoint (with only one password it does not accept
+	// the request at all)
+	encryptionPasswords := []string{
+		"test-encryption-password-1",
+		"test-encryption-password-2",
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{kcClientManager: kcClientManager, jwkCache: jwkCache, jwtIssuer: issuerURL.String(), oiConf: oiConf, encryptionPasswords: encryptionPasswords})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2439,7 +2510,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 			// Make sure the client_secret is set
 			if newClientCred.ClientSecret == "" {
-				t.Fatalf("new client cred has an empty password, thats not expected")
+				t.Fatalf("new client cred has an empty password, that's not expected")
 			}
 
 			// Try to do requests with the new client cred, it is
@@ -2581,6 +2652,267 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		}
 
 		t.Logf("%s\n", deleteJSONData)
+	}
+}
+
+func createCred(t *testing.T, testDesc string, ts *httptest.Server, username, password, org string, name string, desc string) cdntypes.NewOrgClientCredential {
+	t.Helper()
+
+	newCred := struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}{
+		Name:        name,
+		Description: desc,
+	}
+
+	b, err := json.Marshal(newCred)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := bytes.NewReader(b)
+
+	postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+org+"/client-credentials", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	postReq.SetBasicAuth(username, password)
+
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer postResp.Body.Close()
+
+	if postResp.StatusCode != http.StatusCreated {
+		r, err := io.ReadAll(postResp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("%s: POST org client credentials unexpected status code: %d (%s)", testDesc, postResp.StatusCode, string(r))
+	}
+
+	postJSONData, err := io.ReadAll(postResp.Body)
+	if err != nil {
+		t.Fatalf("%s: %s", testDesc, err)
+	}
+
+	var newClientCred cdntypes.NewOrgClientCredential
+
+	err = json.Unmarshal(postJSONData, &newClientCred)
+	if err != nil {
+		t.Fatalf("unable to unmarshal JSON for new cred: %s", err)
+	}
+
+	// Make sure the client_secret is set
+	if newClientCred.ClientSecret == "" {
+		t.Fatalf("new client cred has an empty password, that's not expected")
+	}
+
+	return newClientCred
+}
+
+func TestPostReEncryptOrgClientCredentials(t *testing.T) {
+	ctx := context.Background()
+	_, kcClientManager, issuerURL, jwkCache, oiConf, jwkCancelFunc := createKeycloakContainer(ctx, t)
+	defer jwkCancelFunc()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	// Create a free-standing dbPool here so we can start the server
+	// multiple times without resetting the database for testing
+	// re-encryption where the server is started with different
+	// sets of passwords.
+	dbPool, err := initDatabase(ctx, t, logger, false)
+	if err != nil {
+		t.Fatalf("unable to init re-encrypt test database: %s", err)
+	}
+	defer dbPool.Close()
+
+	tsi := testServerInput{kcClientManager: kcClientManager, jwkCache: jwkCache, jwtIssuer: issuerURL.String(), oiConf: oiConf, dbPool: dbPool}
+
+	tests := []struct {
+		description          string
+		username             string
+		password             string
+		expectedDeleteStatus int
+		orgNameOrID          string
+		server1Passwords     []string
+		server2Passwords     []string
+		server3Passwords     []string
+	}{
+		{
+			description:          "successful superuser request",
+			username:             "admin",
+			password:             "adminpass1",
+			expectedDeleteStatus: http.StatusNoContent,
+			orgNameOrID:          "org1",
+			server1Passwords:     []string{"test-encryption-password-1"},
+			server2Passwords:     []string{"test-encryption-password-1", "test-encryption-password-2"},
+			server3Passwords:     []string{"test-encryption-password-2"},
+		},
+	}
+
+	for _, test := range tests {
+
+		createdCredNames := []string{}
+
+		var cred1 cdntypes.NewOrgClientCredential
+		var cred1CiphertextOrig []byte
+		var cred1CiphertextUpdated []byte
+		var cred2 cdntypes.NewOrgClientCredential
+		var cred2CiphertextOrig []byte
+		var cred2CiphertextUpdated []byte
+		// First server instance, run in func so we can easily defer
+		// closing it at the end
+		func() {
+			tsi.encryptionPasswords = test.server1Passwords
+			// Since we supply our own dbPool in tsi it will not be returned here
+			ts1, _, err := prepareServer(t, tsi)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ts1.Close()
+
+			// Create first client cred
+			cred1 = createCred(t, test.description, ts1, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-1", "re-encrypt desc 1")
+			createdCredNames = append(createdCredNames, cred1.Name)
+
+			// Save the actual crypto data for later comparision
+			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextOrig)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		// Second server instance
+		func() {
+			// Here we must have at least two passwords
+			tsi.encryptionPasswords = test.server2Passwords
+			// Since we supply our own dbPool in tsi it will not be returned here
+			ts2, _, err := prepareServer(t, tsi)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ts2.Close()
+
+			// Create second client cred
+			cred2 = createCred(t, test.description, ts2, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-2", "re-encrypt desc 2")
+			createdCredNames = append(createdCredNames, cred2.Name)
+
+			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextOrig)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Attempt re-encryption
+			reEncryptReq, err := http.NewRequest("POST", ts2.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			reEncryptReq.SetBasicAuth(test.username, test.password)
+
+			reEncryptResp, err := http.DefaultClient.Do(reEncryptReq)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reEncryptResp.Body.Close()
+
+			if reEncryptResp.StatusCode != http.StatusOK {
+				r, err := io.ReadAll(reEncryptResp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: POST org client credentials re-encryption unexpected status code: %d (%s)", test.description, reEncryptResp.StatusCode, string(r))
+			}
+
+			reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
+			if err != nil {
+				t.Fatalf("%s: POST org client credentials re-encryption failed to parse body: %s", test.description, err)
+			}
+
+			var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
+
+			if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
+				t.Fatalf("%s: failed to decode re-encryption response JSON: %v (body: %s)", test.description, err, string(reEncryptBody))
+			}
+
+			// Since the first token was created by ts1 and the second by ts2 we expect to update one and skip one
+			if reEncryptResult.TotalTokens != 2 || reEncryptResult.UpdatedTokens != 1 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
+				t.Fatalf("%s: invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", test.description, reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
+			}
+		}()
+
+		err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextUpdated)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(cred1CiphertextOrig) == 0 {
+			t.Fatal("expected cred1CiphertextOrig to have content")
+		}
+
+		// cred1 should have had its crypto data modified
+		if bytes.Equal(cred1CiphertextOrig, cred1CiphertextUpdated) {
+			t.Fatal("expected cred1CiphertextOrig to have changed")
+		}
+
+		if len(cred2CiphertextOrig) == 0 {
+			t.Fatal("expected cred2CiphertextOrig to have content")
+		}
+
+		err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextUpdated)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// cred2 should NOT have had its crypto data modified (since we ran re-encryption with the same password as it was created with)
+		if !bytes.Equal(cred2CiphertextOrig, cred2CiphertextUpdated) {
+			t.Fatal("expected cred2CiphertextOrig to have remained the same")
+		}
+
+		// Now we only have the new password, verify we can delete both creds (e.g. we can decrypt both client reg tokens for talking to keycloak)
+		tsi.encryptionPasswords = test.server3Passwords
+		ts3, _, err := prepareServer(t, tsi)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ts3.Close()
+
+		for _, credName := range createdCredNames {
+			func() {
+				deleteReq, err := http.NewRequest("DELETE", ts3.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+credName, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				deleteReq.SetBasicAuth(test.username, test.password)
+
+				deleteResp, err := http.DefaultClient.Do(deleteReq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer deleteResp.Body.Close()
+
+				if deleteResp.StatusCode != test.expectedDeleteStatus {
+					r, err := io.ReadAll(deleteResp.Body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Fatalf("%s: DELETE org client credentials unexpected status code: %d (%s)", test.description, deleteResp.StatusCode, string(r))
+				}
+
+				deleteJSONData, err := io.ReadAll(deleteResp.Body)
+				if err != nil {
+					t.Fatalf("%s: %s", test.description, err)
+				}
+
+				t.Logf("%s\n", deleteJSONData)
+			}()
+		}
 	}
 }
 
