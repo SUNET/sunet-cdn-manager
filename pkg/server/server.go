@@ -2110,8 +2110,8 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 		case http.MethodGet:
 			q := r.URL.Query()
 			returnTo := q.Get(returnToKey)
-			_, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
-			if ok {
+			adRef := authFromSession(logger, cookieStore, r)
+			if adRef != nil {
 				switch returnTo {
 				case "":
 					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
@@ -2230,24 +2230,9 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
-		ctx := r.Context()
 
 		q := r.URL.Query()
 		returnTo := q.Get(returnToKey)
-
-		_, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
-		if ok {
-			switch returnTo {
-			case "":
-				logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-				validatedRedirect(consolePath, w, r, http.StatusFound)
-				return
-			default:
-				logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
-				validatedRedirect(returnTo, w, r, http.StatusFound)
-				return
-			}
-		}
 
 		session := logoutSession(r, cookieStore)
 
@@ -2258,20 +2243,19 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			return
 		}
 
-		// User should be logged out at this point, send them to where they were originally headed (which will in turn probably redirect them to /auth/login).
+		// User should be logged out at this point, send them to where
+		// they were originally headed (which will in turn probably
+		// redirect them to /auth/login). Use StatusSeeOther (303) to
+		// make sure the request uses GET rather than the POST that
+		// sent them to this handler.
 		if returnTo != "" {
-			u, err := url.Parse(returnTo)
-			if err != nil {
-				logger.Err(err).Msg("unable to parse returnTo in logout handler")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-			validatedRedirect(u.String(), w, r, http.StatusFound)
+			validatedRedirect(returnTo, w, r, http.StatusSeeOther)
 			return
 		}
 
-		// No return_to hint, just send them to the console
-		validatedRedirect(consolePath, w, r, http.StatusFound)
+		// No return_to hint, just send them to the console and do so
+		// using StatusSeeOther (303) for the same reason as above.
+		validatedRedirect(consolePath, w, r, http.StatusSeeOther)
 	}
 }
 
@@ -6868,7 +6852,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Use(antiCSRF.Handler)
 		r.Get("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
 		r.Post("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
-		r.Get("/logout", logoutHandler(cookieStore))
+		r.Post("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
 

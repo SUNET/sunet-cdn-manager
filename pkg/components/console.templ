@@ -21,10 +21,13 @@ templ ConsolePage(title string, ad cdntypes.AuthData, orgName string, availableO
 					</span>
 					<span class="place-end">
 						if ad.Username != nil {
-							{ *ad.Username } <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+							{ *ad.Username }
 						} else {
-							Username missing <a href={ templ.URL("/auth/logout") } hx-boost="false">Logout</a>
+							Username missing
 						}
+						<form id="logout" method="POST" action={ templ.URL("/auth/logout") } hx-boost="false">
+							<button type="submit" role="button">Logout</button>
+						</form>
 					</span>
 				</header>
 				@NavBar(ad, orgName, availableOrgNames)
