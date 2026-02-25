@@ -7199,7 +7199,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
-				return nil, errors.New("unable to read auth data from user PATCH handler")
+				return nil, errors.New("unable to read auth data from user PUT handler")
 			}
 
 			user, err := updateUser(ctx, dbc, ad, input.User, input.Body.Org, input.Body.Role)
@@ -7518,7 +7518,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+					return nil, errors.New("unable to read auth data from domains POST handler")
 				}
 
 				domain, err := insertDomain(ctx, logger, dbc, input.Body.Name, &input.Org, ad)
@@ -7588,7 +7588,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 				if !ok {
-					return nil, errors.New("unable to read auth data from organization POST handler: %w")
+					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
 				id, err := insertOrg(ctx, dbc, input.Body.Name, ad)
@@ -7700,10 +7700,10 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Body struct {
 					Name string `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
-					Org  string `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Org  string `json:"org" example:"org1" doc:"Name or ID of organization" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 				}
 			},
-			) (*orgOutput, error) {
+			) (*serviceOutput, error) {
 				logger := zlog.Ctx(ctx)
 
 				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
@@ -7726,7 +7726,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					logger.Err(err).Msg("unable to add service")
 					return nil, err
 				}
-				resp := &orgOutput{}
+				resp := &serviceOutput{}
 				resp.Body.ID = id
 				resp.Body.Name = input.Body.Name
 				return resp, nil
@@ -7735,7 +7735,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 		huma.Get(api, "/v1/services/{service}/service-versions", func(ctx context.Context, input *struct {
 			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
-			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"org1" doc:"Name or ID of organization, required if service is supplied by name" minLength:"1" maxLength:"63"`
 		},
 		) (*serviceVersionsOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -7777,7 +7777,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
 					cdntypes.VclSteps
-					Org     string                  `json:"org" example:"Name or ID of organization" doc:"org1" minLength:"1" maxLength:"63"`
+					Org     string                  `json:"org" example:"org1" doc:"Name or ID of organization" minLength:"1" maxLength:"63"`
 					Domains []cdntypes.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
 					Origins []cdntypes.InputOrigin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
 					Active  bool                    `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
@@ -7827,7 +7827,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			Org     string `query:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 			Version int64  `path:"version" example:"1" doc:"The service version to activate"`
 			Body    struct {
-				Active bool `json:"active" example:"true" doc:"If the version should be active (must be true)" minLength:"15" maxLength:"64"`
+				Active bool `json:"active" example:"true" doc:"If the version should be active (must be true)"`
 			}
 		},
 		) (*struct{}, error) {
@@ -7856,7 +7856,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 		huma.Get(api, "/v1/services/{service}/service-versions/{version}/vcl", func(ctx context.Context, input *struct {
 			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
-			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"org1" doc:"Name or ID of organization, required if service is supplied by name" minLength:"1" maxLength:"63"`
 			Version int64  `path:"version" example:"1" doc:"The service version to get VCL for"`
 		},
 		) (*serviceVersionVCLOutput, error) {
@@ -7902,7 +7902,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 		huma.Get(api, "/v1/services/{service}/origin-groups", func(ctx context.Context, input *struct {
 			Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
-			Org     string `query:"org" example:"Name or ID of organization, required if service is supplied by name" doc:"org1" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"org1" doc:"Name or ID of organization, required if service is supplied by name" minLength:"1" maxLength:"63"`
 		},
 		) (*originGroupsOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -8204,8 +8204,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 		})
 
 		huma.Put(api, "/v1/cache-nodes/{cachenode}/node-group", func(ctx context.Context, input *struct {
-			L4LBNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
-			Body     struct {
+			CacheNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
+			Body      struct {
 				NodeGroup string `json:"node-group" example:"some-node-group" doc:"Put the cache node in the given node group by name or ID"`
 			}
 		},
@@ -8215,7 +8215,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from cache-nodes node group PUT handler")
 			}
 
-			err := setCacheNodeGroup(ctx, ad, dbc, input.L4LBNode, input.Body.NodeGroup)
+			err := setCacheNodeGroup(ctx, ad, dbc, input.CacheNode, input.Body.NodeGroup)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
