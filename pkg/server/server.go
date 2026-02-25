@@ -8866,6 +8866,7 @@ func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool
 		Path:     "/",
 		Secure:   true,
 		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	return sessionStore, nil
