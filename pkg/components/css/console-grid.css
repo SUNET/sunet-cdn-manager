@@ -76,3 +76,19 @@ main {
 	flex-direction: column;
 	gap: 0.5rem;
 }
+
+#logout {
+	display: inline;
+	margin-left: 0.5rem;
+}
+
+#logout button {
+	all: unset;
+	cursor: pointer;
+	text-decoration: underline;
+}
+
+#logout button:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
