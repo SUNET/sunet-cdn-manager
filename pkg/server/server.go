@@ -3907,7 +3907,7 @@ func sendHTTPReq(client *http.Client, method string, url string, headers map[str
 		req.URL.RawQuery = queryParams.Encode()
 	}
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) // #nosec G704 -- Currently only called by keycloakClientManager which uses URL from config, not user input, so not susceptible to SSRF
 	if err != nil {
 		return nil, err
 	}
@@ -4042,7 +4042,7 @@ func (kccm *keycloakClientManager) deleteClientCred(clientID string, registratio
 	}
 	req.Header.Set("Authorization", "Bearer "+registrationAccessToken)
 
-	resp, err := kccm.deleteClient.Do(req)
+	resp, err := kccm.deleteClient.Do(req) // #nosec G704 -- The URL comes from server config, not user input, so not susceptible to SSRF
 	if err != nil {
 		return fmt.Errorf("deleteClientCred: unable to do DELETE request: %w", err)
 	}
@@ -9021,7 +9021,7 @@ func fetchKeyCloakOpenIDConfig(ctx context.Context, client *http.Client, issuer 
 		return openidConfig{}, fmt.Errorf("unable to create GET req for OpenID config: %w", err)
 	}
 
-	confResp, err := client.Do(req)
+	confResp, err := client.Do(req) // #nosec G704 -- The URL comes from server config, not user input, so not susceptible to SSRF
 	if err != nil {
 		return openidConfig{}, fmt.Errorf("unable to GET OpenID config: %w", err)
 	}
