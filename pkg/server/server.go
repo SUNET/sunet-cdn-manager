@@ -1139,12 +1139,12 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 		if !ad.Superuser {
 			if ad.OrgName == nil {
 				logger.Error().Msg("consoleCreateDomainHandler: not member of org")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 				return
 			}
 			if *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleCreateDomainHandler: not member of correct org")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 				return
 			}
 		}
@@ -1272,6 +1272,19 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			logger.Err(err).Msg("consoleCreateServiceHandler: db request for looking up orgName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil {
+				logger.Error().Msg("consoleCreateServiceHandler: not member of org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+			if *ad.OrgName != orgIdent.name {
+				logger.Error().Msg("consoleCreateServiceHandler: not member of correct org")
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
 		}
 
 		switch r.Method {
