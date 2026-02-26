@@ -855,7 +855,7 @@ func TestGetUsers(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -963,7 +963,7 @@ func TestGetUser(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1108,7 +1108,7 @@ func TestPostUsers(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1224,7 +1224,7 @@ func TestPutUser(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1341,7 +1341,7 @@ func TestDeleteUser(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1471,7 +1471,7 @@ func TestPutPassword(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1531,7 +1531,7 @@ func testAuth(t *testing.T, ts *httptest.Server, username string, password strin
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 	if err != nil {
 		return 0, err
 	}
@@ -1602,7 +1602,7 @@ func TestGetOrgs(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1703,7 +1703,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1920,7 +1920,7 @@ func sendKeycloakReq(t *testing.T, client *http.Client, method string, url strin
 		req.URL.RawQuery = queryParams.Encode()
 	}
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 	if err != nil {
 		return nil, err
 	}
@@ -2475,7 +2475,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 		postReq.SetBasicAuth(test.username, test.password)
 
-		postResp, err := http.DefaultClient.Do(postReq)
+		postResp, err := http.DefaultClient.Do(postReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2562,7 +2562,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 						clientCredGetReq.Header.Set("Authorization", clientCredTest.authorizationHeader)
 					}
 
-					clientCredResp, err := client.Do(clientCredGetReq)
+					clientCredResp, err := client.Do(clientCredGetReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -2590,7 +2590,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 		reEncryptReq.SetBasicAuth(test.username, test.password)
 
-		reEncryptResp, err := http.DefaultClient.Do(reEncryptReq)
+		reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2627,7 +2627,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 		deleteReq.SetBasicAuth(test.username, test.password)
 
-		deleteResp, err := http.DefaultClient.Do(deleteReq)
+		deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2675,7 +2675,7 @@ func createCred(t *testing.T, testDesc string, ts *httptest.Server, username, pa
 
 	postReq.SetBasicAuth(username, password)
 
-	postResp, err := http.DefaultClient.Do(postReq)
+	postResp, err := http.DefaultClient.Do(postReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2810,7 +2810,7 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 
 			reEncryptReq.SetBasicAuth(test.username, test.password)
 
-			reEncryptResp, err := http.DefaultClient.Do(reEncryptReq)
+			reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2886,7 +2886,7 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 
 				deleteReq.SetBasicAuth(test.username, test.password)
 
-				deleteResp, err := http.DefaultClient.Do(deleteReq)
+				deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2988,7 +2988,7 @@ func TestGetOrg(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3116,7 +3116,7 @@ func TestGetDomains(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3220,7 +3220,7 @@ func TestGetServiceIPs(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3329,7 +3329,7 @@ func TestPostOrganizations(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3439,7 +3439,7 @@ func TestGetServices(t *testing.T) {
 				req.URL.RawQuery = values.Encode()
 			}
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3570,7 +3570,7 @@ func TestGetService(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3701,7 +3701,7 @@ func TestDeleteService(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3881,7 +3881,7 @@ func TestPostServices(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3993,7 +3993,7 @@ func TestDeleteDomain(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4089,7 +4089,7 @@ func TestPostDomains(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4199,7 +4199,7 @@ func TestGetServiceVersions(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4674,7 +4674,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4818,7 +4818,7 @@ func TestActivateServiceVersion(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4936,7 +4936,7 @@ func TestGetOriginGroups(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5029,7 +5029,7 @@ func TestPostOriginGroups(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5150,7 +5150,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5253,7 +5253,7 @@ func TestGetIPNetworks(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5376,7 +5376,7 @@ func TestPostIPNetworks(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5491,7 +5491,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5613,7 +5613,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5804,7 +5804,7 @@ func TestPostCacheNodes(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5906,7 +5906,7 @@ func TestGetCacheNodes(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6030,7 +6030,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6162,7 +6162,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6249,7 +6249,7 @@ func TestGetL4LBNodes(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6384,7 +6384,7 @@ func TestPostL4LBNodes(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6523,7 +6523,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6655,7 +6655,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6730,7 +6730,7 @@ func TestGetNodeGroups(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6808,7 +6808,7 @@ func TestPostNodeGroups(t *testing.T) {
 
 			req.SetBasicAuth(test.username, test.password)
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
