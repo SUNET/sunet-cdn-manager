@@ -61,7 +61,7 @@ is present as well as creating an initial admin user and role for managing the c
 			return err
 		}
 
-		fmt.Printf("database is initialized using password from file '%s'\nuser: '%s'\nencrypted session cookies: %t\n", initPasswordFile, u.Name, encryptedSessionCookies)
+		fmt.Printf("database is initialized using password from file '%s'\nuser: '%s'\nencrypted session cookies: %t\n", initPasswordFile, u.Name(), encryptedSessionCookies)
 
 		return nil
 	},
