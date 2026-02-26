@@ -34,7 +34,7 @@ type serverSettings struct {
 
 type dbSettings struct {
 	User           string        `validate:"required"`
-	Password       string        `validate:"required"`
+	Password       string        `validate:"required"` // #nosec G117 -- Used to build psql config string, never used for serialized output
 	DBName         string        `validate:"required"`
 	Host           string        `validate:"required"`
 	Port           int           `validate:"required"`
@@ -46,7 +46,7 @@ type dbSettings struct {
 type oidcSettings struct {
 	Issuer       string `validate:"required"`
 	ClientID     string `mapstructure:"client_id" validate:"required"`
-	ClientSecret string `mapstructure:"client_secret" validate:"required"`
+	ClientSecret string `mapstructure:"client_secret" validate:"required"` // #nosec G117 -- Used for configuration, never used for serialized output
 	RedirectURL  string `mapstructure:"redirect_url" validate:"required"`
 }
 
@@ -54,7 +54,7 @@ type keycloakClientAdminSettings struct {
 	Realm               string   `mapstructure:"realm" validate:"required"`
 	BaseURL             string   `mapstructure:"base_url" validate:"required"`
 	ClientID            string   `mapstructure:"client_id" validate:"required"`
-	ClientSecret        string   `mapstructure:"client_secret" validate:"required"`
+	ClientSecret        string   `mapstructure:"client_secret" validate:"required"` // #nosec G117 -- Used for configuration, never used for serialized output
 	EncryptionPasswords []string `mapstructure:"encryption_passwords" validate:"required,gt=0,unique,dive,min=15"`
 	EncryptionSalt      string   `mapstructure:"encryption_salt" validate:"required,len=32,hexadecimal"`
 }
@@ -75,7 +75,7 @@ type acmeDNSConfig map[string]acmeDNSDomainSettings
 
 type acmeDNSDomainSettings struct {
 	Username   string
-	Password   string
+	Password   string // #nosec G117 -- Used to fill in acme config, never used for serialized output
 	Subdomain  string
 	FullDomain string `mapstructure:"full_domain"`
 	ServerURL  string `mapstructure:"server_url"`

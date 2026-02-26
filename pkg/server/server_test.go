@@ -655,14 +655,9 @@ func TestServerInit(t *testing.T) {
 	}
 
 	expectedUsername := "admin"
-	expectedPasswordLength := len(initPassword)
 
-	if u.Name != expectedUsername {
-		t.Fatalf("expected initial user '%s', got: '%s'", expectedUsername, u.Name)
-	}
-
-	if len(u.Password) != expectedPasswordLength {
-		t.Fatalf("expected initial user password length %d, got: %d", expectedPasswordLength, len(u.Password))
+	if u.Name() != expectedUsername {
+		t.Fatalf("expected initial user '%s', got: '%s'", expectedUsername, u.Name())
 	}
 }
 

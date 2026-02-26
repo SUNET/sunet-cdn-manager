@@ -111,6 +111,14 @@ const (
 	jwtAudience = "sunet-cdn-manager"
 	// The client-scope used for adding the above "aud" via a mapper
 	clientScopeName = "sunet-cdn-manager-aud"
+
+	// Some default roles
+	userRole = "user"
+	nodeRole = "node"
+
+	// Some default auth providers
+	localAuthProvider    = "local"
+	keycloakAuthProvider = "keycloak"
 )
 
 var (
@@ -2086,7 +2094,7 @@ type loginForm struct {
 	Username string `schema:"username" validate:"min=1,max=63"`
 	// Password length validation needs to be kept in sync with the
 	// /api/v1/users POST endpoint for user creation
-	Password string `schema:"password" validate:"min=15,max=64"`
+	Password string `schema:"password" validate:"min=15,max=64"` // #nosec G117 -- Used for form password input, never used for serialized output
 	ReturnTo string `schema:"return_to"`
 }
 
@@ -2501,7 +2509,7 @@ func addKeycloakUser(ctx context.Context, dbc *dbConn, subject, name string) (pg
 	var userID, keycloakProviderID pgtype.UUID
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, "user", "keycloak").Scan(&userID)
+		err := tx.QueryRow(ctx, "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, keycloakAuthProvider).Scan(&userID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -3124,7 +3132,7 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 			return cdnerrors.ErrForbidden
 		}
 
-		if authProviderName != "local" {
+		if authProviderName != localAuthProvider {
 			return fmt.Errorf("ignoring local-password request for non-local user")
 		}
 
@@ -3495,7 +3503,7 @@ func createUser(ctx context.Context, dbc *dbConn, name string, role string, org 
 			return fmt.Errorf("unable to parse role for user INSERT: %w", err)
 		}
 
-		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, "local")
+		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, localAuthProvider)
 		if err != nil {
 			return fmt.Errorf("unble to resolve authProvider name to ID: %w", err)
 		}
@@ -3902,7 +3910,7 @@ func newKeycloakClientReq(clientID string, defaultClientScopes []string) keycloa
 type keycloakClientRegistrationData struct {
 	keycloakClientData
 	ID                      string `json:"id"`
-	Secret                  string `json:"secret"`
+	Secret                  string `json:"secret"` // #nosec G117 -- Secret is supposed to be returned to client
 	RegistrationAccessToken string `json:"registrationAccessToken"`
 }
 
@@ -4154,7 +4162,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		// another row.
 		cryptRegistrationAccessToken := clientCredAEAD.Seal(nonce, nonce, []byte(registrationAccessToken), tokenUUID[:])
 
-		err = tx.QueryRow(dbCtx, "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, "user", name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
+		err = tx.QueryRow(dbCtx, "INSERT INTO org_keycloak_client_credentials (id, org_id, role_id, name, client_id, description, crypt_registration_access_token) VALUES ($1, $2, (SELECT id from roles WHERE name=$3), $4, $5, $6, $7) RETURNING id", tokenUUID, orgIdent.id, userRole, name, clientID, description, cryptRegistrationAccessToken).Scan(&orgClientTokenID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT org keycloak client token: %w", err)
 		}
@@ -5559,7 +5567,7 @@ func selectCacheNodeTx(ctx context.Context, tx pgx.Tx, cacheNodeID pgtype.UUID) 
 }
 
 func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, confTemplates configTemplates, cacheNodeNameOrID string) (cdntypes.CacheNodeConfig, error) {
-	if !ad.Superuser && ad.RoleName != "node" {
+	if !ad.Superuser && ad.RoleName != nodeRole {
 		return cdntypes.CacheNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
@@ -5886,7 +5894,7 @@ type serviceIPInfo struct {
 }
 
 func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lbNodeNameOrID string) (cdntypes.L4LBNodeConfig, error) {
-	if !ad.Superuser && ad.RoleName != "node" {
+	if !ad.Superuser && ad.RoleName != nodeRole {
 		return cdntypes.L4LBNodeConfig{}, cdnerrors.ErrForbidden
 	}
 
@@ -8657,11 +8665,13 @@ func generatePassword(length int) (string, error) {
 }
 
 type InitUser struct {
-	ID           pgtype.UUID
-	Name         string
-	Role         string
-	Password     string
-	AuthProvider string
+	name         string
+	role         string
+	authProvider string
+}
+
+func (iu InitUser) Name() string {
+	return iu.name
 }
 
 func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey bool, password string) (InitUser, error) {
@@ -8695,13 +8705,12 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
 
-	authProviderNames := []string{"local", "keycloak"}
+	authProviderNames := []string{localAuthProvider, keycloakAuthProvider}
 
 	u := InitUser{
-		Name:         "admin",
-		Role:         "admin",
-		Password:     password,
-		AuthProvider: authProviderNames[0],
+		name:         "admin",
+		role:         "admin",
+		authProvider: localAuthProvider,
 	}
 
 	var gorillaSessionEncKey []byte
@@ -8734,21 +8743,21 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		// roles there are no users either. So now we can create an initial
 		// admin role and user.
 		var adminRoleID pgtype.UUID
-		err = tx.QueryRow(initCtx, "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.Role).Scan(&adminRoleID)
+		err = tx.QueryRow(initCtx, "INSERT INTO roles (name, superuser) VALUES ($1, TRUE) RETURNING id", u.role).Scan(&adminRoleID)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.Role, err)
+			return fmt.Errorf("unable to INSERT initial superuser role '%s': %w", u.role, err)
 		}
 
 		// Add role used by ordinary users
-		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", "user")
+		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", userRole)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT initial user role '%s': %w", u.Role, err)
+			return fmt.Errorf("unable to INSERT initial user role '%s': %w", userRole, err)
 		}
 
 		// Add role used by cache and l4lb nodes to fetch config
-		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", "node")
+		_, err = tx.Exec(initCtx, "INSERT INTO roles (name) VALUES ($1)", nodeRole)
 		if err != nil {
-			return fmt.Errorf("unable to INSERT initial node role '%s': %w", u.Role, err)
+			return fmt.Errorf("unable to INSERT initial node role '%s': %w", nodeRole, err)
 		}
 
 		var localAuthProviderID pgtype.UUID
@@ -8758,12 +8767,12 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			if err != nil {
 				return fmt.Errorf("unable to INSERT auth provider '%s': %w", authProviderName, err)
 			}
-			if authProviderName == "local" {
+			if authProviderName == u.authProvider {
 				localAuthProviderID = authProviderID
 			}
 		}
 
-		userID, err := insertUserTx(initCtx, tx, u.Name, nil, adminRoleID, localAuthProviderID)
+		userID, err := insertUserTx(initCtx, tx, u.name, nil, adminRoleID, localAuthProviderID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user: %w", err)
 		}
@@ -8772,8 +8781,6 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user password: %w", err)
 		}
-
-		u.ID = userID
 
 		_, err = insertGorillaSessionKey(initCtx, tx, gorillaSessionAuthKey, gorillaSessionEncKey)
 		if err != nil {
@@ -8819,7 +8826,7 @@ func insertGorillaSessionKey(ctx context.Context, tx pgx.Tx, authKey []byte, enc
 
 type sessionKey struct {
 	TimeCreated time.Time `db:"time_created"`
-	AuthKey     []byte    `db:"auth_key"`
+	AuthKey     []byte    `db:"auth_key"` // #nosec G117 -- Used for carrying key to session.NewCookieStore(), never used for serialized output
 	EncKey      []byte    `db:"enc_key"`
 }
 
