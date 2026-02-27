@@ -44,3 +44,27 @@ body {
       padding: 2rem;
       border-radius: 0 0 8px 8px;
 }
+
+.login-separator {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin: 1.5rem 0;
+      color: var(--pico-muted-color);
+}
+
+.login-separator::before,
+.login-separator::after {
+      content: "";
+      flex: 1;
+      border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.login-error {
+      color: var(--error-color);
+      margin-top: 0.5rem;
+}
+
+.login-form a[role="button"] {
+      display: block;
+}
