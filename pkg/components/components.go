@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 //go:embed css/*.css
@@ -83,4 +84,33 @@ func apiSampleCurlCommand(serverURL *url.URL, orgName string) string {
 	apiURL := serverURL.JoinPath("api/v1/orgs", orgName, "client-credentials")
 	return fmt.Sprintf(`curl -X GET %s \
   -H 'Authorization: Bearer YOUR_ACCESS_TOKEN'`, apiURL.String())
+}
+
+func urlToSection(u *url.URL) string {
+	urlPath := u.EscapedPath()
+	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
+
+	// For now there are only nav bar links for pages under the org console path
+	if !strings.HasPrefix(urlPath, "/console/org/") {
+		return ""
+	}
+
+	switch {
+	case len(parts) <= 3:
+		// org console: /console/org/testorg
+		return "dashboard"
+	default:
+		// The special "create" sub-path is consistently named as the
+		// singular form of what it creates, so under
+		// /console/org/testorg/services you will find
+		// /console/org/testorg/create/service, in this case it is the
+		// "services" NavBar entry that is active.
+		if parts[3] == "create" && len(parts) >= 5 {
+			return parts[4] + "s"
+		}
+
+		// for org sub-paths just return the next part after the org name
+		// /console/org/testorg/api-tokens -> api-tokens
+		return parts[3]
+	}
 }

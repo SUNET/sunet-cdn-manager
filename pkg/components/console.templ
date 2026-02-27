@@ -9,7 +9,16 @@ import (
 	"strconv"
 )
 
-templ ConsolePage(title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component) {
+// activeAttr is used in the NavBar component to determine which navigation
+// link should be marked as active based on the current page URL.
+func activeAttr(section string, u *url.URL) templ.Attributes {
+	if section == urlToSection(u) {
+		return templ.Attributes{"aria-current": "page"}
+	}
+	return templ.Attributes{}
+}
+
+templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component) {
 	<!DOCTYPE html>
 	<html>
 		@consoleHeadComponent(title)
@@ -30,7 +39,7 @@ templ ConsolePage(title string, ad cdntypes.AuthData, orgName string, availableO
 						</form>
 					</span>
 				</header>
-				@NavBar(ad, orgName, availableOrgNames)
+				@NavBar(u, ad, orgName, availableOrgNames)
 				<main>
 					<h1>{ title }</h1>
 					<div id="contents">
@@ -79,13 +88,14 @@ templ Dashboard(dashData cdntypes.DashboardData) {
 	</div>
 }
 
-templ NavBar(ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
+templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
 	<div class="sidebar">
 		<aside>
 			<nav>
 				<ul>
 					if len(availableOrgNames) != 0 {
 						<li>
+							<p class="nav-section-label">Organization</p>
 							<form hx-get={ templ.URL("/console/org-switcher") } hx-trigger="change" hx-target="body" hx-push-url="true">
 								<select name="org">
 									if ad.OrgID == nil {
@@ -99,10 +109,13 @@ templ NavBar(ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
 						</li>
 					}
 					if orgName != "" {
-						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s", orgName)) }>Dashboard</a></li>
-						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/domains", orgName)) }>Domains</a></li>
-						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) }>Services</a></li>
-						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/api-tokens", orgName)) }>API tokens</a></li>
+						<li>
+							<p class="nav-section-label">Management</p>
+						</li>
+						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s", orgName)) } { activeAttr("dashboard", u)... }>Dashboard</a></li>
+						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/domains", orgName)) } { activeAttr("domains", u)... }>Domains</a></li>
+						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) } { activeAttr("services", u)... }>Services</a></li>
+						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/api-tokens", orgName)) } { activeAttr("api-tokens", u)... }>API tokens</a></li>
 					}
 				</ul>
 			</nav>
@@ -241,7 +254,7 @@ templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages
 }
 
 templ ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) {
-	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>Create service version</a>
+	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) }>Create service version</a>
 	if len(serviceVersions) == 0 {
 		<div>No versions created</div>
 	} else {
@@ -272,7 +285,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 						</button>
 						<button
 							type="button"
-							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
+							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
 							hx-target="body"
 							hx-push-url="true"
 						>
@@ -580,7 +593,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 			}
 		</article>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service-version/%s", orgName, serviceName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) }>
 		<article>
 			<fieldset>
 				<legend>Domains</legend>

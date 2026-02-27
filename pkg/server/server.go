@@ -2062,7 +2062,7 @@ func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, 
 		}
 	}
 
-	component := components.ConsolePage(title, ad, orgName, availableOrgNames, contents)
+	component := components.ConsolePage(r.URL, title, ad, orgName, availableOrgNames, contents)
 	return component.Render(r.Context(), w)
 }
 
@@ -6843,8 +6843,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
 		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
 		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc, cookieStore))
-		r.Get("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
-		r.Post("/org/{org}/create/service-version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
+		r.Get("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
+		r.Post("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
 		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, cookieStore, tokenURL, serverURL))
