@@ -3,10 +3,12 @@
 	--sunet-orange: #f56514;
 	--header-color: #fff;
 	--console-sidebar-background-color: #f0f2f5;
+	--error-color: #c62828;
 }
 
 @media only screen and (prefers-color-scheme: dark) {
 	:root {
 		--console-sidebar-background-color: #434547;
+		--error-color: #ef5350;
 	}
 }

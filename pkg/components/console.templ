@@ -709,38 +709,41 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 
 templ LoginPage(returnTo string, loginFailed bool) {
 	<!DOCTYPE html>
-	<head>
-		@picoCssLinks()
-		// Configure the grid layout of the login page
-		<link rel="stylesheet" href="/css/login-grid.css"/>
-		<title>SUNET CDN Manager Login</title>
-	</head>
 	<html>
-		<div class="login-container">
-			<div class="login-title">
-				<h1>SUNET CDN Manager</h1>
-			</div>
-			<div class="login-form">
-				<h2>Local</h2>
-				<form method="post" action={ templ.URL("/auth/login") }>
-					if returnTo != "" {
-						<input type="hidden" name="return_to" value={ returnTo }/>
+		<head>
+			@picoCssLinks()
+			// Configure the grid layout of the login page
+			<link rel="stylesheet" href="/css/login-grid.css"/>
+			<title>SUNET CDN Manager Login</title>
+		</head>
+		<body>
+			<div class="login-container">
+				<div class="login-title">
+					<h1>SUNET CDN Manager</h1>
+				</div>
+				<div class="login-form">
+					<a href={ templ.URL("/auth/oidc/keycloak") } role="button">Login with Swamid</a>
+					<div class="login-separator">or</div>
+					<h2>Local</h2>
+					if loginFailed {
+						<div class="login-error" role="alert">Login failed!</div>
 					}
-					<label for="username">Username</label>
-					<br/>
-					<input type="text" id="username" name="username"/>
-					<br/>
-					<label for="password">Password</label>
-					<br/>
-					<input type="password" id="password" name="password"/>
-					<button type="submit">Login</button>
-				</form>
-				if loginFailed {
-					<div>Login failed!</div>
-				}
-				<h2>OpenID Connect</h2>
-				<div><a href={ templ.URL("/auth/oidc/keycloak") }>Login with Keycloak</a></div>
+					<form method="post" action={ templ.URL("/auth/login") }>
+						if returnTo != "" {
+							<input type="hidden" name="return_to" value={ returnTo }/>
+						}
+						<label for="username">
+							Username
+							<input type="text" id="username" name="username"/>
+						</label>
+						<label for="password">
+							Password
+							<input type="password" id="password" name="password"/>
+						</label>
+						<button type="submit">Login</button>
+					</form>
+				</div>
 			</div>
-		</div>
+		</body>
 	</html>
 }
