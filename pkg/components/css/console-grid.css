@@ -41,6 +41,11 @@ The goal is:
 	color: #fff;
 }
 
+.app-name {
+	font-weight: 700;
+	font-size: 1.15rem;
+}
+
 .place-end {
 	place-self: self-end;
 }
@@ -104,4 +109,21 @@ main {
 #logout button:focus-visible {
 	outline: 2px solid currentColor;
 	outline-offset: 2px;
+}
+
+tbody tr td {
+	transition: background-color 0.15s ease;
+}
+
+tbody tr:hover td {
+	background-color: rgba(128, 128, 128, 0.08);
+}
+
+.empty-state {
+	text-align: center;
+	padding: 2rem;
+}
+
+.empty-state p {
+	color: var(--pico-muted-color);
 }
