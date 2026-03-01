@@ -25,7 +25,7 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 		<body hx-boost="true">
 			<div class="console-grid">
 				<header>
-					<span>
+					<span class="app-name">
 						SUNET CDN manager
 					</span>
 					<span class="place-end">
@@ -178,35 +178,42 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCredentialSafe, flashMessages []string, tokenURL *url.URL, serverURL *url.URL) {
 	@flashMessagesComponent(flashMessages)
 	if len(orgClientCreds) == 0 {
-		<div>No API tokens added</div>
+		<article class="empty-state">
+			<p>No API tokens added yet</p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } role="button">Add your first API token</a>
+		</article>
 	} else {
 		<table>
-			<tr>
-				<th>Name</th>
-				<th>Client ID</th>
-				<th>Actions</th>
-			</tr>
-			for _, orgClientCred := range orgClientCreds {
+			<thead>
 				<tr>
-					<td>{ orgClientCred.Name }</td>
-					<td>{ orgClientCred.ClientID }</td>
-					<td>
-						<button
-							type="button"
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/api-tokens/%s", orgName, orgClientCred.Name))) }
-							hx-target="body"
-							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", orgClientCred.Name) }
-						>
-							Delete
-						</button>
-					</td>
+					<th>Name</th>
+					<th>Client ID</th>
+					<th>Actions</th>
 				</tr>
-			}
+			</thead>
+			<tbody>
+				for _, orgClientCred := range orgClientCreds {
+					<tr>
+						<td>{ orgClientCred.Name }</td>
+						<td>{ orgClientCred.ClientID }</td>
+						<td>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/api-tokens/%s", orgName, orgClientCred.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", orgClientCred.Name) }
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
 		</table>
+		<p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } role="button">Add API token</a>
+		</p>
 	}
-	<p>
-		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) }>Add API token</a>
-	</p>
 	<div>
 		<p>To get an access token for use with the API:</p>
 		<pre>
@@ -329,12 +336,13 @@ templ CreateAPITokenContent(orgName string, atData APITokenData) {
 
 templ NewAPITokenContent(orgName string, newOrgCred cdntypes.NewOrgClientCredential, returnURL string) {
 	<article>
-		<header>Token "{ newOrgCred.Name }" created successfully</header>
+		<header>Details for new API token "{ newOrgCred.Name }"</header>
 		<p>Client ID:</p>
 		<pre><code>{ newOrgCred.ClientID }</code></pre>
 		<p>Client secret (will only be shown once):</p>
 		<pre><code id="api-secret">{ newOrgCred.ClientSecret }</code></pre>
 		<button
+			type="button"
 			_="on click
               writeText(#api-secret's textContent) into the navigator's clipboard
               then put 'Copied!' into me
@@ -344,7 +352,7 @@ templ NewAPITokenContent(orgName string, newOrgCred cdntypes.NewOrgClientCredent
 			Copy Secret
 		</button>
 		<footer>
-			<button hx-get={ returnURL } hx-target="body" class="secondary">
+			<button type="button" hx-get={ returnURL } hx-target="body" class="secondary" hx-push-url="true">
 				Done
 			</button>
 		</footer>
