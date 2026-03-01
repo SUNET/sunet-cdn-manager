@@ -73,19 +73,41 @@ templ picoCssLinks() {
 }
 
 templ Dashboard(dashData cdntypes.DashboardData) {
-	<div>
-		if !dashData.ResourceAccess {
+	if !dashData.ResourceAccess {
+		<article class="empty-state">
 			<p>You do not have access to any resources</p>
+		</article>
+	} else {
+		if dashData.OrgDashboard {
+			<div class="dashboard-grid">
+				<article>
+					<header><strong>Domains</strong></header>
+					<div class="quota-value">{ dashData.DomainUsed }/{ dashData.DomainQuota }</div>
+					if dashData.DomainQuota > 0 {
+						<progress aria-label="Domain quota" value={ strconv.FormatInt(dashData.DomainUsed, 10) } max={ strconv.FormatInt(dashData.DomainQuota, 10) }></progress>
+					}
+				</article>
+				<article>
+					<header><strong>Services</strong></header>
+					<div class="quota-value">{ dashData.ServiceUsed }/{ dashData.ServiceQuota }</div>
+					if dashData.ServiceQuota > 0 {
+						<progress aria-label="Service quota" value={ strconv.FormatInt(dashData.ServiceUsed, 10) } max={ strconv.FormatInt(dashData.ServiceQuota, 10) }></progress>
+					}
+				</article>
+				<article>
+					<header><strong>API Tokens</strong></header>
+					<div class="quota-value">{ dashData.ClientCredsUsed }/{ dashData.ClientCredsQuota }</div>
+					if dashData.ClientCredsQuota > 0 {
+						<progress aria-label="API token quota" value={ strconv.FormatInt(dashData.ClientCredsUsed, 10) } max={ strconv.FormatInt(dashData.ClientCredsQuota, 10) }></progress>
+					}
+				</article>
+			</div>
 		} else {
-			if dashData.OrgDashboard {
-				<p>Domain quota: { dashData.DomainUsed }/{ dashData.DomainQuota }</p>
-				<p>Service quota: { dashData.ServiceUsed }/{ dashData.ServiceQuota }</p>
-				<p>Org API token quota: { dashData.ClientCredsUsed }/{ dashData.ClientCredsQuota }</p>
-			} else {
-				<p>This is the root dashboard, select an organization from the sidebar to manage a given org.</p>
-			}
+			<article class="empty-state">
+				<p>Select an organization from the sidebar to manage its resources.</p>
+			</article>
 		}
-	</div>
+	}
 }
 
 templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames []string) {
