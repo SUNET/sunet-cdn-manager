@@ -160,41 +160,48 @@ templ flashMessagesComponent(flashMessages []string) {
 templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(domains) == 0 {
-		<div>No domains added</div>
+		<article class="empty-state">
+			<p>No domains added yet</p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } role="button">Add your first domain</a>
+		</article>
 	} else {
 		<table>
-			<tr>
-				<th>Domain</th>
-				<th>Verified</th>
-				<th>Verification record</th>
-				<th>Actions</th>
-			</tr>
-			for _, domain := range domains {
+			<thead>
 				<tr>
-					<td>{ domain.Name }</td>
-					if domain.Verified {
-						<td><span aria-hidden="true">✅ </span>Yes</td>
-					} else {
-						<td><span aria-hidden="true">⏳ </span>In progress</td>
-					}
-					<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
-					<td>
-						<button
-							type="button"
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))) }
-							hx-target="body"
-							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
-						>
-							Delete
-						</button>
-					</td>
+					<th>Domain</th>
+					<th>Verified</th>
+					<th>Verification record</th>
+					<th>Actions</th>
 				</tr>
-			}
+			</thead>
+			<tbody>
+				for _, domain := range domains {
+					<tr>
+						<td>{ domain.Name }</td>
+						if domain.Verified {
+							<td><span aria-hidden="true">✅ </span>Yes</td>
+						} else {
+							<td><span aria-hidden="true">⏳ </span>In progress</td>
+						}
+						<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
+						<td>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
 		</table>
+		<p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } role="button">Add domain</a>
+		</p>
 	}
-	<p>
-		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>Add domain</a>
-	</p>
 }
 
 templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCredentialSafe, flashMessages []string, tokenURL *url.URL, serverURL *url.URL) {
@@ -255,92 +262,114 @@ templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCreden
 templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(services) == 0 {
-		<div>No services created</div>
+		<article class="empty-state">
+			<p>No services created yet</p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } role="button">Create your first service</a>
+		</article>
 	} else {
 		<table>
-			<tr>
-				<th>Service</th>
-				<th>Actions</th>
-			</tr>
-			for _, service := range services {
+			<thead>
 				<tr>
-					<td><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
-					<td>
-						<button
-							type="button"
-							hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }
-							hx-target="body"
-							hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
-						>
-							Delete
-						</button>
-					</td>
+					<th>Service</th>
+					<th>Actions</th>
 				</tr>
-			}
+			</thead>
+			<tbody>
+				for _, service := range services {
+					<tr>
+						<td><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
+						<td>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
 		</table>
+		<p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } role="button">Create service</a>
+		</p>
 	}
-	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) }>Create service</a>
 }
 
 templ ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) {
-	<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) }>Create service version</a>
 	if len(serviceVersions) == 0 {
-		<div>No versions created</div>
+		<article class="empty-state">
+			<p>No versions created yet</p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } role="button">Create your first version</a>
+		</article>
 	} else {
 		<table>
-			<tr>
-				<th>Version</th>
-				<th>Active</th>
-				<th>Actions</th>
-			</tr>
-			// Print versions starting with the latest version
-			for i := len(serviceVersions)-1; i >= 0; i-- {
-				{{ sv := serviceVersions[i] }}
+			<thead>
 				<tr>
-					<td>
-						<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d", sv.OrgName, sv.ServiceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
-					</td>
-					<td>
-						{ strconv.FormatBool(sv.Active) }
-					</td>
-					<td>
-						<button
-							type="button"
-							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, sv.ServiceName, sv.Version))) }
-							hx-target="body"
-							disabled?={ sv.Active }
-						>
-							Activate
-						</button>
-						<button
-							type="button"
-							hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
-							hx-target="body"
-							hx-push-url="true"
-						>
-							Clone
-						</button>
-					</td>
+					<th>Version</th>
+					<th>Active</th>
+					<th>Actions</th>
 				</tr>
-			}
+			</thead>
+			<tbody>
+				// Print versions starting with the latest version
+				for i := len(serviceVersions)-1; i >= 0; i-- {
+					{{ sv := serviceVersions[i] }}
+					<tr>
+						<td>
+							<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d", sv.OrgName, sv.ServiceName, sv.Version)) }>{ strconv.FormatInt(sv.Version, 10) }</a>
+						</td>
+						<td>
+							if sv.Active {
+								<span aria-hidden="true">✅ </span>Yes
+							} else {
+								<span aria-hidden="true">❌ </span>No
+							}
+						</td>
+						<td>
+							<button
+								type="button"
+								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, sv.ServiceName, sv.Version))) }
+								hx-target="body"
+								disabled?={ sv.Active }
+							>
+								Activate
+							</button>
+							<button
+								type="button"
+								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
+								hx-target="body"
+								hx-push-url="true"
+							>
+								Clone
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
 		</table>
+		<p>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } role="button">Create service version</a>
+		</p>
 	}
 }
 
 templ CreateDomainContent(orgName string, dData DomainData) {
-	<span class="error">{ dData.Errors.ServerError }</span>
+	<span class="error-text">{ dData.Errors.ServerError }</span>
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
 		</label>
-		<span class="error">{ dData.Errors.Name }</span>
+		<span class="error-text">{ dData.Errors.Name }</span>
 		<button type="submit">Add domain</button>
 	</form>
 }
 
 templ CreateAPITokenContent(orgName string, atData APITokenData) {
-	<span class="error">{ atData.Errors.ServerError }</span>
+	<span class="error-text">{ atData.Errors.ServerError }</span>
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) }>
 		<label for="name">
 			Name
@@ -350,8 +379,8 @@ templ CreateAPITokenContent(orgName string, atData APITokenData) {
 			Description
 			<input type="text" id="description" name="description" placeholder="Enter a description..." value={ atData.Description }/>
 		</label>
-		<span class="error">{ atData.Errors.Name }</span>
-		<span class="error">{ atData.Errors.Description }</span>
+		<span class="error-text">{ atData.Errors.Name }</span>
+		<span class="error-text">{ atData.Errors.Description }</span>
 		<button type="submit">Add API token</button>
 	</form>
 }
@@ -382,6 +411,18 @@ templ NewAPITokenContent(orgName string, newOrgCred cdntypes.NewOrgClientCredent
 }
 
 templ CreateServiceContent(orgName string, err error) {
+	if err != nil {
+		<article id="error-message" aria-label="Error" role="alert">
+			switch  {
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					<div><strong>Error:</strong> Service already exists</div>
+				case errors.Is(err, cdnerrors.ErrInvalidFormData):
+					<div><strong>Error:</strong> Invalid form data</div>
+				default:
+					<div><strong>Error:</strong> Service creation failed</div>
+			}
+		</article>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) }>
 		<label for="name">
 			Name
@@ -389,16 +430,6 @@ templ CreateServiceContent(orgName string, err error) {
 		</label>
 		<button type="submit">Add service</button>
 	</form>
-	if err != nil {
-		switch  {
-			case errors.Is(err, cdnerrors.ErrAlreadyExists):
-				<div>Service already exists</div>
-			case errors.Is(err, cdnerrors.ErrInvalidFormData):
-				<div>Invalid form data</div>
-			default:
-				<div>Service creation failed</div>
-		}
-	}
 }
 
 templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string, vclKeyOrder []string) {
@@ -431,32 +462,36 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 			<p>No origins configured</p>
 		} else {
 			<table>
-				<tr>
-					<th scope="col">Host</th>
-					<th scope="col">Port</th>
-					<th scope="col">TLS</th>
-					<th scope="col">Verify TLS</th>
-				</tr>
-				for _, origin := range sv.Origins {
+				<thead>
 					<tr>
-						<td>{ origin.Host }</td>
-						<td>{ strconv.Itoa(origin.Port) }</td>
-						<td>
-							if origin.TLS {
-								<span aria-hidden="true">✅ </span>Enabled
-							} else {
-								<span aria-hidden="true">❌ </span>Disabled
-							}
-						</td>
-						<td>
-							if origin.VerifyTLS {
-								<span aria-hidden="true">✅ </span>Enabled
-							} else {
-								<span aria-hidden="true">❌ </span>Disabled
-							}
-						</td>
+						<th scope="col">Host</th>
+						<th scope="col">Port</th>
+						<th scope="col">TLS</th>
+						<th scope="col">Verify TLS</th>
 					</tr>
-				}
+				</thead>
+				<tbody>
+					for _, origin := range sv.Origins {
+						<tr>
+							<td>{ origin.Host }</td>
+							<td>{ strconv.Itoa(origin.Port) }</td>
+							<td>
+								if origin.TLS {
+									<span aria-hidden="true">✅ </span>Enabled
+								} else {
+									<span aria-hidden="true">❌ </span>Disabled
+								}
+							</td>
+							<td>
+								if origin.VerifyTLS {
+									<span aria-hidden="true">✅ </span>Enabled
+								} else {
+									<span aria-hidden="true">❌ </span>Disabled
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
 			</table>
 		}
 	</article>
@@ -481,7 +516,7 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 			</header>
 			for _, k := range vclKeyOrder {
 				<details>
-					<summary>{ k }</summary>
+					<summary><span class="vcl-label">{ k }</span></summary>
 					<pre><code>{ vclKeyToConf[k] }</code></pre>
 				</details>
 			}
@@ -609,7 +644,7 @@ templ deleteOriginButton(index string, disabled bool) {
 
 templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	if err != nil {
-		<article id="error-message" aria-label="Error">
+		<article id="error-message" aria-label="Error" role="alert">
 			switch  {
 				case errors.Is(err, cdnerrors.ErrInvalidFormData):
 					<div><strong>Error:</strong> Invalid form data</div>
