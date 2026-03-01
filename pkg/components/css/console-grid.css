@@ -143,3 +143,12 @@ tbody tr:hover td {
 .empty-state p {
 	color: var(--pico-muted-color);
 }
+
+.error-text {
+	color: var(--error-color);
+	font-size: 0.875rem;
+}
+
+.vcl-label {
+	font-family: var(--pico-font-family-monospace, monospace);
+}
