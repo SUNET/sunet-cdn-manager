@@ -1,14 +1,19 @@
 :root {
 	--space-medium: 10px;
+	--space-large: 20px;
 	--sunet-orange: #f56514;
 	--header-color: #fff;
 	--console-sidebar-background-color: #f0f2f5;
+	--flash-success-border: #2e7d32;
+	--flash-success-bg: #e8f5e9;
 	--error-color: #c62828;
 }
 
 @media only screen and (prefers-color-scheme: dark) {
 	:root {
 		--console-sidebar-background-color: #434547;
+		--flash-success-border: #66bb6a;
+		--flash-success-bg: #1b3d1e;
 		--error-color: #ef5350;
 	}
 }

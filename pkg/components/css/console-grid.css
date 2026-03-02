@@ -32,13 +32,13 @@ The goal is:
 .console-grid > header {
 	grid-area: header;
 	background: var(--sunet-orange);
-	padding-top: var(--space-medium);
-	padding-right: var(--space-medium);
-	padding-bottom: var(--space-medium);
-	padding-left: var(--space-medium);
-	display:grid;
+	padding: var(--space-medium);
+	display: grid;
 	grid-template-columns: 1fr 1fr;
 	color: #fff;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+	position: relative;
+	z-index: 1;
 }
 
 .app-name {
@@ -47,7 +47,10 @@ The goal is:
 }
 
 .place-end {
-	place-self: self-end;
+	justify-self: end;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
 }
 
 .console-grid > header a {
@@ -58,9 +61,11 @@ The goal is:
 .sidebar {
 	grid-area: nav;
 	background-color: var(--console-sidebar-background-color);
+	border-right: 1px solid var(--pico-muted-border-color);
+	width: clamp(160px, 22vw, 200px)
 }
 
-nav {
+.sidebar nav {
 	padding-right: var(--space-medium);
 	padding-left: var(--space-medium);
 }
@@ -74,14 +79,23 @@ nav {
 	margin: 0;
 }
 
+.sidebar nav a {
+	border-left: 3px solid transparent;
+	padding-left: 0.5rem;
+}
+
 .sidebar nav a[aria-current="page"] {
 	font-weight: 600;
+	border-left: 3px solid var(--sunet-orange);
+	padding-left: 0.5rem;
 }
 
 main {
 	grid-area: main;
-	padding-right: var(--space-medium);
-	padding-left: var(--space-medium);
+	padding-top: var(--space-large);
+	padding-bottom: var(--space-large);
+	padding-right: var(--space-large);
+	padding-left: var(--space-large);
 }
 
 .flash-container {
@@ -93,6 +107,11 @@ main {
 	display: flex;
 	flex-direction: column;
 	gap: 0.5rem;
+}
+
+.flash-container article {
+	border-left: 4px solid var(--flash-success-border);
+	background-color: var(--flash-success-bg);
 }
 
 #logout {
