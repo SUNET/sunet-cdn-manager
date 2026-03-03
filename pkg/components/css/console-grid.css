@@ -172,6 +172,27 @@ tbody tr:hover td {
 	font-family: var(--pico-font-family-monospace, monospace);
 }
 
+/* Breadcrumb navigation */
+.breadcrumb ol {
+	display: flex;
+	flex-wrap: wrap;
+	list-style: none;
+	padding: 0;
+	margin: 0 0 0.25rem 0;
+	font-size: 0.85rem;
+	gap: 0;
+}
+
+.breadcrumb li {
+	padding: 0;
+	margin: 0;
+}
+
+.breadcrumb-sep {
+	padding: 0 0.4rem;
+	color: var(--pico-muted-color);
+}
+
 /* HTMX loading spinner (visibility handled by htmx built-in .htmx-indicator CSS) */
 @keyframes spin {
 	to { transform: rotate(360deg); }

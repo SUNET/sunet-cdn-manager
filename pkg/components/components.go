@@ -86,31 +86,118 @@ func apiSampleCurlCommand(serverURL *url.URL, orgName string) string {
   -H 'Authorization: Bearer YOUR_ACCESS_TOKEN'`, apiURL.String())
 }
 
+// Breadcrumb represents one item in the breadcrumb navigation trail.
+type Breadcrumb struct {
+	Label string
+	URL   string
+}
+
+// section defines the metadata for a console navigation section. To add a new
+// section, add an entry to the sections map below — both urlToSection and
+// buildBreadcrumbs will pick it up automatically.
+type section struct {
+	Label      string // Display name shown in navigation list (e.g. "Domains")
+	CreateSlug string // Singular form used in /create/ paths (e.g. "domain")
+}
+
+// sections maps URL path segments to their configuration. This is the single
+// source of truth for section names used by both urlToSection (active nav
+// highlighting) and buildBreadcrumbs (ancestor navigation).
+var sections = map[string]section{
+	"domains":    {Label: "Domains", CreateSlug: "domain"},
+	"services":   {Label: "Services", CreateSlug: "service"},
+	"api-tokens": {Label: "API tokens", CreateSlug: "api-token"},
+}
+
+// createSlugToSection provides reverse lookup from the singular create/ path
+// segment to the section URL path (e.g. "domain" -> "domains").
+var createSlugToSection = func() map[string]string {
+	m := map[string]string{}
+	for path, sec := range sections {
+		m[sec.CreateSlug] = path
+	}
+	return m
+}()
+
+// buildBreadcrumbs returns the ancestor navigation path for the given console
+// URL. Each item is a link. The current page is not included since it is
+// already shown in the <h1> title.
+func buildBreadcrumbs(u *url.URL, orgName string) []Breadcrumb {
+	urlPath := u.EscapedPath()
+	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
+
+	// Only generate breadcrumbs for org-scoped pages with depth beyond the org dashboard
+	if !strings.HasPrefix(urlPath, "/console/org/") || len(parts) <= 3 {
+		return nil
+	}
+
+	orgBase := fmt.Sprintf("/console/org/%s", orgName)
+
+	crumbs := []Breadcrumb{{Label: orgName, URL: orgBase}}
+
+	switch {
+	case parts[3] == "create" && len(parts) >= 5:
+		// /console/org/{org}/create/{slug}[/version/{service}]
+		if sectionPath, ok := createSlugToSection[parts[4]]; ok {
+			sec := sections[sectionPath]
+			crumbs = append(crumbs, Breadcrumb{Label: sec.Label, URL: orgBase + "/" + sectionPath})
+
+			// Handle nested create paths like /create/service/version/{service}
+			if len(parts) >= 7 && parts[5] == "version" {
+				serviceName := parts[6]
+				crumbs = append(crumbs, Breadcrumb{Label: serviceName, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, serviceName)})
+			}
+		}
+
+	default:
+		// /console/org/{org}/{section}[/{item}[/{sub}[/...]]]
+		sec, ok := sections[parts[3]]
+		if !ok {
+			return crumbs
+		}
+		sectionPath := parts[3]
+
+		if len(parts) >= 5 {
+			// Deeper than the section list, add section crumb
+			crumbs = append(crumbs, Breadcrumb{Label: sec.Label, URL: orgBase + "/" + sectionPath})
+			itemName := parts[4]
+
+			if len(parts) >= 6 {
+				// Deeper than the item, add item crumb
+				crumbs = append(crumbs, Breadcrumb{Label: itemName, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, itemName)})
+
+				if len(parts) >= 7 {
+					// Deeper than sub-item (e.g. /services/test-service/3/activate)
+					subItem := parts[5]
+					crumbs = append(crumbs, Breadcrumb{Label: "Version " + subItem, URL: fmt.Sprintf("%s/%s/%s/%s", orgBase, sectionPath, itemName, subItem)})
+				}
+			}
+		}
+	}
+
+	return crumbs
+}
+
+// urlToSection returns the active navigation section for the given console URL,
+// used by NavBar to highlight the current section link.
 func urlToSection(u *url.URL) string {
 	urlPath := u.EscapedPath()
 	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
 
-	// For now there are only nav bar links for pages under the org console path
 	if !strings.HasPrefix(urlPath, "/console/org/") {
 		return ""
 	}
 
-	switch {
-	case len(parts) <= 3:
-		// org console: /console/org/testorg
+	if len(parts) <= 3 {
 		return "dashboard"
-	default:
-		// The special "create" sub-path is consistently named as the
-		// singular form of what it creates, so under
-		// /console/org/testorg/services you will find
-		// /console/org/testorg/create/service, in this case it is the
-		// "services" NavBar entry that is active.
-		if parts[3] == "create" && len(parts) >= 5 {
-			return parts[4] + "s"
-		}
-
-		// for org sub-paths just return the next part after the org name
-		// /console/org/testorg/api-tokens -> api-tokens
-		return parts[3]
 	}
+
+	// Map /create/{slug} back to the section path
+	if parts[3] == "create" && len(parts) >= 5 {
+		if sectionPath, ok := createSlugToSection[parts[4]]; ok {
+			return sectionPath
+		}
+	}
+
+	return parts[3]
 }

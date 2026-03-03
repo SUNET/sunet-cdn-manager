@@ -41,6 +41,7 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 				</header>
 				@NavBar(u, ad, orgName, availableOrgNames)
 				<main>
+					@breadcrumbNav(buildBreadcrumbs(u, orgName))
 					<h1>{ title } <span id="spinner" class="htmx-indicator spinner"></span></h1>
 					<div id="contents">
 						@contents
@@ -49,6 +50,23 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 			</div>
 		</body>
 	</html>
+}
+
+templ breadcrumbNav(crumbs []Breadcrumb) {
+	if len(crumbs) > 0 {
+		<nav aria-label="Breadcrumb" class="breadcrumb">
+			<ol>
+				for i, crumb := range crumbs {
+					<li>
+						if i > 0 {
+							<span class="breadcrumb-sep" aria-hidden="true">/</span>
+						}
+						<a href={ templ.URL(crumb.URL) }>{ crumb.Label }</a>
+					</li>
+				}
+			</ol>
+		</nav>
+	}
 }
 
 templ commonHead() {
