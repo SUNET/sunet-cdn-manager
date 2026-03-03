@@ -2798,7 +2798,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 		} else {
 			vclStepsMap, _ = cdntypes.VclStepsToMap(cloneData.VclSteps)
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "<article><fieldset><legend>VCL steps</legend> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "<article><fieldset><legend>VCL steps</legend> <small id=\"vcl-hint\" class=\"vcl-hint\">Tab inserts spaces. Press Escape to enable Tab navigation out of the editor.</small> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2810,7 +2810,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 			var templ_7745c5c3_Var132 string
 			templ_7745c5c3_Var132, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 790, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 791, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var132))
 			if templ_7745c5c3_Err != nil {
@@ -2823,7 +2823,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 			var templ_7745c5c3_Var133 string
 			templ_7745c5c3_Var133, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 791, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 792, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var133))
 			if templ_7745c5c3_Err != nil {
@@ -2836,7 +2836,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 			var templ_7745c5c3_Var134 string
 			templ_7745c5c3_Var134, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 792, Col: 47}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 794, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var134))
 			if templ_7745c5c3_Err != nil {
@@ -2849,20 +2849,20 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 			var templ_7745c5c3_Var135 string
 			templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.JoinStringErrs(vclSK.FieldToKey[vclStep])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 792, Col: 82}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 795, Col: 40}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var135))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "\" placeholder=\"Enter your VCL here...\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "\" placeholder=\"Enter your VCL here...\" class=\"vcl-editor\" rows=\"6\" spellcheck=\"false\" aria-describedby=\"vcl-hint\" _=\"on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'\n\t\t\t\t\t\t\t\thalt the event\n\t\t\t\t\t\t\t\tget my.selectionStart\n\t\t\t\t\t\t\t\tset start to it\n\t\t\t\t\t\t\t\tget my.selectionEnd\n\t\t\t\t\t\t\t\tset end to it\n\t\t\t\t\t\t\t\tset my.value to my.value.substring(0, start) + '  ' + my.value.substring(end)\n\t\t\t\t\t\t\t\tset my.selectionStart to start + 2\n\t\t\t\t\t\t\t\tset my.selectionEnd to start + 2\n\t\t\t\t\t\t\tend\n\t\t\t\t\t\t\ton keydown[key is 'Escape']\n\t\t\t\t\t\t\t\tset my.dataset.nav to 'true'\n\t\t\t\t\t\t\ton focus\n\t\t\t\t\t\t\t\tremove @data-nav from me\n\t\t\t\t\t\t\ton input\n\t\t\t\t\t\t\t\tset my style.height to 'auto'\n\t\t\t\t\t\t\t\tset my style.height to my.scrollHeight + 'px'\n\t\t\t\t\t\t\ton load\n\t\t\t\t\t\t\t\tset my style.height to my.scrollHeight + 'px'\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var136 string
 			templ_7745c5c3_Var136, templ_7745c5c3_Err = templ.JoinStringErrs(vclStepsMap[vclSK.FieldToKey[vclStep]])
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 792, Col: 162}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 820, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var136))
 			if templ_7745c5c3_Err != nil {
@@ -2909,7 +2909,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var138 string
 		templ_7745c5c3_Var138, templ_7745c5c3_Err = templ.JoinStringErrs(serviceName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 803, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 831, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var138))
 		if templ_7745c5c3_Err != nil {
@@ -2922,7 +2922,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var139 string
 		templ_7745c5c3_Var139, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(version, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 803, Col: 88}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 831, Col: 88}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var139))
 		if templ_7745c5c3_Err != nil {
@@ -2935,7 +2935,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var140 templ.SafeURL
 		templ_7745c5c3_Var140, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 804, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 832, Col: 126}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var140))
 		if templ_7745c5c3_Err != nil {
@@ -2995,7 +2995,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 		var templ_7745c5c3_Var142 templ.SafeURL
 		templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/auth/oidc/keycloak"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 832, Col: 47}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 860, Col: 47}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var142))
 		if templ_7745c5c3_Err != nil {
@@ -3018,7 +3018,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 		var templ_7745c5c3_Var143 templ.SafeURL
 		templ_7745c5c3_Var143, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/auth/login"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 838, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 866, Col: 58}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var143))
 		if templ_7745c5c3_Err != nil {
@@ -3036,7 +3036,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 			var templ_7745c5c3_Var144 string
 			templ_7745c5c3_Var144, templ_7745c5c3_Err = templ.JoinStringErrs(returnTo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 840, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 868, Col: 61}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var144))
 			if templ_7745c5c3_Err != nil {

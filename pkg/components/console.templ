@@ -785,11 +785,39 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 		<article>
 			<fieldset>
 				<legend>VCL steps</legend>
+				<small id="vcl-hint" class="vcl-hint">Tab inserts spaces. Press Escape to enable Tab navigation out of the editor.</small>
 				for _, vclStep := range vclSK.FieldOrder {
 					<div>
 						<label for={ vclSK.FieldToKey[vclStep] }>
 							{ vclSK.FieldToKey[vclStep] }
-							<textarea id={ vclSK.FieldToKey[vclStep] } name={ vclSK.FieldToKey[vclStep] } placeholder="Enter your VCL here...">{ vclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
+							<textarea
+								id={ vclSK.FieldToKey[vclStep] }
+								name={ vclSK.FieldToKey[vclStep] }
+								placeholder="Enter your VCL here..."
+								class="vcl-editor"
+								rows="6"
+								spellcheck="false"
+								aria-describedby="vcl-hint"
+								_="on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'
+								halt the event
+								get my.selectionStart
+								set start to it
+								get my.selectionEnd
+								set end to it
+								set my.value to my.value.substring(0, start) + '  ' + my.value.substring(end)
+								set my.selectionStart to start + 2
+								set my.selectionEnd to start + 2
+							end
+							on keydown[key is 'Escape']
+								set my.dataset.nav to 'true'
+							on focus
+								remove @data-nav from me
+							on input
+								set my style.height to 'auto'
+								set my style.height to my.scrollHeight + 'px'
+							on load
+								set my style.height to my.scrollHeight + 'px'"
+							>{ vclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
 						</label>
 					</div>
 				}

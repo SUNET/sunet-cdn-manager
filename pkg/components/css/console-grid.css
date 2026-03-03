@@ -172,6 +172,22 @@ tbody tr:hover td {
 	font-family: var(--pico-font-family-monospace, monospace);
 }
 
+/* VCL code editor */
+.vcl-hint {
+	color: var(--pico-muted-color);
+}
+
+.vcl-editor {
+	font-family: var(--pico-font-family-monospace, monospace);
+	font-size: 0.85rem;
+	line-height: 1.5;
+	tab-size: 2;
+	min-height: 8rem;
+	max-height: 80vh;
+	white-space: pre;
+	resize: none;
+}
+
 /* Breadcrumb navigation */
 .breadcrumb ol {
 	display: flex;
