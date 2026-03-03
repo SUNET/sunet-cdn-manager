@@ -15,56 +15,56 @@ The goal is:
 @import "_variables.css";
 
 body {
-      height: 100vh;
-      display: grid;
-      place-items: center;
-      background-color: var(--console-sidebar-background-color);
+	height: 100vh;
+	display: grid;
+	place-items: center;
+	background-color: var(--console-sidebar-background-color);
 }
 
 .login-container {
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-      width: 100%;
-      max-width: 480px;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+	width: 100%;
+	max-width: 480px;
 }
 
 .login-title {
-      background: var(--sunet-orange);
-      padding: 1rem;
-      border-radius: 8px 8px 0 0;
+	background: var(--sunet-orange);
+	padding: 1rem;
+	border-radius: 8px 8px 0 0;
 }
 
 .login-title h1 {
-      margin-bottom: 0;
-      text-align: center;
-      color: var(--header-color);
+	margin-bottom: 0;
+	text-align: center;
+	color: var(--header-color);
 }
 
 .login-form {
-      background: var(--pico-background-color);
-      padding: 2rem;
-      border-radius: 0 0 8px 8px;
+	background: var(--pico-background-color);
+	padding: 2rem;
+	border-radius: 0 0 8px 8px;
 }
 
 .login-separator {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      margin: 1.5rem 0;
-      color: var(--pico-muted-color);
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	margin: 1.5rem 0;
+	color: var(--pico-muted-color);
 }
 
 .login-separator::before,
 .login-separator::after {
-      content: "";
-      flex: 1;
-      border-top: 1px solid var(--pico-muted-border-color);
+	content: "";
+	flex: 1;
+	border-top: 1px solid var(--pico-muted-border-color);
 }
 
 .login-error {
-      color: var(--error-color);
-      margin-top: 0.5rem;
+	color: var(--error-color);
+	margin-top: 0.5rem;
 }
 
 .login-form a[role="button"] {
-      display: block;
+	display: block;
 }
