@@ -171,3 +171,81 @@ tbody tr:hover td {
 .vcl-label {
 	font-family: var(--pico-font-family-monospace, monospace);
 }
+
+/* HTMX loading spinner (visibility handled by htmx built-in .htmx-indicator CSS) */
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
+.spinner {
+	display: inline-block;
+	width: 1em;
+	height: 1em;
+	border: 2px solid var(--pico-muted-border-color);
+	border-top-color: var(--sunet-orange);
+	border-radius: 50%;
+	animation: spin 0.6s linear infinite;
+	vertical-align: middle;
+	margin-left: 0.5rem;
+}
+
+/* Mobile responsive: collapse sidebar on small screens */
+@media (max-width: 768px) {
+	.console-grid {
+		grid-template-areas:
+			"header"
+			"nav"
+			"main";
+		grid-template-columns: 1fr;
+		grid-template-rows: auto auto 1fr;
+	}
+
+	.sidebar {
+		width: 100%;
+		border-right: none;
+		border-bottom: 1px solid var(--pico-muted-border-color);
+	}
+
+	.sidebar nav {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding: var(--space-medium);
+	}
+
+	.sidebar nav ul {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.25rem 1rem;
+		margin: 0;
+		padding: 0;
+	}
+
+	.sidebar nav a {
+		border-left: none;
+		padding-left: 0;
+	}
+
+	.sidebar nav a[aria-current="page"] {
+		border-left: none;
+		border-bottom: 2px solid var(--sunet-orange);
+		padding-left: 0;
+		padding-bottom: 0.15rem;
+	}
+
+	.nav-section-label {
+		padding: 0;
+	}
+
+	main {
+		padding: var(--space-medium);
+	}
+
+	/* Stack table cells on very small screens */
+	table {
+		font-size: 0.8rem;
+	}
+
+}

@@ -20,9 +20,9 @@ func activeAttr(section string, u *url.URL) templ.Attributes {
 
 templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component) {
 	<!DOCTYPE html>
-	<html>
+	<html lang="en">
 		@consoleHeadComponent(title)
-		<body hx-boost="true">
+		<body hx-boost="true" hx-indicator="#spinner">
 			<div class="console-grid">
 				<header>
 					<span class="app-name">
@@ -41,7 +41,7 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 				</header>
 				@NavBar(u, ad, orgName, availableOrgNames)
 				<main>
-					<h1>{ title }</h1>
+					<h1>{ title } <span id="spinner" class="htmx-indicator spinner"></span></h1>
 					<div id="contents">
 						@contents
 					</div>
@@ -51,8 +51,14 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 	</html>
 }
 
+templ commonHead() {
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1"/>
+}
+
 templ consoleHeadComponent(title string) {
 	<head>
+		@commonHead()
 		// Enable htmx
 		<script src="/js/dist/htmx/2.0.4/htmx.min.js"></script>
 		// Enable _hyperscript
@@ -190,6 +196,7 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))) }
 								hx-target="body"
 								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
+								hx-disabled-elt="this"
 							>
 								Delete
 							</button>
@@ -231,6 +238,7 @@ templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCreden
 								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/api-tokens/%s", orgName, orgClientCred.Name))) }
 								hx-target="body"
 								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", orgClientCred.Name) }
+								hx-disabled-elt="this"
 							>
 								Delete
 							</button>
@@ -284,6 +292,7 @@ templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages
 								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }
 								hx-target="body"
 								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
+								hx-disabled-elt="this"
 							>
 								Delete
 							</button>
@@ -334,6 +343,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, sv.ServiceName, sv.Version))) }
 								hx-target="body"
 								disabled?={ sv.Active }
+								hx-disabled-elt="this"
 							>
 								Activate
 							</button>
@@ -358,7 +368,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 
 templ CreateDomainContent(orgName string, dData DomainData) {
 	<span class="error-text">{ dData.Errors.ServerError }</span>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
@@ -370,7 +380,7 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 
 templ CreateAPITokenContent(orgName string, atData APITokenData) {
 	<span class="error-text">{ atData.Errors.ServerError }</span>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter API token name..." value={ atData.Name }/>
@@ -423,7 +433,7 @@ templ CreateServiceContent(orgName string, err error) {
 			}
 		</article>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
 			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..."/>
@@ -658,7 +668,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 			}
 		</article>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']">
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -773,7 +783,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)) }>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)) } hx-disabled-elt="find button[type='submit']">
 		<label for="confirmation">
 			Yes I am sure
 			<input type="checkbox" id="confirmation" name="confirmation"/>
@@ -787,8 +797,9 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 
 templ LoginPage(returnTo string, loginFailed bool) {
 	<!DOCTYPE html>
-	<html>
+	<html lang="en">
 		<head>
+			@commonHead()
 			@picoCssLinks()
 			// Configure the grid layout of the login page
 			<link rel="stylesheet" href="/css/login-grid.css"/>
