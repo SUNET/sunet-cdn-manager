@@ -371,7 +371,7 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name }/>
+			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name } required/>
 		</label>
 		<span class="error-text">{ dData.Errors.Name }</span>
 		<button type="submit">Add domain</button>
@@ -383,11 +383,11 @@ templ CreateAPITokenContent(orgName string, atData APITokenData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter API token name..." value={ atData.Name }/>
+			<input type="text" id="name" name="name" placeholder="Enter API token name..." value={ atData.Name } required/>
 		</label>
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter a description..." value={ atData.Description }/>
+			<input type="text" id="description" name="description" placeholder="Enter a description..." value={ atData.Description } required/>
 		</label>
 		<span class="error-text">{ atData.Errors.Name }</span>
 		<span class="error-text">{ atData.Errors.Description }</span>
@@ -436,7 +436,7 @@ templ CreateServiceContent(orgName string, err error) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..."/>
+			<input type="text" id="name" name="name" placeholder="Enter service name, e.g. my-service-1..." required/>
 		</label>
 		<button type="submit">Add service</button>
 	</form>
@@ -574,7 +574,7 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 					}
 				}}
 				Host
-				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ host }/>
+				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ host } required/>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.port", index) }>
 				{{
@@ -587,7 +587,7 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 					}
 				}}
 				Port
-				<input type="text" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr }/>
+				<input type="number" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr } min="1" max="65535" step="1" inputmode="numeric" required/>
 			</label>
 			<label for={ fmt.Sprintf("origins.%d.tls", index) }>
 				{{
@@ -823,11 +823,11 @@ templ LoginPage(returnTo string, loginFailed bool) {
 						}
 						<label for="username">
 							Username
-							<input type="text" id="username" name="username"/>
+							<input type="text" id="username" name="username" required/>
 						</label>
 						<label for="password">
 							Password
-							<input type="password" id="password" name="password"/>
+							<input type="password" id="password" name="password" required/>
 						</label>
 						<button type="submit">Login</button>
 					</form>

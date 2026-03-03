@@ -1414,7 +1414,7 @@ func CreateDomainContent(orgName string, dData DomainData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 117, "\"></label> <span class=\"error-text\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 117, "\" required></label> <span class=\"error-text\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1495,7 +1495,7 @@ func CreateAPITokenContent(orgName string, atData APITokenData) templ.Component 
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 122, "\"></label> <label for=\"description\">Description <input type=\"text\" id=\"description\" name=\"description\" placeholder=\"Enter a description...\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 122, "\" required></label> <label for=\"description\">Description <input type=\"text\" id=\"description\" name=\"description\" placeholder=\"Enter a description...\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1508,7 +1508,7 @@ func CreateAPITokenContent(orgName string, atData APITokenData) templ.Component 
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 123, "\"></label> <span class=\"error-text\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 123, "\" required></label> <span class=\"error-text\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1684,7 +1684,7 @@ func CreateServiceContent(orgName string, err error) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 137, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"name\">Name <input type=\"text\" id=\"name\" name=\"name\" placeholder=\"Enter service name, e.g. my-service-1...\"></label> <button type=\"submit\">Add service</button></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 137, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"name\">Name <input type=\"text\" id=\"name\" name=\"name\" placeholder=\"Enter service name, e.g. my-service-1...\" required></label> <button type=\"submit\">Add service</button></form>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2185,7 +2185,7 @@ func OriginFieldSet(orgName string, serviceName string, index int, numFields int
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 192, "\"></label> <label for=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 192, "\" required></label> <label for=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2209,14 +2209,14 @@ func OriginFieldSet(orgName string, serviceName string, index int, numFields int
 			originPortStr = strconv.Itoa(cloneOrigin.Port)
 
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 194, "Port <input type=\"text\" id=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 194, "Port <input type=\"number\" id=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var109 string
 		templ_7745c5c3_Var109, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("origins.%d.port", index))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 67}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var109))
 		if templ_7745c5c3_Err != nil {
@@ -2229,7 +2229,7 @@ func OriginFieldSet(orgName string, serviceName string, index int, numFields int
 		var templ_7745c5c3_Var110 string
 		templ_7745c5c3_Var110, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("origins.%d.port", index))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 112}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var110))
 		if templ_7745c5c3_Err != nil {
@@ -2242,13 +2242,13 @@ func OriginFieldSet(orgName string, serviceName string, index int, numFields int
 		var templ_7745c5c3_Var111 string
 		templ_7745c5c3_Var111, templ_7745c5c3_Err = templ.JoinStringErrs(originPortStr)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 136}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 590, Col: 138}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var111))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 197, "\"></label> <label for=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 197, "\" min=\"1\" max=\"65535\" step=\"1\" inputmode=\"numeric\" required></label> <label for=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2962,7 +2962,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "<label for=\"username\">Username <input type=\"text\" id=\"username\" name=\"username\"></label> <label for=\"password\">Password <input type=\"password\" id=\"password\" name=\"password\"></label> <button type=\"submit\">Login</button></form></div></div></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "<label for=\"username\">Username <input type=\"text\" id=\"username\" name=\"username\" required></label> <label for=\"password\">Password <input type=\"password\" id=\"password\" name=\"password\" required></label> <button type=\"submit\">Login</button></form></div></div></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
