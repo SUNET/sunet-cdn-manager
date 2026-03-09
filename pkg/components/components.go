@@ -7,8 +7,11 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
+
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 )
 
 //go:embed css/*.css
@@ -48,6 +51,13 @@ type APITokenData struct {
 type APITokenErrors struct {
 	APITokenFormFields
 	ServerError string
+}
+
+// ServiceEntry is a console-specific view type that combines a Service with
+// its allocated IP addresses for display on the services overview page.
+type ServiceEntry struct {
+	cdntypes.Service
+	IPAddresses []netip.Addr
 }
 
 type addButtonVals struct {

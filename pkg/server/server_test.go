@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
@@ -40,6 +42,13 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
+)
+
+// Password length needs to be kept in sync with the
+// /api/v1/users POST endpoint for user creation
+const (
+	validAdminPassword = "adminpass123456"
+	validUserPassword  = "userpass1234567"
 )
 
 var pgt *postgrestest.Server
@@ -182,6 +191,9 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// org1, org1-service1
 		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000001', '00000011-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000001', '192.0.2.1')",
 		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000002', '00000012-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000001', '2001:db8:0::1')",
+		// org1, org1-service2
+		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000003', '00000011-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000002', '192.0.2.2')",
+		"INSERT INTO service_ip_addresses (id, network_id, service_id, address) VALUES ('00000013-0000-0000-0000-000000000004', '00000012-0000-0000-0000-000000000001', '00000003-0000-0000-0000-000000000002', '2001:db8:0::2')",
 
 		// Users
 		// No org, local user
@@ -259,14 +271,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		}{
 			{
 				name:         "admin",
-				password:     "adminpass1",
+				password:     validAdminPassword,
 				role:         "admin",
 				id:           "00000006-0000-0000-0000-000000000001",
 				authProvider: "local",
 			},
 			{
 				name:         "username1",
-				password:     "password1",
+				password:     validUserPassword,
 				role:         "user",
 				orgName:      "org1",
 				id:           "00000006-0000-0000-0000-000000000002",
@@ -817,7 +829,7 @@ func TestGetUsers(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -829,7 +841,7 @@ func TestGetUsers(t *testing.T) {
 		{
 			description:    "successful org request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -899,28 +911,28 @@ func TestGetUser(t *testing.T) {
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "username1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful user request for itself with ID",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "00000006-0000-0000-0000-000000000002",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful user request for itself with name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "username1",
 			expectedStatus: http.StatusOK,
 		},
@@ -1009,7 +1021,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "successful superuser request with IDs",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-1",
 			roleIDorName:   "00000005-0000-0000-0000-000000000002",
@@ -1018,7 +1030,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "successful superuser request with names",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-2",
 			roleIDorName:   "user",
@@ -1027,7 +1039,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "successful superuser request with IDs and no org",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-3",
 			roleIDorName:   "00000005-0000-0000-0000-000000000002",
@@ -1036,7 +1048,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "successful superuser request with name right at limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedUser:      strings.Repeat("a", 63),
 			roleIDorName:   "user",
@@ -1045,7 +1057,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "failed superuser request with name above limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      strings.Repeat("a", 64),
 			roleIDorName:   "user",
@@ -1054,7 +1066,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "failed superuser request with name below limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      "",
 			roleIDorName:   "user",
@@ -1063,7 +1075,7 @@ func TestPostUsers(t *testing.T) {
 		{
 			description:    "failed non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			addedUser:      "user-created-user-1",
 			roleIDorName:   "user",
 			orgIDorName:    "org1",
@@ -1155,7 +1167,7 @@ func TestPutUser(t *testing.T) {
 		{
 			description:         "successful superuser request with IDs",
 			username:            "admin",
-			password:            "adminpass1",
+			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
 			targetUserIDorName:  "00000014-0000-0000-0000-000000000001",
 			updatedOrgIDorName:  "00000002-0000-0000-0000-000000000001",
@@ -1165,7 +1177,7 @@ func TestPutUser(t *testing.T) {
 		{
 			description:         "successful superuser request with names",
 			username:            "admin",
-			password:            "adminpass1",
+			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
 			targetUserIDorName:  "put-user-1",
 			updatedName:         "put-user-1",
@@ -1175,7 +1187,7 @@ func TestPutUser(t *testing.T) {
 		{
 			description:         "successful superuser request with names, null org",
 			username:            "admin",
-			password:            "adminpass1",
+			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
 			targetUserIDorName:  "put-user-1",
 			updatedName:         "put-user-1",
@@ -1185,7 +1197,7 @@ func TestPutUser(t *testing.T) {
 		{
 			description:         "failed non-superuser request with names",
 			username:            "username1",
-			password:            "password1",
+			password:            validUserPassword,
 			expectedStatus:      http.StatusForbidden,
 			targetUserIDorName:  "username1",
 			updatedName:         "username1",
@@ -1268,49 +1280,49 @@ func TestDeleteUser(t *testing.T) {
 		{
 			description:        "successful superuser request with IDs",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusNoContent,
 			targetUserIDorName: "00000014-0000-0000-0000-000000000002",
 		},
 		{
 			description:        "successful superuser request with name",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusNoContent,
 			targetUserIDorName: "delete-local-user-2",
 		},
 		{
 			description:        "successful superuser request with IDs for keycloak",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusNoContent,
 			targetUserIDorName: "00000014-0000-0000-0000-000000000004",
 		},
 		{
 			description:        "successful superuser request with name for keycloak",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusNoContent,
 			targetUserIDorName: "delete-keycloak-user-2",
 		},
 		{
 			description:        "failed superuser request trying to remove itself with ID",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusForbidden,
 			targetUserIDorName: "00000006-0000-0000-0000-000000000001",
 		},
 		{
 			description:        "failed superuser request trying to remove itself with name",
 			username:           "admin",
-			password:           "adminpass1",
+			password:           validAdminPassword,
 			expectedStatus:     http.StatusForbidden,
 			targetUserIDorName: "admin",
 		},
 		{
 			description:        "failed non-superuser request with name",
 			username:           "username1",
-			password:           "password1",
+			password:           validUserPassword,
 			expectedStatus:     http.StatusForbidden,
 			targetUserIDorName: "admin",
 		},
@@ -1404,7 +1416,7 @@ func TestPutPassword(t *testing.T) {
 		{
 			description:          "successful superuser request with IDs",
 			username:             "admin",
-			password:             "adminpass1",
+			password:             validAdminPassword,
 			expectedStatus:       http.StatusNoContent,
 			modifiedUserIDorName: "username4-no-pw",
 			oldPassword:          "",
@@ -1424,10 +1436,10 @@ func TestPutPassword(t *testing.T) {
 		{
 			description:          "successful request for user changing their own password",
 			username:             "username1",
-			password:             "password1",
+			password:             validUserPassword,
 			expectedStatus:       http.StatusNoContent,
 			modifiedUserIDorName: "username1",
-			oldPassword:          "password1",
+			oldPassword:          validUserPassword,
 			newPassword:          "updated-password-3",
 			shouldSucceed:        true,
 		},
@@ -1570,7 +1582,7 @@ func TestGetOrgs(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -1582,7 +1594,7 @@ func TestGetOrgs(t *testing.T) {
 		{
 			description:    "successful org request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -1646,28 +1658,28 @@ func TestGetOrgClientCredentials(t *testing.T) {
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with ID",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
@@ -2443,7 +2455,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 		{
 			description:          "successful superuser request",
 			username:             "admin",
-			password:             "adminpass1",
+			password:             validAdminPassword,
 			expectedPostStatus:   http.StatusCreated,
 			expectedDeleteStatus: http.StatusNoContent,
 			credName:             "post-cred-1",
@@ -2741,7 +2753,7 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 		{
 			description:          "successful superuser request",
 			username:             "admin",
-			password:             "adminpass1",
+			password:             validAdminPassword,
 			expectedDeleteStatus: http.StatusNoContent,
 			orgNameOrID:          "org1",
 			server1Passwords:     []string{"test-encryption-password-1"},
@@ -2931,28 +2943,28 @@ func TestGetOrg(t *testing.T) {
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with ID",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			nameOrID:       "org1",
 			expectedStatus: http.StatusOK,
 		},
@@ -3032,42 +3044,42 @@ func TestGetDomains(t *testing.T) {
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request for all orgs",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			orgNameOrID:    "",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			orgNameOrID:    "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with ID",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request with name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			orgNameOrID:    "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful normal user request with no org",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			orgNameOrID:    "",
 			expectedStatus: http.StatusOK,
 		},
@@ -3161,14 +3173,14 @@ func TestGetServiceIPs(t *testing.T) {
 		{
 			description:     "successful superuser service IPs request with ID, no org",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusOK,
 		},
 		{
 			description:     "successful superuser service IPs request with ID, with org id",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusOK,
@@ -3176,7 +3188,7 @@ func TestGetServiceIPs(t *testing.T) {
 		{
 			description:     "successful superuser service IPs request with names",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusOK,
@@ -3264,42 +3276,42 @@ func TestPostOrganizations(t *testing.T) {
 		{
 			description:       "successful superuser request",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			expectedStatus:    http.StatusCreated,
 			addedOrganization: "adminorg",
 		},
 		{
 			description:       "successful superuser request with max length name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			expectedStatus:    http.StatusCreated,
 			addedOrganization: strings.Repeat("a", 63),
 		},
 		{
 			description:       "failed superuser request with invalid DNS label name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			expectedStatus:    http.StatusUnprocessableEntity,
 			addedOrganization: "admin org",
 		},
 		{
 			description:       "failed superuser request with too short name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			expectedStatus:    http.StatusUnprocessableEntity,
 			addedOrganization: "",
 		},
 		{
 			description:       "failed superuser request with too long name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			expectedStatus:    http.StatusUnprocessableEntity,
 			addedOrganization: strings.Repeat("a", 64),
 		},
 		{
 			description:       "failed non-superuser request",
 			username:          "username1",
-			password:          "password1",
+			password:          validUserPassword,
 			addedOrganization: "username1org",
 			expectedStatus:    http.StatusForbidden,
 		},
@@ -3373,33 +3385,33 @@ func TestGetServices(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request for specific org",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			orgNameOrID:    "org2",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful org request for same org explicity",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			orgNameOrID:    "org1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "failed org request for other org",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			orgNameOrID:    "org2",
 			expectedStatus: http.StatusForbidden,
 		},
@@ -3484,14 +3496,14 @@ func TestGetService(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusOK,
 		},
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusOK,
@@ -3499,7 +3511,7 @@ func TestGetService(t *testing.T) {
 		{
 			description:     "successful superuser request with name and org by id",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusOK,
@@ -3507,14 +3519,14 @@ func TestGetService(t *testing.T) {
 		{
 			description:     "successful user request with ID",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusOK,
 		},
 		{
 			description:     "successful user request with name",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusOK,
@@ -3615,14 +3627,14 @@ func TestDeleteService(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusNoContent,
 		},
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "org1-service2",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusNoContent,
@@ -3630,7 +3642,7 @@ func TestDeleteService(t *testing.T) {
 		{
 			description:     "successful superuser request with name and org by id",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			serviceNameOrID: "org1-service3",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			expectedStatus:  http.StatusNoContent,
@@ -3638,14 +3650,14 @@ func TestDeleteService(t *testing.T) {
 		{
 			description:     "successful user request with ID",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
 			expectedStatus:  http.StatusNoContent,
 		},
 		{
 			description:     "successful user request with name",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			serviceNameOrID: "org1-service5",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusNoContent,
@@ -3746,7 +3758,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			newService:     "new-admin-service",
 			org:            "org1",
@@ -3754,7 +3766,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "successful superuser request with name right at limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			newService:     strings.Repeat("a", 63),
 			org:            "org1",
@@ -3762,7 +3774,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed superuser request with org as invalid DNS label",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-admin-service",
 			org:            "org 1",
@@ -3770,7 +3782,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed superuser request with service as invalid DNS label",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new admin-service",
 			org:            "org1",
@@ -3778,7 +3790,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed superuser request with name above limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     strings.Repeat("a", 64),
 			org:            "org1",
@@ -3786,7 +3798,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed superuser request with name below limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "",
 			org:            "org1",
@@ -3794,21 +3806,21 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed superuser request without org",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-admin-service",
 		},
 		{
 			description:    "failed org request with org matching auth (no org supplied in request)",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-username1-service1",
 		},
 		{
 			description:    "successful org request with org matching auth",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusCreated,
 			newService:     "new-username1-service1",
 			org:            "org1",
@@ -3816,7 +3828,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed org request with duplicate service name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusConflict,
 			newService:     "new-username1-service1",
 			org:            "org1",
@@ -3824,7 +3836,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed org request with org not matching auth",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusForbidden,
 			newService:     "new-username1-service3",
 			org:            "org2",
@@ -3839,7 +3851,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "successful admin request inside services_limit (first service)",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			newService:     "new-admin-org-4-service1",
 			expectedStatus: http.StatusCreated,
 			org:            "org4",
@@ -3847,7 +3859,7 @@ func TestPostServices(t *testing.T) {
 		{
 			description:    "failed admin request outside services_limit (second service)",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			newService:     "new-admin-org-4-service2",
 			expectedStatus: http.StatusConflict,
 			org:            "org4",
@@ -3925,28 +3937,28 @@ func TestDeleteDomain(t *testing.T) {
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			domainNameOrID: "00000015-0000-0000-0000-000000000004",
 			expectedStatus: http.StatusNoContent,
 		},
 		{
 			description:    "successful superuser request with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			domainNameOrID: "example-delete-2.se",
 			expectedStatus: http.StatusNoContent,
 		},
 		{
 			description:    "successful user request with ID",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			domainNameOrID: "00000015-0000-0000-0000-000000000006",
 			expectedStatus: http.StatusNoContent,
 		},
 		{
 			description:    "successful user request with name",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			domainNameOrID: "example-delete-4.se",
 			expectedStatus: http.StatusNoContent,
 		},
@@ -4038,7 +4050,7 @@ func TestPostDomains(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			newDomain:      "example.net",
 			orgNameOrID:    "org1",
@@ -4046,7 +4058,7 @@ func TestPostDomains(t *testing.T) {
 		{
 			description:    "failed superuser request with invalid DNS name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newDomain:      "example .nu",
 			orgNameOrID:    "org1",
@@ -4054,7 +4066,7 @@ func TestPostDomains(t *testing.T) {
 		{
 			description:    "failed superuser request, no org query param",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			newDomain:      "example.net",
 			orgNameOrID:    "",
@@ -4134,14 +4146,14 @@ func TestGetServiceVersions(t *testing.T) {
 		{
 			description:     "successful superuser request with id",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 		},
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4149,14 +4161,14 @@ func TestGetServiceVersions(t *testing.T) {
 		{
 			description:     "successful user request with id",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 		},
 		{
 			description:     "successful user request with name",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4171,14 +4183,14 @@ func TestGetServiceVersions(t *testing.T) {
 		{
 			description:     "failed user request name without org",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
 		},
 		{
 			description:     "failed superuser request with name, missing org",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
 		},
@@ -4284,7 +4296,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
@@ -4310,7 +4322,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
@@ -4335,7 +4347,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, domain not known",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"nonexistant.com"},
@@ -4360,7 +4372,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, domain exist but not verified",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.nu"},
@@ -4385,7 +4397,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, broken vcl_recv",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
@@ -4410,7 +4422,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "org1-service1",
 			domains:         []string{"example.com", "example.se"},
@@ -4435,7 +4447,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with name (name does not exist)",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "does-not-exist",
 			domains:         []string{"example.com", "example.se"},
@@ -4460,7 +4472,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with too many domains",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
@@ -4485,7 +4497,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request, too long Host in origin list",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
@@ -4510,7 +4522,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request, too long domain in domains list",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{strings.Repeat("a", 254), "example.se"},
@@ -4535,7 +4547,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with invalid service name (too long)",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: strings.Repeat("a", 64),
 			domains:         []string{"example.com", "example.se"},
@@ -4560,7 +4572,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with invalid uuid (too short)",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "",
 			domains:         []string{"example.com", "example.se"},
@@ -4585,7 +4597,7 @@ func TestPostServiceVersion(t *testing.T) {
 		{
 			description:     "successful user request",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
@@ -4721,7 +4733,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusNoContent,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4731,7 +4743,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusNoContent,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
@@ -4741,7 +4753,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, not active",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4751,7 +4763,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with name, not active",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
@@ -4761,7 +4773,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant version",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4771,7 +4783,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant service ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4781,7 +4793,7 @@ func TestActivateServiceVersion(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant org",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
@@ -4864,14 +4876,14 @@ func TestGetOriginGroups(t *testing.T) {
 		{
 			description:     "successful superuser request with id",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 		},
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4879,7 +4891,7 @@ func TestGetOriginGroups(t *testing.T) {
 		{
 			description:     "successful user request with id",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 		},
@@ -4893,7 +4905,7 @@ func TestGetOriginGroups(t *testing.T) {
 		{
 			description:     "successful user request with name",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -4908,14 +4920,14 @@ func TestGetOriginGroups(t *testing.T) {
 		{
 			description:     "failed user request name without org",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
 		},
 		{
 			description:     "failed superuser request with name, missing org",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "org1-service1",
 		},
@@ -4982,7 +4994,7 @@ func TestPostOriginGroups(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			name:            "origin-group-new1",
@@ -4991,7 +5003,7 @@ func TestPostOriginGroups(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			name:            "origin-group-new2",
@@ -5075,7 +5087,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "successful superuser request with ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -5084,7 +5096,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "successful superuser request with name",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusOK,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
@@ -5093,7 +5105,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant version",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -5102,7 +5114,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant service ID",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
@@ -5111,7 +5123,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "failed superuser request with ID, non-existant org",
 			username:        "admin",
-			password:        "adminpass1",
+			password:        validAdminPassword,
 			expectedStatus:  http.StatusUnprocessableEntity,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
@@ -5120,7 +5132,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 		{
 			description:     "successful org request",
 			username:        "username1",
-			password:        "password1",
+			password:        validUserPassword,
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
 			expectedStatus:  http.StatusOK,
@@ -5194,27 +5206,27 @@ func TestGetIPNetworks(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request, limit to ipv4",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 			family:         4,
 		},
 		{
 			description:    "successful superuser request, limit to ipv6",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 			family:         6,
 		},
 		{
 			description:    "failed superuser request, unknown family",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			family:         7,
 		},
@@ -5227,7 +5239,7 @@ func TestGetIPNetworks(t *testing.T) {
 		{
 			description:    "failed non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusForbidden,
 		},
 		{
@@ -5297,56 +5309,56 @@ func TestPostIPNetworks(t *testing.T) {
 		{
 			description:    "successful IPv4 superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedIPNetwork: netip.MustParsePrefix("10.0.0.0/24"),
 		},
 		{
 			description:    "failed IPv4 superuser request (network overlaps the one inserted above)",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusConflict,
 			addedIPNetwork: netip.MustParsePrefix("10.0.0.0/25"),
 		},
 		{
 			description:    "failed IPv4 (duplicate) superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusConflict,
 			addedIPNetwork: netip.MustParsePrefix("10.0.0.0/24"),
 		},
 		{
 			description:    "successful IPv6 superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			addedIPNetwork: netip.MustParsePrefix("2001:db8:1::/48"),
 		},
 		{
 			description:    "failed IPv6 superuser request (network overlaps the one inserted above)",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusConflict,
 			addedIPNetwork: netip.MustParsePrefix("2001:db8:1::/64"),
 		},
 		{
 			description:    "failed IPv6 (duplicate) superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusConflict,
 			addedIPNetwork: netip.MustParsePrefix("2001:db8:1::/48"),
 		},
 		{
 			description:    "failed IPv6 non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			addedIPNetwork: netip.MustParsePrefix("2001:db8:3::/64"),
 			expectedStatus: http.StatusForbidden,
 		},
 		{
 			description:    "failed IPv4 non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			addedIPNetwork: netip.MustParsePrefix("10.0.0.0/24"),
 			expectedStatus: http.StatusForbidden,
 		},
@@ -5420,28 +5432,28 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 		{
 			description:       "successful superuser request with id",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000001",
 			expectedStatus:    http.StatusOK,
 		},
 		{
 			description:       "successful superuser request with name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "cache-node1",
 			expectedStatus:    http.StatusOK,
 		},
 		{
 			description:       "successful superuser request with id and node group membership",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000003",
 			expectedStatus:    http.StatusOK,
 		},
 		{
 			description:       "successful superuser request with name and node group membership",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "cache-node3",
 			expectedStatus:    http.StatusOK,
 		},
@@ -5462,7 +5474,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 		{
 			description:       "failed request, normal user not allowed to request config",
 			username:          "username1",
-			password:          "password1",
+			password:          validUserPassword,
 			cacheNodeNameOrID: "cache-node1",
 			expectedStatus:    http.StatusForbidden,
 		},
@@ -5535,28 +5547,28 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 		{
 			description:    "successful superuser request, with id",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			l4lbNameOrID:   "00000016-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request, with id that is member of node group",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			l4lbNameOrID:   "00000016-0000-0000-0000-000000000003",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request, with name",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful superuser request, with name that is member if node group",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			l4lbNameOrID:   "l4lb-node3",
 			expectedStatus: http.StatusOK,
 		},
@@ -5584,7 +5596,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 		{
 			description:    "failed request, normal user not allowed to request config",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			l4lbNameOrID:   "l4lb-node1",
 			expectedStatus: http.StatusForbidden,
 		},
@@ -5715,7 +5727,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "successful superuser request with both addresses",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			cacheNodeDescr: "cache-node-post-1.example.com",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
@@ -5724,7 +5736,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "successful superuser request without addresses",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			cacheNodeDescr: "cache-node-post-2-no-addrs.example.com",
 			name:           "cache-node-post-2",
@@ -5732,7 +5744,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "successful superuser request with description right at limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			cacheNodeDescr: strings.Repeat("a", 100),
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
@@ -5741,7 +5753,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "failed superuser request with description above limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			cacheNodeDescr: strings.Repeat("a", 101),
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
@@ -5750,7 +5762,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "failed superuser request with description below limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			cacheNodeDescr: "",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.3"), netip.MustParseAddr("::3")},
@@ -5759,7 +5771,7 @@ func TestPostCacheNodes(t *testing.T) {
 		{
 			description:    "failed non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			cacheNodeDescr: "cache-node-post-6.example.com",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.4"), netip.MustParseAddr("::4")},
 			expectedStatus: http.StatusForbidden,
@@ -5862,7 +5874,7 @@ func TestGetCacheNodes(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -5874,7 +5886,7 @@ func TestGetCacheNodes(t *testing.T) {
 		{
 			description:    "failed user request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusForbidden,
 		},
 		{
@@ -5951,7 +5963,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 		{
 			description:       "successful superuser request with ID",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "00000022-0000-0000-0000-000000000001",
 			maintenance:       true,
 			expectedStatus:    http.StatusNoContent,
@@ -5959,7 +5971,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 		{
 			description:       "successful superuser request with name",
 			username:          "admin",
-			password:          "adminpass1",
+			password:          validAdminPassword,
 			cacheNodeNameOrID: "cache-node1",
 			maintenance:       true,
 			expectedStatus:    http.StatusNoContent,
@@ -5975,7 +5987,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 		{
 			description:       "failed user request",
 			username:          "username1",
-			password:          "password1",
+			password:          validUserPassword,
 			cacheNodeNameOrID: "cache-node1",
 			maintenance:       true,
 			expectedStatus:    http.StatusForbidden,
@@ -6075,7 +6087,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 		{
 			description:            "successful superuser request with ID",
 			username:               "admin",
-			password:               "adminpass1",
+			password:               validAdminPassword,
 			cacheNodeNameOrID:      "00000022-0000-0000-0000-000000000005",
 			cacheNodeGroupNameOrID: "00000021-0000-0000-0000-000000000002",
 			expectedStatus:         http.StatusNoContent,
@@ -6083,7 +6095,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 		{
 			description:            "failed superuser request with nonexistent group ID",
 			username:               "admin",
-			password:               "adminpass1",
+			password:               validAdminPassword,
 			cacheNodeNameOrID:      "00000022-0000-0000-0000-000000000005",
 			cacheNodeGroupNameOrID: "00000021-0001-0000-0000-000000000002",
 			expectedStatus:         http.StatusUnprocessableEntity,
@@ -6091,7 +6103,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 		{
 			description:            "successful superuser request with name",
 			username:               "admin",
-			password:               "adminpass1",
+			password:               validAdminPassword,
 			cacheNodeNameOrID:      "cache-node5-no-group",
 			cacheNodeGroupNameOrID: "node-group-2",
 			expectedStatus:         http.StatusNoContent,
@@ -6107,7 +6119,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 		{
 			description:            "failed user request",
 			username:               "username1",
-			password:               "password1",
+			password:               validUserPassword,
 			cacheNodeNameOrID:      "cache-node5-no-group",
 			cacheNodeGroupNameOrID: "node-group-2",
 			expectedStatus:         http.StatusForbidden,
@@ -6205,7 +6217,7 @@ func TestGetL4LBNodes(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -6217,7 +6229,7 @@ func TestGetL4LBNodes(t *testing.T) {
 		{
 			description:    "failed user request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusForbidden,
 		},
 		{
@@ -6295,7 +6307,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "successful superuser request with both addresses",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			l4lbNodeDescr:  "l4lb-node-post-1.example.com",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
@@ -6304,7 +6316,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "successful superuser request without addresses",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			l4lbNodeDescr:  "l4lb-node-post-2-no-addrs.example.com",
 			name:           "l4lb-node-post-2",
@@ -6312,7 +6324,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "successful superuser request with description right at limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			l4lbNodeDescr:  strings.Repeat("a", 100),
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
@@ -6321,7 +6333,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "failed superuser request with description above limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			l4lbNodeDescr:  strings.Repeat("a", 101),
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("::2")},
@@ -6330,7 +6342,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "failed superuser request with description below limit",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			l4lbNodeDescr:  "",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.3"), netip.MustParseAddr("::3")},
@@ -6339,7 +6351,7 @@ func TestPostL4LBNodes(t *testing.T) {
 		{
 			description:    "failed non-superuser request",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			l4lbNodeDescr:  "l4lb-node-post-6.example.com",
 			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.4"), netip.MustParseAddr("::4")},
 			expectedStatus: http.StatusForbidden,
@@ -6444,7 +6456,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 		{
 			description:      "successful superuser request with ID",
 			username:         "admin",
-			password:         "adminpass1",
+			password:         validAdminPassword,
 			l4lbNodeNameOrID: "00000016-0000-0000-0000-000000000001",
 			maintenance:      true,
 			expectedStatus:   http.StatusNoContent,
@@ -6452,7 +6464,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 		{
 			description:      "successful superuser request with name",
 			username:         "admin",
-			password:         "adminpass1",
+			password:         validAdminPassword,
 			l4lbNodeNameOrID: "l4lb-node1",
 			maintenance:      true,
 			expectedStatus:   http.StatusNoContent,
@@ -6468,7 +6480,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 		{
 			description:      "failed user request",
 			username:         "username1",
-			password:         "password1",
+			password:         validUserPassword,
 			l4lbNodeNameOrID: "l4lb-node1",
 			maintenance:      true,
 			expectedStatus:   http.StatusForbidden,
@@ -6568,7 +6580,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 		{
 			description:           "successful superuser request with ID",
 			username:              "admin",
-			password:              "adminpass1",
+			password:              validAdminPassword,
 			l4lbNodeNameOrID:      "00000016-0000-0000-0000-000000000005",
 			l4lbNodeGroupNameOrID: "00000021-0000-0000-0000-000000000002",
 			expectedStatus:        http.StatusNoContent,
@@ -6576,7 +6588,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 		{
 			description:           "failed superuser request with nonexistent group ID",
 			username:              "admin",
-			password:              "adminpass1",
+			password:              validAdminPassword,
 			l4lbNodeNameOrID:      "00000016-0000-0000-0000-000000000005",
 			l4lbNodeGroupNameOrID: "00000021-0001-0000-0000-000000000002",
 			expectedStatus:        http.StatusUnprocessableEntity,
@@ -6584,7 +6596,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 		{
 			description:           "successful superuser request with name",
 			username:              "admin",
-			password:              "adminpass1",
+			password:              validAdminPassword,
 			l4lbNodeNameOrID:      "l4lb-node5-no-group",
 			l4lbNodeGroupNameOrID: "node-group-2",
 			expectedStatus:        http.StatusNoContent,
@@ -6600,7 +6612,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 		{
 			description:           "failed user request",
 			username:              "username1",
-			password:              "password1",
+			password:              validUserPassword,
 			l4lbNodeNameOrID:      "l4lb-node5-no-group",
 			l4lbNodeGroupNameOrID: "node-group-2",
 			expectedStatus:        http.StatusForbidden,
@@ -6698,7 +6710,7 @@ func TestGetNodeGroups(t *testing.T) {
 		{
 			description:    "successful superuser request",
 			username:       "admin",
-			password:       "adminpass1",
+			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
 		},
 		{
@@ -6710,7 +6722,7 @@ func TestGetNodeGroups(t *testing.T) {
 		{
 			description:    "failed user request (only superusers allowed)",
 			username:       "username1",
-			password:       "password1",
+			password:       validUserPassword,
 			expectedStatus: http.StatusForbidden,
 		},
 		{
@@ -6775,7 +6787,7 @@ func TestPostNodeGroups(t *testing.T) {
 		{
 			description:      "successful superuser request with ID",
 			username:         "admin",
-			password:         "adminpass1",
+			password:         validAdminPassword,
 			name:             "node-group-new1",
 			groupDescription: "some node group",
 			expectedStatus:   http.StatusCreated,
@@ -6921,5 +6933,164 @@ func TestRetryWithBackoff(t *testing.T) {
 				t.Fatalf("wanted err to be: %#v, got: %#v", test.err, err)
 			}
 		}()
+	}
+}
+
+func TestConsoleServicesComponent(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer ts.Close()
+	tests := []struct {
+		description string
+		username    string
+		password    string
+		orgNameOrID string
+		serviceIPs  map[string][]netip.Addr
+	}{
+		{
+			description: "successful superuser request with org name",
+			username:    "admin",
+			password:    validAdminPassword,
+			orgNameOrID: "org1",
+			serviceIPs: map[string][]netip.Addr{
+				"org1-service1": {
+					netip.MustParseAddr("192.0.2.1"),
+					netip.MustParseAddr("2001:db8::1"),
+				},
+				"org1-service2": {
+					netip.MustParseAddr("192.0.2.2"),
+					netip.MustParseAddr("2001:db8::2"),
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			client := &http.Client{Jar: jar}
+
+			form := url.Values{
+				"username": {test.username},
+				"password": {test.password},
+			}
+
+			u, err := url.Parse(ts.URL)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			// Needed to make CSRF-validation happy
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			loginResp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+			defer loginResp.Body.Close()
+
+			if loginResp.StatusCode != http.StatusOK {
+				t.Fatalf("%s: unexpected console login status code: %d", test.description, loginResp.StatusCode)
+			}
+
+			// As the status code is 200 even for failed logins we
+			// need to check if we received a session cookie to
+			// verify login was successful
+			cookieFound := false
+			for _, c := range client.Jar.Cookies(u) {
+				if c.Name == cookieName {
+					cookieFound = true
+					break
+				}
+			}
+			if !cookieFound {
+				t.Fatalf("%s: login failed: session cookie is missing", test.description)
+			}
+
+			req, err = http.NewRequest("GET", ts.URL+"/console/org/"+test.orgNameOrID+"/services", nil)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s: unexpected status code: %d", test.description, resp.StatusCode)
+			}
+
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			if err != nil {
+				t.Fatalf("%s: failed to read template: %v", test.description, err)
+			}
+
+			seenServices := []string{}
+			doc.Find("main #contents table tbody tr").Each(func(i int, s *goquery.Selection) {
+				var foundAddrs []netip.Addr
+				name := strings.TrimSpace(s.Find("td.name").Text())
+				seenServices = append(seenServices, name)
+				s.Find("td.addresses div").Each(func(_ int, div *goquery.Selection) {
+					addrStr := strings.TrimSpace(div.Text())
+					if addrStr != "" {
+						addr, err := netip.ParseAddr(addrStr)
+						if err != nil {
+							t.Fatal(test.description, err)
+						}
+						foundAddrs = append(foundAddrs, addr)
+					}
+				})
+
+				// Verify the expected addresses are found
+				if expectedAddrs, ok := test.serviceIPs[name]; ok {
+					for _, expectedAddr := range expectedAddrs {
+						addressPresent := false
+						for _, foundAddr := range foundAddrs {
+							if expectedAddr == foundAddr {
+								addressPresent = true
+								break
+							}
+						}
+						if !addressPresent {
+							t.Fatalf("%s: service '%s' missing expected address %s", test.description, name, expectedAddr)
+						}
+					}
+				}
+			})
+
+			// Verify at least all expected service names was
+			// present, it is OK if there are more that we do not
+			// inspect.
+			for serviceName := range test.serviceIPs {
+				serviceFound := false
+				for _, foundService := range seenServices {
+					if serviceName == foundService {
+						serviceFound = true
+						break
+					}
+				}
+				if !serviceFound {
+					t.Fatalf("%s: unable to find a service with name '%s'", test.description, serviceName)
+				}
+			}
+		})
 	}
 }
