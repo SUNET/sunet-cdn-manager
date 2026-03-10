@@ -285,7 +285,7 @@ templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCreden
 	</div>
 }
 
-templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages []string) {
+templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []string) {
 	@flashMessagesComponent(flashMessages)
 	if len(services) == 0 {
 		<article class="empty-state">
@@ -297,14 +297,24 @@ templ ServicesContent(orgName string, services []cdntypes.Service, flashMessages
 			<thead>
 				<tr>
 					<th>Service</th>
+					<th>IP Addresses</th>
 					<th>Actions</th>
 				</tr>
 			</thead>
 			<tbody>
 				for _, service := range services {
 					<tr>
-						<td><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
-						<td>
+						<td class="name"><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
+						<td class="addresses">
+							if len(service.IPAddresses) == 0 {
+								—
+							} else {
+								for _, addr := range service.IPAddresses {
+									<div><code>{ addr.String() }</code></div>
+								}
+							}
+						</td>
+						<td class="actions">
 							<button
 								type="button"
 								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }

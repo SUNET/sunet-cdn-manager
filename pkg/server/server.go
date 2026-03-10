@@ -1078,10 +1078,42 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 			return
 		}
 
-		services, err := selectServices(ctx, dbc, ad, orgName)
+		// Build view entries with IP addresses for each service
+		serviceEntries := []components.ServiceEntry{}
+		err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+			services, err := selectServicesTx(ctx, tx, ad, orgName)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return fmt.Errorf("not authorized to view page: %w", err)
+				}
+				return fmt.Errorf("database lookup failed: %w", err)
+			}
+
+			orgServiceIPAddrs, err := selectServiceIPsForOrgTx(ctx, tx, orgName, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrForbidden) {
+					return fmt.Errorf("not authorized to view page when looking up org service ips: %w", err)
+				}
+				return fmt.Errorf("database lookup failed for org service ips: %w", err)
+			}
+
+			for _, s := range services {
+				entry := components.ServiceEntry{Service: s}
+
+				if addrs, ok := orgServiceIPAddrs[s.ID]; ok {
+					for _, addr := range addrs {
+						entry.IPAddresses = append(entry.IPAddresses, addr.Address)
+					}
+				}
+
+				serviceEntries = append(serviceEntries, entry)
+			}
+
+			return nil
+		})
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
-				logger.Err(err).Msg("services console: not authorized to view page")
+				logger.Err(err).Msg("services console: transaction failed with forbidden result")
 				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
 				return
 			}
@@ -1103,7 +1135,7 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, services, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, flashMessageStrings))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -3776,49 +3808,96 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 
 func selectServiceIPs(ctx context.Context, dbc *dbConn, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
 	sAddrs := serviceAddresses{}
-	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		var orgID pgtype.UUID
-		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
-			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-			orgID = orgIdent.id
-		}
-
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
-		if err != nil {
-			return err
-		}
-
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
-			return cdnerrors.ErrNotFound
-		}
-
-		sAddrs = serviceAddresses{
-			ServiceID:          serviceIdent.id,
-			AllocatedAddresses: []serviceAddress{},
-		}
-
-		rows, err := tx.Query(ctx, "SELECT address FROM service_ip_addresses WHERE service_id=$1", serviceIdent.id)
-		if err != nil {
-			return fmt.Errorf("unable to SELECT IP addresses for organization by id: %w", err)
-		}
-
-		addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[serviceAddress])
-		if err != nil {
-			return fmt.Errorf("unable to collect IPv4 addresses from rows: %w", err)
-		}
-
-		sAddrs.AllocatedAddresses = append(sAddrs.AllocatedAddresses, addrs...)
-
-		return nil
+	var err error
+	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		sAddrs, err = selectServiceIPsTx(ctx, tx, serviceNameOrID, orgNameOrID, ad)
+		return err
 	})
 	if err != nil {
 		return serviceAddresses{}, fmt.Errorf("selectServiceIPs: transaction failed: %w", err)
 	}
 
 	return sAddrs, nil
+}
+
+func selectServiceIPsTx(ctx context.Context, tx pgx.Tx, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
+	sAddrs := serviceAddresses{}
+	var orgID pgtype.UUID
+	if orgNameOrID != "" {
+		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+		if err != nil {
+			return serviceAddresses{}, cdnerrors.ErrUnableToParseNameOrID
+		}
+		orgID = orgIdent.id
+	}
+
+	serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
+	if err != nil {
+		return serviceAddresses{}, err
+	}
+
+	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
+		return serviceAddresses{}, cdnerrors.ErrNotFound
+	}
+
+	sAddrs = serviceAddresses{
+		ServiceID:          serviceIdent.id,
+		AllocatedAddresses: []serviceAddress{},
+	}
+
+	rows, err := tx.Query(ctx, "SELECT address FROM service_ip_addresses WHERE service_id=$1 ORDER BY address", serviceIdent.id)
+	if err != nil {
+		return serviceAddresses{}, fmt.Errorf("unable to SELECT IP addresses by Service ID: %w", err)
+	}
+
+	addrs, err := pgx.CollectRows(rows, pgx.RowToStructByName[serviceAddress])
+	if err != nil {
+		return serviceAddresses{}, fmt.Errorf("unable to collect IP addresses from rows: %w", err)
+	}
+
+	sAddrs.AllocatedAddresses = append(sAddrs.AllocatedAddresses, addrs...)
+
+	return sAddrs, nil
+}
+
+func selectServiceIPsForOrgTx(ctx context.Context, tx pgx.Tx, orgNameOrID string, ad cdntypes.AuthData) (map[pgtype.UUID][]serviceAddress, error) {
+	orgServiceAddrs := map[pgtype.UUID][]serviceAddress{}
+	orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+	if err != nil {
+		return nil, cdnerrors.ErrUnableToParseNameOrID
+	}
+
+	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	rows, err := tx.Query(
+		ctx,
+		`
+		SELECT
+		    service_ip_addresses.service_id,
+		    service_ip_addresses.address
+		FROM service_ip_addresses
+		JOIN services ON service_ip_addresses.service_id = services.id
+		WHERE services.org_id=$1
+		ORDER BY service_ip_addresses.address`,
+		orgIdent.id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to SELECT all IP addresses by Org ID: %w", err)
+	}
+
+	var serviceID pgtype.UUID
+	var a netip.Addr
+	_, err = pgx.ForEachRow(rows, []any{&serviceID, &a}, func() error {
+		orgServiceAddrs[serviceID] = append(orgServiceAddrs[serviceID], serviceAddress{Address: a})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed iterating over org service IP addresses: %w", err)
+	}
+
+	return orgServiceAddrs, nil
 }
 
 func selectOrg(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes.AuthData) (cdntypes.Org, error) {
@@ -4465,61 +4544,67 @@ func insertOrg(ctx context.Context, dbc *dbConn, name string, ad cdntypes.AuthDa
 
 func selectServices(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
 	var services []cdntypes.Service
-	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		var err error
-		var orgIdent orgIdentifier
-		var lookupOrg pgtype.UUID
-
-		// Must be either superuser or member of an org
-		if !ad.Superuser && ad.OrgID == nil {
-			return cdnerrors.ErrForbidden
-		}
-
-		if orgNameOrID != "" {
-			orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
-			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-
-			lookupOrg = orgIdent.id
-		}
-
-		// If not superuser and a specific org is requested the user is
-		// only allowed to request it if they are member of the same org
-		if !ad.Superuser && lookupOrg.Valid {
-			if lookupOrg != *ad.OrgID {
-				return cdnerrors.ErrForbidden
-			}
-		}
-
-		// If not superuser and a specific org was not requested, set
-		// it to the org of the user.
-		if !ad.Superuser && !lookupOrg.Valid {
-			lookupOrg = *ad.OrgID
-		}
-
-		var rows pgx.Rows
-		if lookupOrg.Valid {
-			rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
-			if err != nil {
-				return fmt.Errorf("unable to query for services for specific org: %w", err)
-			}
-		} else {
-			rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
-			if err != nil {
-				return fmt.Errorf("unable to query for all services: %w", err)
-			}
-		}
-
-		services, err = pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Service])
-		if err != nil {
-			return fmt.Errorf("unable to CollectRows for services: %w", err)
-		}
-
-		return nil
+	var err error
+	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		services, err = selectServicesTx(ctx, tx, ad, orgNameOrID)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("selectServices: transaction failed: %w", err)
+	}
+
+	return services, nil
+}
+
+func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
+	var err error
+	var orgIdent orgIdentifier
+	var lookupOrg pgtype.UUID
+
+	// Must be either superuser or member of an org
+	if !ad.Superuser && ad.OrgID == nil {
+		return []cdntypes.Service{}, cdnerrors.ErrForbidden
+	}
+
+	if orgNameOrID != "" {
+		orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
+		if err != nil {
+			return []cdntypes.Service{}, cdnerrors.ErrUnableToParseNameOrID
+		}
+
+		lookupOrg = orgIdent.id
+	}
+
+	// If not superuser and a specific org is requested the user is
+	// only allowed to request it if they are member of the same org
+	if !ad.Superuser && lookupOrg.Valid {
+		if lookupOrg != *ad.OrgID {
+			return []cdntypes.Service{}, cdnerrors.ErrForbidden
+		}
+	}
+
+	// If not superuser and a specific org was not requested, set
+	// it to the org of the user.
+	if !ad.Superuser && !lookupOrg.Valid {
+		lookupOrg = *ad.OrgID
+	}
+
+	var rows pgx.Rows
+	if lookupOrg.Valid {
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
+		if err != nil {
+			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
+		}
+	} else {
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		if err != nil {
+			return []cdntypes.Service{}, fmt.Errorf("unable to query for all services: %w", err)
+		}
+	}
+
+	services, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Service])
+	if err != nil {
+		return []cdntypes.Service{}, fmt.Errorf("unable to CollectRows for services: %w", err)
 	}
 
 	return services, nil
