@@ -119,6 +119,9 @@ const (
 	// Some default auth providers
 	localAuthProvider    = "local"
 	keycloakAuthProvider = "keycloak"
+
+	// Limit console form posting to 1 MiB
+	formMaxSize = 1024 * 1024
 )
 
 var (
@@ -845,6 +848,21 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 	}
 }
 
+func parseLimitedForm(w http.ResponseWriter, r *http.Request, maxSize int64) error {
+	// G120: Parsing form data without limiting request body size can allow memory exhaustion (use http.MaxBytesReader) (gosec)
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+	err := r.ParseForm()
+	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		}
+	}
+	return err
+}
+
 func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -899,10 +917,8 @@ func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse create-api-token POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
@@ -1198,10 +1214,8 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse create-domain POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
@@ -1336,10 +1350,8 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse create-service POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
@@ -1858,10 +1870,8 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse create-service-version POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
@@ -2019,10 +2029,8 @@ func consoleActivateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Coo
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse activate-service-version POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
@@ -2185,16 +2193,14 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 				return
 			}
 		case http.MethodPost:
-			err := r.ParseForm()
-			if err != nil {
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
 				logger.Err(err).Msg("unable to parse login POST form")
-				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 
 			formData := loginForm{}
 
-			err = schemaDecoder.Decode(&formData, r.PostForm)
+			err := schemaDecoder.Decode(&formData, r.PostForm)
 			if err != nil {
 				logger.Err(err).Msg("unable to decode POST form data")
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -9181,11 +9187,11 @@ func newDBConn(dbPool *pgxpool.Pool, queryTimeout time.Duration) (*dbConn, error
 // give such functions a chance to complete the database requests instead of
 // instantly getting cancelled in case the server is told to shut down.
 func (dbc *dbConn) detachedContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), dbc.queryTimeout)
+	return context.WithTimeout(context.WithoutCancel(parent), dbc.queryTimeout) // #nosec G118 -- caller is responsible for cancelling the context
 }
 
 func (dbc *dbConn) detachedContextWithDuration(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+	return context.WithTimeout(context.WithoutCancel(parent), timeout) // #nosec G118 -- caller is responsible for cancelling the context
 }
 
 func retryWithBackoff(ctx context.Context, logger zerolog.Logger, sleepBase time.Duration, sleepCap time.Duration, attempts int, description string, operation func(context.Context) error) error {

@@ -2410,10 +2410,11 @@ func createKeycloakContainer(ctx context.Context, t *testing.T) (*oidc.Provider,
 		t.Fatalf("unable to fetch openid-configuration: %v", err)
 	}
 
-	jwkCtx, jwkCancel := context.WithCancel(t.Context())
+	jwkCtx, jwkCancel := context.WithCancel(t.Context()) // #nosec G118 -- caller is responsible for cancelling the context
 
 	jwkCache, err := setupJwkCache(jwkCtx, logger, client, oiConf)
 	if err != nil {
+		jwkCancel()
 		t.Fatalf("unable to setup JWK cache: %s", err)
 	}
 
@@ -7044,7 +7045,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 			}
 
 			seenServices := []string{}
-			doc.Find("main #contents table tbody tr").Each(func(i int, s *goquery.Selection) {
+			doc.Find("main #contents table tbody tr").Each(func(_ int, s *goquery.Selection) {
 				var foundAddrs []netip.Addr
 				name := strings.TrimSpace(s.Find("td.name").Text())
 				seenServices = append(seenServices, name)
@@ -7090,6 +7091,66 @@ func TestConsoleServicesComponent(t *testing.T) {
 				if !serviceFound {
 					t.Fatalf("%s: unable to find a service with name '%s'", test.description, serviceName)
 				}
+			}
+		})
+	}
+}
+
+func TestConsoleFormLimit(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer ts.Close()
+	tests := []struct {
+		description string
+		username    string
+		password    string
+		statusCode  int
+	}{
+		{
+			description: "failed request with too large password field",
+			username:    "admin",
+			password:    strings.Repeat("A", formMaxSize*2),
+			statusCode:  http.StatusRequestEntityTooLarge,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			client := &http.Client{Jar: jar}
+
+			form := url.Values{
+				"username": {test.username},
+				"password": {test.password},
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			// Needed to make CSRF-validation happy
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			loginResp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(test.description, err)
+			}
+			defer loginResp.Body.Close()
+
+			if loginResp.StatusCode != test.statusCode {
+				t.Fatalf("%s: unexpected console login status code: %d, expected %d", test.description, loginResp.StatusCode, test.statusCode)
 			}
 		})
 	}
