@@ -1898,7 +1898,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 			for _, field := range reflect.VisibleFields(structVal.Type()) {
 				if _, ok := vclSK.FieldToKey[field.Name]; ok {
 					fieldVal := structVal.FieldByIndex(field.Index)
-					if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
+					if fieldVal.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.String {
 						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
 							fieldVal.Set(reflect.Zero(field.Type))
 						}
@@ -8740,7 +8740,7 @@ func generatePassword(length int) (string, error) {
 	maxBigInt := big.NewInt(int64(len(chars)))
 
 	var b strings.Builder
-	for i := 0; i < length; i++ {
+	for range length {
 		bigI, err := rand.Int(rand.Reader, maxBigInt)
 		if err != nil {
 			return "", fmt.Errorf("rand.Int failed: %w", err)

@@ -18,11 +18,11 @@ type gooseLogger struct {
 	logger zerolog.Logger
 }
 
-func (gl gooseLogger) Fatalf(format string, v ...interface{}) {
+func (gl gooseLogger) Fatalf(format string, v ...any) {
 	gl.logger.Fatal().Msgf(format, v...)
 }
 
-func (gl gooseLogger) Printf(format string, v ...interface{}) {
+func (gl gooseLogger) Printf(format string, v ...any) {
 	gl.logger.Info().Msgf(format, v...)
 }
 

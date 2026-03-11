@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,10 +53,6 @@ const (
 )
 
 var pgt *postgrestest.Server
-
-func Ptr[T any](v T) *T {
-	return &v
-}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -686,7 +683,7 @@ func TestSessionKeyHandlingNoEnc(t *testing.T) {
 
 	// Try inserting additional session keys with nil encryptionKey
 	numAdded := 2
-	for i := 0; i < numAdded; i++ {
+	for range numAdded {
 		gorillaAuthKey, err := generateRandomKey(32)
 		if err != nil {
 			t.Fatal(err)
@@ -752,7 +749,7 @@ func TestSessionKeyHandlingWithEnc(t *testing.T) {
 
 	// Try inserting additional session keys with nil encryptionKey
 	numAdded := 2
-	for i := 0; i < numAdded; i++ {
+	for range numAdded {
 		gorillaAuthKey, err := generateRandomKey(32)
 		if err != nil {
 			t.Fatal(err)
@@ -7063,13 +7060,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 				// Verify the expected addresses are found
 				if expectedAddrs, ok := test.serviceIPs[name]; ok {
 					for _, expectedAddr := range expectedAddrs {
-						addressPresent := false
-						for _, foundAddr := range foundAddrs {
-							if expectedAddr == foundAddr {
-								addressPresent = true
-								break
-							}
-						}
+						addressPresent := slices.Contains(foundAddrs, expectedAddr)
 						if !addressPresent {
 							t.Fatalf("%s: service '%s' missing expected address %s", test.description, name, expectedAddr)
 						}
@@ -7081,13 +7072,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 			// present, it is OK if there are more that we do not
 			// inspect.
 			for serviceName := range test.serviceIPs {
-				serviceFound := false
-				for _, foundService := range seenServices {
-					if serviceName == foundService {
-						serviceFound = true
-						break
-					}
-				}
+				serviceFound := slices.Contains(seenServices, serviceName)
 				if !serviceFound {
 					t.Fatalf("%s: unable to find a service with name '%s'", test.description, serviceName)
 				}

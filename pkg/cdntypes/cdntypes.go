@@ -178,7 +178,7 @@ func NewVclStepKeys() VclStepKeys {
 	vclSK := VclStepKeys{
 		FieldToKey: map[string]string{},
 	}
-	for _, field := range reflect.VisibleFields(reflect.TypeOf(VclSteps{})) {
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[VclSteps]()) {
 		vclSK.FieldOrder = append(vclSK.FieldOrder, field.Name)
 		vclSK.FieldToKey[field.Name] = camelCaseToSnakeCase(field.Name)
 	}
@@ -201,7 +201,7 @@ func VclStepsToMap(vclSteps VclSteps) (map[string]string, []string) {
 	for _, field := range reflect.VisibleFields(structVal.Type()) {
 		if _, ok := vclSK.FieldToKey[field.Name]; ok {
 			fieldVal := structVal.FieldByIndex(field.Index)
-			if fieldVal.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.String {
+			if fieldVal.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.String {
 				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
 					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
 					keyOrder = append(keyOrder, vclSK.FieldToKey[field.Name])
@@ -312,17 +312,13 @@ type VclStepKeys struct {
 	FieldToKey map[string]string
 }
 
-func Ptr[T any](v T) *T {
-	return &v
-}
-
 type DomainString string
 
 func (ds DomainString) Schema(_ huma.Registry) *huma.Schema {
 	return &huma.Schema{
 		Type:      "string",
-		MinLength: Ptr(1),
-		MaxLength: Ptr(253),
+		MinLength: new(1),
+		MaxLength: new(253),
 	}
 }
 
