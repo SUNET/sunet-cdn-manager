@@ -6842,6 +6842,709 @@ func TestPostNodeGroups(t *testing.T) {
 	}
 }
 
+func TestPutCacheNode(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		cacheNode      string
+		name           string
+		nodeDescr      string
+		addresses      []netip.Addr
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusOK,
+			cacheNode:      "cache-node1",
+			name:           "cache-node1",
+			nodeDescr:      "Updated cache node description",
+			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("::1")},
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			cacheNode:      "cache-node1",
+			name:           "cache-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			cacheNode:      "cache-node1",
+			name:           "cache-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+			cacheNode:      "cache-node1",
+			name:           "cache-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			cacheNode:      "nonexistent-node",
+			name:           "nonexistent-node",
+			nodeDescr:      "Should not work",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			body := struct {
+				Name        string       `json:"name"`
+				Description string       `json:"description"`
+				Addresses   []netip.Addr `json:"addresses,omitempty"`
+			}{
+				Name:        test.name,
+				Description: test.nodeDescr,
+				Addresses:   test.addresses,
+			}
+
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT cache-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusOK {
+				var result cdntypes.CacheNode
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+				}
+				if result.Name != test.name {
+					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+				}
+				if result.Description != test.nodeDescr {
+					t.Fatalf("%s: expected description %q, got %q", test.description, test.nodeDescr, result.Description)
+				}
+				if len(test.addresses) > 0 {
+					if len(result.Addresses) != len(test.addresses) {
+						t.Fatalf("%s: expected %d addresses, got %d", test.description, len(test.addresses), len(result.Addresses))
+					}
+					for i, addr := range test.addresses {
+						if result.Addresses[i] != addr {
+							t.Fatalf("%s: address[%d] expected %s, got %s", test.description, i, addr, result.Addresses[i])
+						}
+					}
+				}
+			}
+		}()
+	}
+}
+
+func TestDeleteCacheNode(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		cacheNode      string
+	}{
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			cacheNode:      "cache-node1",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			cacheNode:      "cache-node1",
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+			cacheNode:      "cache-node1",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			cacheNode:      "nonexistent-node",
+		},
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			cacheNode:      "cache-node1",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE cache-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			// Verify the resource is actually gone by retrying the DELETE
+			if test.expectedStatus == http.StatusNoContent {
+				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				retryReq.SetBasicAuth(test.username, test.password)
+				retryResp, err := http.DefaultClient.Do(retryReq) // #nosec G704 -- filled in by test
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer retryResp.Body.Close()
+				if retryResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+				}
+			}
+		}()
+	}
+}
+
+func TestPutL4LBNode(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		l4lbNode       string
+		name           string
+		nodeDescr      string
+		addresses      []netip.Addr
+	}{
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusOK,
+			l4lbNode:       "l4lb-node1",
+			name:           "l4lb-node1",
+			nodeDescr:      "Updated l4lb node description",
+			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.2"), netip.MustParseAddr("::2")},
+		},
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			l4lbNode:       "l4lb-node1",
+			name:           "l4lb-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			l4lbNode:       "l4lb-node1",
+			name:           "l4lb-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+			l4lbNode:       "l4lb-node1",
+			name:           "l4lb-node1",
+			nodeDescr:      "Should not work",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			l4lbNode:       "nonexistent-node",
+			name:           "nonexistent-node",
+			nodeDescr:      "Should not work",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			body := struct {
+				Name        string       `json:"name"`
+				Description string       `json:"description"`
+				Addresses   []netip.Addr `json:"addresses,omitempty"`
+			}{
+				Name:        test.name,
+				Description: test.nodeDescr,
+				Addresses:   test.addresses,
+			}
+
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT l4lb-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusOK {
+				var result cdntypes.L4LBNode
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+				}
+				if result.Name != test.name {
+					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+				}
+				if result.Description != test.nodeDescr {
+					t.Fatalf("%s: expected description %q, got %q", test.description, test.nodeDescr, result.Description)
+				}
+				if len(test.addresses) > 0 {
+					if len(result.Addresses) != len(test.addresses) {
+						t.Fatalf("%s: expected %d addresses, got %d", test.description, len(test.addresses), len(result.Addresses))
+					}
+					for i, addr := range test.addresses {
+						if result.Addresses[i] != addr {
+							t.Fatalf("%s: address[%d] expected %s, got %s", test.description, i, addr, result.Addresses[i])
+						}
+					}
+				}
+			}
+		}()
+	}
+}
+
+func TestDeleteL4LBNode(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		l4lbNode       string
+	}{
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			l4lbNode:       "l4lb-node2",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			l4lbNode:       "l4lb-node2",
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+			l4lbNode:       "l4lb-node2",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			l4lbNode:       "nonexistent-node",
+		},
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			l4lbNode:       "l4lb-node2",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE l4lb-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			// Verify the resource is actually gone by retrying the DELETE
+			if test.expectedStatus == http.StatusNoContent {
+				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				retryReq.SetBasicAuth(test.username, test.password)
+				retryResp, err := http.DefaultClient.Do(retryReq) // #nosec G704 -- filled in by test
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer retryResp.Body.Close()
+				if retryResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+				}
+			}
+		}()
+	}
+}
+
+func TestPutNodeGroup(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		nodeGroup        string
+		name             string
+		groupDescription string
+	}{
+		{
+			description:      "successful superuser request",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusOK,
+			nodeGroup:        "node-group-2",
+			name:             "node-group-2",
+			groupDescription: "Updated node group description",
+		},
+		{
+			description:      "failed non-superuser request",
+			username:         "username1",
+			password:         validUserPassword,
+			expectedStatus:   http.StatusForbidden,
+			nodeGroup:        "node-group-2",
+			name:             "node-group-2",
+			groupDescription: "Should not work",
+		},
+		{
+			description:      "failed superuser request, bad password",
+			username:         "admin",
+			password:         "badadminpass1",
+			expectedStatus:   http.StatusUnauthorized,
+			nodeGroup:        "node-group-2",
+			name:             "node-group-2",
+			groupDescription: "Should not work",
+		},
+		{
+			description:      "failed user request, no password set",
+			username:         "username4-no-pw",
+			password:         "somepassword",
+			expectedStatus:   http.StatusUnauthorized,
+			nodeGroup:        "node-group-2",
+			name:             "node-group-2",
+			groupDescription: "Should not work",
+		},
+		{
+			description:      "failed superuser request, not found",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusNotFound,
+			nodeGroup:        "nonexistent-group",
+			name:             "nonexistent-group",
+			groupDescription: "Should not work",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			body := struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}{
+				Name:        test.name,
+				Description: test.groupDescription,
+			}
+
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT node-group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusOK {
+				var result cdntypes.NodeGroup
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+				}
+				if result.Name != test.name {
+					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+				}
+				if result.Description != test.groupDescription {
+					t.Fatalf("%s: expected description %q, got %q", test.description, test.groupDescription, result.Description)
+				}
+			}
+		}()
+	}
+}
+
+func TestDeleteNodeGroup(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		nodeGroup      string
+	}{
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			nodeGroup:      "node-group-2",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			nodeGroup:      "node-group-2",
+		},
+		{
+			description:    "failed user request, no password set",
+			username:       "username4-no-pw",
+			password:       "somepassword",
+			expectedStatus: http.StatusUnauthorized,
+			nodeGroup:      "node-group-2",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			nodeGroup:      "nonexistent-group",
+		},
+		{
+			description:    "successful superuser request",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			nodeGroup:      "node-group-2",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE node-group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			// Verify the resource is actually gone by retrying the DELETE
+			if test.expectedStatus == http.StatusNoContent {
+				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				retryReq.SetBasicAuth(test.username, test.password)
+				retryResp, err := http.DefaultClient.Do(retryReq) // #nosec G704 -- filled in by test
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer retryResp.Body.Close()
+				if retryResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+				}
+			}
+		}()
+	}
+}
+
 func TestAuthChallenge(t *testing.T) {
 	expectedChallenge := `Basic realm="test realm"`
 	challenge := authChallenge("Basic", "test realm")

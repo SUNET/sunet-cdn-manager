@@ -163,6 +163,12 @@ templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames
 						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) } { activeAttr("services", u)... }>Services</a></li>
 						<li><a href={ templ.URL(fmt.Sprintf("/console/org/%s/api-tokens", orgName)) } { activeAttr("api-tokens", u)... }>API tokens</a></li>
 					}
+					if ad.Superuser {
+						<li><p class="nav-section-label">Superuser</p></li>
+						<li><a href="/console/superuser/cache-nodes" { activeAttr("cache-nodes", u)... }>Cache nodes</a></li>
+						<li><a href="/console/superuser/l4lb-nodes" { activeAttr("l4lb-nodes", u)... }>L4LB nodes</a></li>
+						<li><a href="/console/superuser/node-groups" { activeAttr("node-groups", u)... }>Node groups</a></li>
+					}
 				</ul>
 			</nav>
 		</aside>
@@ -891,4 +897,319 @@ templ LoginPage(returnTo string, loginFailed bool) {
 			</div>
 		</body>
 	</html>
+}
+
+templ CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+	@flashMessagesComponent(flashMessages)
+	if len(nodes) == 0 {
+		<article class="empty-state">
+			<p>No cache nodes added yet</p>
+			<a href="/console/superuser/create/cache-node" role="button">Add your first cache node</a>
+		</article>
+	} else {
+		<table>
+			<thead>
+				<tr>
+					<th>Name</th>
+					<th>Description</th>
+					<th>Addresses</th>
+					<th>Maintenance</th>
+					<th>Node group</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, node := range nodes {
+					<tr>
+						<td>{ node.Name }</td>
+						<td>{ node.Description }</td>
+						<td class="addresses">
+							for _, addr := range node.Addresses {
+								<div><code>{ addr.String() }</code></div>
+							}
+						</td>
+						<td>
+							<input
+								type="checkbox"
+								checked?={ node.Maintenance }
+								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/maintenance", node.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name) }
+								aria-label={ fmt.Sprintf("Toggle maintenance for '%s'", node.Name) }
+							/>
+						</td>
+						<td>
+							<select
+								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/node-group", node.Name))) }
+								hx-target="body"
+								hx-trigger="change"
+								name="node-group"
+								aria-label={ fmt.Sprintf("Select node group for '%s'", node.Name) }
+							>
+								<option value="" selected?={ node.NodeGroupID == nil }>-- none --</option>
+								for _, ng := range nodeGroups {
+									<option value={ ng.Name } selected?={ node.NodeGroupName != nil && *node.NodeGroupName == ng.Name }>{ ng.Name }</option>
+								}
+							</select>
+						</td>
+						<td>
+							<a href={ templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", node.Name)) } role="button" class="secondary">Edit</a>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s", node.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", node.Name) }
+								hx-disabled-elt="this"
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p>
+			<a href="/console/superuser/create/cache-node" role="button">Add cache node</a>
+		</p>
+	}
+}
+
+templ CreateCacheNodeContent(formData CacheNodeFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action="/console/superuser/create/cache-node" hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<label for="addresses">
+			Addresses (one per line, IPv4 and/or IPv6)
+			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+		</label>
+		<span class="error-text">{ formData.Errors.Addresses }</span>
+		<button type="submit">Add cache node</button>
+	</form>
+}
+
+templ EditCacheNodeContent(nodeName string, formData CacheNodeFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<label for="addresses">
+			Addresses (one per line, IPv4 and/or IPv6)
+			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+		</label>
+		<span class="error-text">{ formData.Errors.Addresses }</span>
+		<button type="submit">Save changes</button>
+	</form>
+}
+
+templ L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+	@flashMessagesComponent(flashMessages)
+	if len(nodes) == 0 {
+		<article class="empty-state">
+			<p>No L4LB nodes added yet</p>
+			<a href="/console/superuser/create/l4lb-node" role="button">Add your first L4LB node</a>
+		</article>
+	} else {
+		<table>
+			<thead>
+				<tr>
+					<th>Name</th>
+					<th>Description</th>
+					<th>Addresses</th>
+					<th>Maintenance</th>
+					<th>Node group</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, node := range nodes {
+					<tr>
+						<td>{ node.Name }</td>
+						<td>{ node.Description }</td>
+						<td class="addresses">
+							for _, addr := range node.Addresses {
+								<div><code>{ addr.String() }</code></div>
+							}
+						</td>
+						<td>
+							<input
+								type="checkbox"
+								checked?={ node.Maintenance }
+								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/maintenance", node.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name) }
+								aria-label={ fmt.Sprintf("Toggle maintenance for '%s'", node.Name) }
+							/>
+						</td>
+						<td>
+							<select
+								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/node-group", node.Name))) }
+								hx-target="body"
+								hx-trigger="change"
+								name="node-group"
+								aria-label={ fmt.Sprintf("Select node group for '%s'", node.Name) }
+							>
+								<option value="" selected?={ node.NodeGroupID == nil }>-- none --</option>
+								for _, ng := range nodeGroups {
+									<option value={ ng.Name } selected?={ node.NodeGroupName != nil && *node.NodeGroupName == ng.Name }>{ ng.Name }</option>
+								}
+							</select>
+						</td>
+						<td>
+							<a href={ templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", node.Name)) } role="button" class="secondary">Edit</a>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s", node.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", node.Name) }
+								hx-disabled-elt="this"
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p>
+			<a href="/console/superuser/create/l4lb-node" role="button">Add L4LB node</a>
+		</p>
+	}
+}
+
+templ CreateL4LBNodeContent(formData L4LBNodeFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action="/console/superuser/create/l4lb-node" hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<label for="addresses">
+			Addresses (one per line, IPv4 and/or IPv6)
+			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+		</label>
+		<span class="error-text">{ formData.Errors.Addresses }</span>
+		<button type="submit">Add L4LB node</button>
+	</form>
+}
+
+templ EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<label for="addresses">
+			Addresses (one per line, IPv4 and/or IPv6)
+			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+		</label>
+		<span class="error-text">{ formData.Errors.Addresses }</span>
+		<button type="submit">Save changes</button>
+	</form>
+}
+
+templ NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+	@flashMessagesComponent(flashMessages)
+	if len(nodeGroups) == 0 {
+		<article class="empty-state">
+			<p>No node groups added yet</p>
+			<a href="/console/superuser/create/node-group" role="button">Add your first node group</a>
+		</article>
+	} else {
+		<table>
+			<thead>
+				<tr>
+					<th>Name</th>
+					<th>Description</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, ng := range nodeGroups {
+					<tr>
+						<td>{ ng.Name }</td>
+						<td>{ ng.Description }</td>
+						<td>
+							<a href={ templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", ng.Name)) } role="button" class="secondary">Edit</a>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s", ng.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", ng.Name) }
+								hx-disabled-elt="this"
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p>
+			<a href="/console/superuser/create/node-group" role="button">Add node group</a>
+		</p>
+	}
+}
+
+templ CreateNodeGroupContent(formData NodeGroupFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action="/console/superuser/create/node-group" hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<button type="submit">Add node group</button>
+	</form>
+}
+
+templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", groupName)) } hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="description">
+			Description
+			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Description }</span>
+		<button type="submit">Save changes</button>
+	</form>
 }
