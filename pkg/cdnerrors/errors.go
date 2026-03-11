@@ -53,3 +53,17 @@ func NewValidationError(details string) error {
 		Details: details,
 	}
 }
+
+// AddressConflictError identifies as ErrAlreadyExists but indicates that a
+// specific IP address is already assigned to another node.
+type AddressConflictError struct {
+	Address string
+}
+
+func (e *AddressConflictError) Error() string {
+	return fmt.Sprintf("address already in use: %s", e.Address)
+}
+
+func (e *AddressConflictError) Unwrap() error {
+	return ErrAlreadyExists
+}

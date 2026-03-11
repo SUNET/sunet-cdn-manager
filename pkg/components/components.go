@@ -60,6 +60,55 @@ type ServiceEntry struct {
 	IPAddresses []netip.Addr
 }
 
+type NodeFormFields struct {
+	Name        string
+	Description string
+	Addresses   string
+}
+
+type NodeFormErrors struct {
+	Name        string
+	Description string
+	Addresses   string
+	ServerError string
+}
+
+type CacheNodeFormData struct {
+	NodeFormFields
+	Errors NodeFormErrors
+}
+
+type L4LBNodeFormData struct {
+	NodeFormFields
+	Errors NodeFormErrors
+}
+
+type NodeGroupFormFields struct {
+	Name        string
+	Description string
+}
+
+type NodeGroupFormErrors struct {
+	Name        string
+	Description string
+	ServerError string
+}
+
+type NodeGroupFormData struct {
+	NodeGroupFormFields
+	Errors NodeGroupFormErrors
+}
+
+// AddressesString formats a node's addresses as newline-separated text for
+// display in textarea form fields.
+func AddressesString(node cdntypes.Node) string {
+	parts := make([]string, 0, len(node.Addresses))
+	for _, addr := range node.Addresses {
+		parts = append(parts, addr.String())
+	}
+	return strings.Join(parts, "\n")
+}
+
 type addButtonVals struct {
 	Org     string `json:"org"`
 	Service string `json:"service"`
@@ -114,9 +163,12 @@ type section struct {
 // source of truth for section names used by both urlToSection (active nav
 // highlighting) and buildBreadcrumbs (ancestor navigation).
 var sections = map[string]section{
-	"domains":    {Label: "Domains", CreateSlug: "domain"},
-	"services":   {Label: "Services", CreateSlug: "service"},
-	"api-tokens": {Label: "API tokens", CreateSlug: "api-token"},
+	"domains":     {Label: "Domains", CreateSlug: "domain"},
+	"services":    {Label: "Services", CreateSlug: "service"},
+	"api-tokens":  {Label: "API tokens", CreateSlug: "api-token"},
+	"cache-nodes": {Label: "Cache nodes", CreateSlug: "cache-node"},
+	"l4lb-nodes":  {Label: "L4LB nodes", CreateSlug: "l4lb-node"},
+	"node-groups": {Label: "Node groups", CreateSlug: "node-group"},
 }
 
 // createSlugToSection provides reverse lookup from the singular create/ path
@@ -135,6 +187,14 @@ var createSlugToSection = func() map[string]string {
 func buildBreadcrumbs(u *url.URL, orgName string) []Breadcrumb {
 	urlPath := u.EscapedPath()
 	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
+
+	// Handle superuser paths: /console/superuser/{section}[/{item}[/edit]]
+	if strings.HasPrefix(urlPath, "/console/superuser/") {
+		return buildSuperuserBreadcrumbs(parts)
+	}
+
+	// Handle superuser create paths: /console/superuser/create/{slug}
+	// (already covered by the prefix check above since /console/superuser/create/ starts with /console/superuser/)
 
 	// Only generate breadcrumbs for org-scoped pages with depth beyond the org dashboard
 	if !strings.HasPrefix(urlPath, "/console/org/") || len(parts) <= 3 {
@@ -188,11 +248,64 @@ func buildBreadcrumbs(u *url.URL, orgName string) []Breadcrumb {
 	return crumbs
 }
 
+// buildSuperuserBreadcrumbs generates breadcrumbs for /console/superuser/ paths.
+// List pages (e.g. /console/superuser/cache-nodes) get no breadcrumbs since
+// they are already the top-level view. Deeper pages (create, edit, and other
+// actions like maintenance/node-group) get the section list page as root crumb.
+func buildSuperuserBreadcrumbs(parts []string) []Breadcrumb {
+	// parts: ["console", "superuser", ...]
+	if len(parts) <= 3 {
+		// /console/superuser or /console/superuser/{section} — no breadcrumbs
+		return nil
+	}
+
+	superBase := "/console/superuser"
+
+	switch {
+	case parts[2] == "create" && len(parts) >= 4:
+		// /console/superuser/create/{slug}
+		if sectionPath, ok := createSlugToSection[parts[3]]; ok {
+			sec := sections[sectionPath]
+			return []Breadcrumb{{Label: sec.Label, URL: superBase + "/" + sectionPath}}
+		}
+		return nil
+	default:
+		// /console/superuser/{section}/{item}[/edit]
+		sec, ok := sections[parts[2]]
+		if !ok {
+			return nil
+		}
+		sectionPath := parts[2]
+
+		crumbs := []Breadcrumb{{Label: sec.Label, URL: superBase + "/" + sectionPath}}
+
+		if len(parts) >= 5 {
+			// /console/superuser/{section}/{item}/{action} — link to edit
+			// page since there is no standalone item detail page
+			itemName := parts[3]
+			crumbs = append(crumbs, Breadcrumb{Label: itemName, URL: fmt.Sprintf("%s/%s/%s/edit", superBase, sectionPath, itemName)})
+		}
+
+		return crumbs
+	}
+}
+
 // urlToSection returns the active navigation section for the given console URL,
 // used by NavBar to highlight the current section link.
 func urlToSection(u *url.URL) string {
 	urlPath := u.EscapedPath()
 	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
+
+	// Handle superuser paths: /console/superuser/{section}[/...]
+	if strings.HasPrefix(urlPath, "/console/superuser/") && len(parts) >= 3 {
+		// Map /console/superuser/create/{slug} back to the section path
+		if parts[2] == "create" && len(parts) >= 4 {
+			if sectionPath, ok := createSlugToSection[parts[3]]; ok {
+				return sectionPath
+			}
+		}
+		return parts[2]
+	}
 
 	if !strings.HasPrefix(urlPath, "/console/org/") {
 		return ""

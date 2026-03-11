@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,13 +81,19 @@ var templateFS embed.FS
 
 // Keys used for flash message storing
 var flashMessageKeys = struct {
-	apiTokens string
-	domains   string
-	services  string
+	apiTokens  string
+	domains    string
+	services   string
+	cacheNodes string
+	l4lbNodes  string
+	nodeGroups string
 }{
-	apiTokens: "_flash_api_tokens",
-	domains:   "_flash_domains",
-	services:  "_flash_services",
+	apiTokens:  "_flash_api_tokens",
+	domains:    "_flash_domains",
+	services:   "_flash_services",
+	cacheNodes: "_flash_cache_nodes",
+	l4lbNodes:  "_flash_l4lb_nodes",
+	nodeGroups: "_flash_node_groups",
 }
 
 const (
@@ -95,11 +102,21 @@ const (
 	pgUniqueViolation = "23505"
 	// check_violation: 23514
 	pgCheckViolation = "23514"
+	// foreign_key_violation: 23503
+	pgForeignKeyViolation = "23503"
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
 
 	consolePath                 = "/console"
+	consoleSuperuserCacheNodes  = "/console/superuser/cache-nodes"
+	consoleSuperuserL4LBNodes   = "/console/superuser/l4lb-nodes"
+	consoleSuperuserNodeGroups  = "/console/superuser/node-groups"
 	api403String                = "not allowed to access resource"
+	api403DeleteString          = "not allowed to delete resource"
+	cacheNodeNotFound           = "cache node not found"
+	l4lbNodeNotFound            = "l4lb node not found"
+	nodeGroupNotFound           = "node group not found"
+	consoleAlreadyExists        = "already exists"
 	consoleNeedOrgMembershipMsg = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
@@ -132,7 +149,8 @@ var (
 	// use a single instance of Validate, it caches struct info
 	validate = validator.New(validator.WithRequiredStructEnabled())
 
-	returnToKey = "return_to"
+	returnToKey    = "return_to"
+	selectedOrgKey = "selected_org"
 
 	validNetworkFamilies = map[int]struct{}{
 		4: {},
@@ -313,7 +331,7 @@ func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 		}
 
 		if ad.Superuser {
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sessionSelectedOrg(session), components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1540,6 +1558,7 @@ func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) h
 		if orgStr == cdntypes.OrgNotSelected {
 			// The special "not selected" option leads to the root console path.
 			orgURL = consolePath
+			delete(session.Values, selectedOrgKey)
 		} else {
 			// Use the same error for validateOrgName() as the user
 			// permission check so we don't give away if an org exists or
@@ -1573,6 +1592,14 @@ func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) h
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
+
+			session.Values[selectedOrgKey] = orgIdent.name
+		}
+
+		if err := session.Save(r, w); err != nil {
+			logger.Err(err).Msg("unable to save session after org switch")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
 
 		validatedRedirect(orgURL, w, r, http.StatusFound)
@@ -2160,6 +2187,21 @@ type createAPITokenForm struct {
 
 type activateServiceVersionForm struct {
 	Confirmation bool `schema:"confirmation"`
+}
+
+type createNodeForm struct {
+	Name        string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
+	Description string `schema:"description" validate:"min=1,max=100"`
+	Addresses   string `schema:"addresses"`
+}
+
+type createNodeGroupForm struct {
+	Name        string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
+	Description string `schema:"description" validate:"min=1,max=100"`
+}
+
+type nodeGroupAssignForm struct {
+	NodeGroup string `schema:"node-group"`
 }
 
 // Endpoint used for console login
@@ -3290,9 +3332,9 @@ func selectCacheNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([
 			cache_nodes.name,
 			cache_nodes.description,
 			cache_nodes.maintenance,
-			agg_addresses.addresses
+			COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses
 		FROM cache_nodes
-		JOIN (
+		LEFT JOIN (
 			SELECT node_id, array_agg(address ORDER BY address) as addresses
 			FROM cache_node_addresses
 			GROUP BY node_id
@@ -3325,13 +3367,12 @@ func createCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nam
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		cacheNodeID, err = insertCacheNodeTx(dbCtx, tx, name, description, addresses, maintenance)
-		if err != nil {
-			return fmt.Errorf("createCacheNode: INSERT failed: %w", err)
-		}
-
-		return nil
+		return err
 	})
 	if err != nil {
+		if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+			return cdntypes.CacheNode{}, err
+		}
 		return cdntypes.CacheNode{}, fmt.Errorf("createCacheNode: transaction failed: %w", err)
 	}
 
@@ -3350,6 +3391,10 @@ func insertCacheNodeTx(ctx context.Context, tx pgx.Tx, name string, description 
 	var cacheNodeID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+		}
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
 	}
 
@@ -3357,6 +3402,10 @@ func insertCacheNodeTx(ctx context.Context, tx pgx.Tx, name string, description 
 		var cacheNodeAddressID pgtype.UUID
 		err = tx.QueryRow(ctx, "INSERT INTO cache_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", cacheNodeID, address).Scan(&cacheNodeAddressID)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+				return pgtype.UUID{}, &cdnerrors.AddressConflictError{Address: address.String()}
+			}
 			return pgtype.UUID{}, fmt.Errorf("INSERT cache node address failed: %w", err)
 		}
 	}
@@ -3440,9 +3489,9 @@ func selectL4LBNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]
 			l4lb_nodes.name,
 			l4lb_nodes.description,
 			l4lb_nodes.maintenance,
-			agg_addresses.addresses
+			COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses
 		FROM l4lb_nodes
-		JOIN (
+		LEFT JOIN (
 			SELECT node_id, array_agg(address ORDER BY address) as addresses
 			FROM l4lb_node_addresses
 			GROUP BY node_id
@@ -3474,13 +3523,12 @@ func createL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		l4lbNodeID, err = insertL4LBNodeTx(dbCtx, tx, name, description, addresses, maintenance)
-		if err != nil {
-			return fmt.Errorf("createL4LBNode: INSERT failed: %w", err)
-		}
-
-		return nil
+		return err
 	})
 	if err != nil {
+		if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+			return cdntypes.L4LBNode{}, err
+		}
 		return cdntypes.L4LBNode{}, fmt.Errorf("createL4LBNode: transaction failed: %w", err)
 	}
 
@@ -3499,6 +3547,10 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	var l4lbNodeID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+		}
 		return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node failed: %w", err)
 	}
 
@@ -3506,6 +3558,10 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 		var l4lbAddressID pgtype.UUID
 		err = tx.QueryRow(ctx, "INSERT INTO l4lb_node_addresses (node_id, address) VALUES ($1, $2) RETURNING id", l4lbNodeID, address).Scan(&l4lbAddressID)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+				return pgtype.UUID{}, &cdnerrors.AddressConflictError{Address: address.String()}
+			}
 			return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node IP address failed: %w", err)
 		}
 	}
@@ -5627,6 +5683,7 @@ func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
 }
 
+// selectCacheNodeTx uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
 func selectCacheNodeTx(ctx context.Context, tx pgx.Tx, cacheNodeID pgtype.UUID) (cdntypes.CacheNode, error) {
 	rows, err := tx.Query(
 		ctx,
@@ -5882,6 +5939,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	return cnc, nil
 }
 
+// selectL4LBMembersForCacheNode uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
 func selectL4LBMembersForCacheNode(ctx context.Context, tx pgx.Tx, cacheNodeID pgtype.UUID) ([]cdntypes.L4LBNode, error) {
 	rows, err := tx.Query(
 		ctx,
@@ -5915,6 +5973,7 @@ func selectL4LBMembersForCacheNode(ctx context.Context, tx pgx.Tx, cacheNodeID p
 	return l4lbNodes, nil
 }
 
+// selectCacheMembersForL4LBNode uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
 func selectCacheMembersForL4LBNode(ctx context.Context, tx pgx.Tx, l4lbNodeID pgtype.UUID) ([]cdntypes.CacheNode, error) {
 	rows, err := tx.Query(
 		ctx,
@@ -5948,6 +6007,7 @@ func selectCacheMembersForL4LBNode(ctx context.Context, tx pgx.Tx, l4lbNodeID pg
 	return cacheNodes, nil
 }
 
+// selectL4LBNodeTx uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
 func selectL4LBNodeTx(ctx context.Context, tx pgx.Tx, l4lbNodeID pgtype.UUID) (cdntypes.L4LBNode, error) {
 	rows, err := tx.Query(
 		ctx,
@@ -6945,6 +7005,29 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		// htmx helpers
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
 		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
+		// Superuser console routes
+		r.Get("/superuser/cache-nodes", consoleCacheNodesHandler(dbc, cookieStore))
+		r.Delete("/superuser/cache-nodes/{cachenode}", consoleCacheNodeDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
+		r.Post("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
+		r.Get("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc, cookieStore))
+		r.Post("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc, cookieStore))
+		r.Put("/superuser/cache-nodes/{cachenode}/maintenance", consoleCacheNodeMaintenanceHandler(dbc, cookieStore))
+		r.Put("/superuser/cache-nodes/{cachenode}/node-group", consoleCacheNodeGroupHandler(dbc, cookieStore))
+		r.Get("/superuser/l4lb-nodes", consoleL4LBNodesHandler(dbc, cookieStore))
+		r.Delete("/superuser/l4lb-nodes/{l4lbnode}", consoleL4LBNodeDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc, cookieStore))
+		r.Post("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc, cookieStore))
+		r.Get("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc, cookieStore))
+		r.Post("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc, cookieStore))
+		r.Put("/superuser/l4lb-nodes/{l4lbnode}/maintenance", consoleL4LBNodeMaintenanceHandler(dbc, cookieStore))
+		r.Put("/superuser/l4lb-nodes/{l4lbnode}/node-group", consoleL4LBNodeGroupHandler(dbc, cookieStore))
+		r.Get("/superuser/node-groups", consoleNodeGroupsHandler(dbc, cookieStore))
+		r.Delete("/superuser/node-groups/{nodegroup}", consoleNodeGroupDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc, cookieStore))
+		r.Post("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc, cookieStore))
+		r.Get("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
+		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -8262,14 +8345,23 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				for _, address := range input.Body.Addresses {
 					addresses = append(addresses, netip.Addr(address))
 				}
+				slices.SortFunc(addresses, netip.Addr.Compare)
+				addresses = slices.Compact(addresses)
 
 				cacheNode, err := createCacheNode(ctx, dbc, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
-					if errors.Is(err, cdnerrors.ErrForbidden) {
+					var addrErr *cdnerrors.AddressConflictError
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.As(err, &addrErr):
+						return nil, huma.Error409Conflict(addrErr.Error())
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("cache node already exists")
+					default:
+						logger.Err(err).Msg("unable to add cache node")
+						return nil, err
 					}
-					logger.Err(err).Msg("unable to add cache node")
-					return nil, err
 				}
 				return &cacheNodeOutput{
 					Body: cacheNode,
@@ -8377,14 +8469,23 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				for _, address := range input.Body.Addresses {
 					addresses = append(addresses, netip.Addr(address))
 				}
+				slices.SortFunc(addresses, netip.Addr.Compare)
+				addresses = slices.Compact(addresses)
 
 				l4lbNode, err := createL4LBNode(ctx, dbc, ad, input.Body.Name, input.Body.Description, addresses, maintenance)
 				if err != nil {
-					if errors.Is(err, cdnerrors.ErrForbidden) {
+					var addrErr *cdnerrors.AddressConflictError
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.As(err, &addrErr):
+						return nil, huma.Error409Conflict(addrErr.Error())
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("l4lb node already exists")
+					default:
+						logger.Err(err).Msg("unable to add l4lb node")
+						return nil, err
 					}
-					logger.Err(err).Msg("unable to add l4lb node")
-					return nil, err
 				}
 				return &l4lbNodeOutput{
 					Body: l4lbNode,
@@ -8476,7 +8577,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name        string `json:"name" example:"myname" doc:"name of node group" minLength:"1" maxLength:"63"`
+					Name        string `json:"name" example:"myname" doc:"name of node group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 					Description string `json:"description" doc:"some identifying info for the node group" minLength:"1" maxLength:"100" `
 				}
 			},
@@ -8506,6 +8607,186 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return resp, nil
 			},
 		)
+
+		// PUT /v1/cache-nodes/{cachenode}
+		huma.Put(api, "/v1/cache-nodes/{cachenode}", func(ctx context.Context, input *struct {
+			CacheNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
+			Body      nodeUpdateBody
+		},
+		) (*cacheNodeOutput, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-node PUT handler")
+			}
+
+			addresses := []netip.Addr{}
+			for _, address := range input.Body.Addresses {
+				addresses = append(addresses, netip.Addr(address))
+			}
+			slices.SortFunc(addresses, netip.Addr.Compare)
+			addresses = slices.Compact(addresses)
+
+			cacheNode, err := updateCacheNode(ctx, dbc, ad, input.CacheNode, input.Body.Name, input.Body.Description, addresses)
+			if err != nil {
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(cacheNodeNotFound)
+				case errors.As(err, &addrErr):
+					return nil, huma.Error409Conflict(addrErr.Error())
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					return nil, huma.Error409Conflict("cache node already exists")
+				default:
+					return nil, fmt.Errorf("unable to update cache node: %w", err)
+				}
+			}
+			return &cacheNodeOutput{Body: cacheNode}, nil
+		})
+
+		// DELETE /v1/cache-nodes/{cachenode}
+		huma.Delete(api, "/v1/cache-nodes/{cachenode}", func(ctx context.Context, input *struct {
+			CacheNode string `path:"cachenode" example:"cache-node1" doc:"Cache node ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from cache-node DELETE handler")
+			}
+
+			err := deleteCacheNode(ctx, dbc, ad, input.CacheNode)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403DeleteString)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(cacheNodeNotFound)
+				default:
+					return nil, fmt.Errorf("unable to delete cache node: %w", err)
+				}
+			}
+			return nil, nil
+		})
+
+		// PUT /v1/l4lb-nodes/{l4lbnode}
+		huma.Put(api, "/v1/l4lb-nodes/{l4lbnode}", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"l4lbnode" example:"l4lb-node1" doc:"L4LB node ID or name" minLength:"1" maxLength:"63"`
+			Body     nodeUpdateBody
+		},
+		) (*l4lbNodeOutput, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-node PUT handler")
+			}
+
+			addresses := []netip.Addr{}
+			for _, address := range input.Body.Addresses {
+				addresses = append(addresses, netip.Addr(address))
+			}
+			slices.SortFunc(addresses, netip.Addr.Compare)
+			addresses = slices.Compact(addresses)
+
+			l4lbNode, err := updateL4LBNode(ctx, dbc, ad, input.L4LBNode, input.Body.Name, input.Body.Description, addresses)
+			if err != nil {
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(l4lbNodeNotFound)
+				case errors.As(err, &addrErr):
+					return nil, huma.Error409Conflict(addrErr.Error())
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					return nil, huma.Error409Conflict("l4lb node already exists")
+				default:
+					return nil, fmt.Errorf("unable to update l4lb node: %w", err)
+				}
+			}
+			return &l4lbNodeOutput{Body: l4lbNode}, nil
+		})
+
+		// DELETE /v1/l4lb-nodes/{l4lbnode}
+		huma.Delete(api, "/v1/l4lb-nodes/{l4lbnode}", func(ctx context.Context, input *struct {
+			L4LBNode string `path:"l4lbnode" example:"l4lb-node1" doc:"L4LB node ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from l4lb-node DELETE handler")
+			}
+
+			err := deleteL4LBNode(ctx, dbc, ad, input.L4LBNode)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403DeleteString)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(l4lbNodeNotFound)
+				default:
+					return nil, fmt.Errorf("unable to delete l4lb node: %w", err)
+				}
+			}
+			return nil, nil
+		})
+
+		// PUT /v1/node-groups/{nodegroup}
+		huma.Put(api, "/v1/node-groups/{nodegroup}", func(ctx context.Context, input *struct {
+			NodeGroup string `path:"nodegroup" example:"node-group1" doc:"Node group ID or name" minLength:"1" maxLength:"63"`
+			Body      struct {
+				Name        string `json:"name" example:"node-group1" doc:"name of node group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+				Description string `json:"description" doc:"some identifying info for the node group" minLength:"1" maxLength:"100"`
+			}
+		},
+		) (*nodeGroupOutput, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from node-group PUT handler")
+			}
+
+			nodeGroup, err := updateNodeGroup(ctx, dbc, ad, input.NodeGroup, input.Body.Name, input.Body.Description)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(nodeGroupNotFound)
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					return nil, huma.Error409Conflict("node group already exists")
+				default:
+					return nil, fmt.Errorf("unable to update node group: %w", err)
+				}
+			}
+			return &nodeGroupOutput{Body: nodeGroup}, nil
+		})
+
+		// DELETE /v1/node-groups/{nodegroup}
+		huma.Delete(api, "/v1/node-groups/{nodegroup}", func(ctx context.Context, input *struct {
+			NodeGroup string `path:"nodegroup" example:"node-group1" doc:"Node group ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from node-group DELETE handler")
+			}
+
+			err := deleteNodeGroup(ctx, dbc, ad, input.NodeGroup)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403DeleteString)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(nodeGroupNotFound)
+				default:
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+						return nil, huma.Error409Conflict("cannot delete node group: nodes are still assigned to it")
+					}
+					return nil, fmt.Errorf("unable to delete node group: %w", err)
+				}
+			}
+			return nil, nil
+		})
 	})
 	return nil
 }
@@ -8593,6 +8874,12 @@ type l4lbNodeInput struct {
 
 type l4lbNodePostInput struct {
 	Body l4lbNodeInput
+}
+
+type nodeUpdateBody struct {
+	Name        string      `json:"name" doc:"Node name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+	Description string      `json:"description" doc:"some identifying info for the node" minLength:"1" maxLength:"100"`
+	Addresses   []IPAddress `json:"addresses" doc:"The IPv4 and IPv6 addresses of the node"`
 }
 
 type cacheNodeOutput struct {
@@ -9512,4 +9799,1804 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	wg.Wait()
 
 	return nil
+}
+
+// consoleSuperuserCheck validates that the session user is a superuser.
+// Returns the AuthData and true if ok, or writes a 403 if not superuser or a 500 if auth data is missing, and returns false.
+func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request, cookieStore *sessions.CookieStore) (cdntypes.AuthData, *sessions.Session, bool) {
+	logger := hlog.FromRequest(r)
+	session := getSession(r, cookieStore)
+
+	adRef, ok := session.Values["ad"]
+	if !ok {
+		logger.Error().Msg(consoleMissingAuthData)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return cdntypes.AuthData{}, nil, false
+	}
+
+	ad, ok := adRef.(cdntypes.AuthData)
+	if !ok {
+		logger.Error().Msg("consoleSuperuserCheck: unexpected auth data type in session")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return cdntypes.AuthData{}, nil, false
+	}
+	if !ad.Superuser {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return cdntypes.AuthData{}, nil, false
+	}
+
+	return ad, session, true
+}
+
+// sessionSelectedOrg returns the last org name the superuser selected via the
+// org switcher, or "" if none has been selected yet. This keeps the org
+// dropdown populated while viewing superuser pages.
+func sessionSelectedOrg(session *sessions.Session) string {
+	if v, ok := session.Values[selectedOrgKey]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func consoleCacheNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		cacheNodes, err := selectCacheNodeListItems(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("cache nodes console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		nodeGroups, err := selectNodeGroups(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("cache nodes console: unable to fetch node groups")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.cacheNodes)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("cache nodes console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Cache nodes", sessionSelectedOrg(session), components.CacheNodesContent(cacheNodes, nodeGroups, flashMessageStrings))
+		if err != nil {
+			logger.Err(err).Msg("unable to render cache nodes page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleCacheNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		cacheNodeName := chi.URLParam(r, "cachenode")
+		if cacheNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err := deleteCacheNode(ctx, dbc, ad, cacheNodeName)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("cache nodes console: not authorized to delete cache node")
+				http.Error(w, "not allowed to delete cache node", http.StatusForbidden)
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("cache nodes console: cache node not found")
+				http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+			default:
+				logger.Err(err).Msg("cache nodes console: deletion failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Cache node '%s' deleted!", cacheNodeName), flashMessageKeys.cacheNodes)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserCacheNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add cache node"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(components.CacheNodeFormData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render cache node creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-cache-node POST form")
+				return
+			}
+
+			formData := createNodeForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-cache-node form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			nodeFormData := components.CacheNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+					Addresses:   formData.Addresses,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						nodeFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						nodeFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render cache node creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			addresses, err := parseAddressesFromText(formData.Addresses)
+			if err != nil {
+				nodeFormData.Errors.Addresses = err.Error()
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render cache node creation page on address error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = createCacheNode(ctx, dbc, ad, formData.Name, formData.Description, addresses, true)
+			if err != nil {
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.As(err, &addrErr):
+					nodeFormData.Errors.Addresses = addrErr.Error()
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					nodeFormData.Errors.Name = consoleAlreadyExists
+				default:
+					nodeFormData.Errors.ServerError = "Cache node creation failed"
+				}
+				logger.Err(err).Msg("cache node creation failed")
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render cache node creation page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Cache node '%s' created!", formData.Name), flashMessageKeys.cacheNodes)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserCacheNodes, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-cache-node handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleEditCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		cacheNodeName := chi.URLParam(r, "cachenode")
+		if cacheNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit cache node: %s", cacheNodeName)
+
+		switch r.Method {
+		case http.MethodGet:
+			cacheNode, err := selectCacheNodeByName(ctx, dbc, ad, cacheNodeName)
+			if err != nil {
+				logger.Err(err).Msg("edit cache node: unable to fetch cache node")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			formData := components.CacheNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        cacheNode.Name,
+					Description: cacheNode.Description,
+					Addresses:   components.AddressesString(cacheNode.Node),
+				},
+			}
+
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeName, formData))
+			if err != nil {
+				logger.Err(err).Msg("unable to render edit cache node page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse edit-cache-node POST form")
+				return
+			}
+
+			formData := createNodeForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST edit-cache-node form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			nodeFormData := components.CacheNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+					Addresses:   formData.Addresses,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						nodeFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						nodeFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit cache node page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			addresses, err := parseAddressesFromText(formData.Addresses)
+			if err != nil {
+				nodeFormData.Errors.Addresses = err.Error()
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit cache node page on address error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = updateCacheNode(ctx, dbc, ad, cacheNodeName, formData.Name, formData.Description, addresses)
+			if err != nil {
+				logger.Err(err).Msg("cache node update failed")
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					nodeFormData.Errors.ServerError = "Not allowed to modify cache node"
+				case errors.Is(err, pgx.ErrNoRows):
+					nodeFormData.Errors.ServerError = "Cache node not found"
+				case errors.As(err, &addrErr):
+					nodeFormData.Errors.Addresses = addrErr.Error()
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					nodeFormData.Errors.Name = consoleAlreadyExists
+				default:
+					nodeFormData.Errors.ServerError = "Cache node update failed"
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit cache node page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Cache node '%s' updated!", formData.Name), flashMessageKeys.cacheNodes)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserCacheNodes, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for edit-cache-node handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleCacheNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		cacheNodeName := chi.URLParam(r, "cachenode")
+		if cacheNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse cache node maintenance form")
+			return
+		}
+
+		// Checkbox sends "maintenance=on" when checked, absent when unchecked
+		maintenance := r.Form.Get("maintenance") == "on"
+
+		err := setCacheNodeMaintenance(ctx, ad, dbc, cacheNodeName, maintenance)
+		if err != nil {
+			logger.Err(err).Msg("cache node maintenance: set failed")
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			case errors.Is(err, pgx.ErrNoRows):
+				http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+			default:
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		state := "disabled"
+		if maintenance {
+			state = "enabled"
+		}
+		session.AddFlash(fmt.Sprintf("Maintenance mode %s for '%s'", state, cacheNodeName), flashMessageKeys.cacheNodes)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserCacheNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCacheNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		cacheNodeName := chi.URLParam(r, "cachenode")
+		if cacheNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse cache node group form")
+			return
+		}
+
+		formData := nodeGroupAssignForm{}
+		if err := schemaDecoder.Decode(&formData, r.PostForm); err != nil {
+			logger.Err(err).Msg("unable to decode cache node group form data")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if formData.NodeGroup == "" {
+			err := unsetCacheNodeGroup(ctx, ad, dbc, cacheNodeName)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, "not allowed to modify cache node", http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				logger.Err(err).Msg("cache node group: unset failed")
+				return
+			}
+			session.AddFlash(fmt.Sprintf("Node group removed from '%s'", cacheNodeName), flashMessageKeys.cacheNodes)
+		} else {
+			err := setCacheNodeGroup(ctx, ad, dbc, cacheNodeName, formData.NodeGroup)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, "not allowed to modify cache node", http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, "cache node or node group not found", http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				logger.Err(err).Msg("cache node group: set failed")
+				return
+			}
+			session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, cacheNodeName), flashMessageKeys.cacheNodes)
+		}
+
+		err := session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserCacheNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleL4LBNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		l4lbNodes, err := selectL4LBNodeListItems(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("l4lb nodes console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		nodeGroups, err := selectNodeGroups(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("l4lb nodes console: unable to fetch node groups")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.l4lbNodes)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("l4lb nodes console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, "L4LB nodes", sessionSelectedOrg(session), components.L4LBNodesContent(l4lbNodes, nodeGroups, flashMessageStrings))
+		if err != nil {
+			logger.Err(err).Msg("unable to render l4lb nodes page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleL4LBNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		l4lbNodeName := chi.URLParam(r, "l4lbnode")
+		if l4lbNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err := deleteL4LBNode(ctx, dbc, ad, l4lbNodeName)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("l4lb nodes console: not authorized to delete L4LB node")
+				http.Error(w, "not allowed to delete L4LB node", http.StatusForbidden)
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("l4lb nodes console: L4LB node not found")
+				http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+			default:
+				logger.Err(err).Msg("l4lb nodes console: deletion failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("L4LB node '%s' deleted!", l4lbNodeName), flashMessageKeys.l4lbNodes)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserL4LBNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add L4LB node"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(components.L4LBNodeFormData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render l4lb node creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-l4lb-node POST form")
+				return
+			}
+
+			formData := createNodeForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-l4lb-node form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			nodeFormData := components.L4LBNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+					Addresses:   formData.Addresses,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						nodeFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						nodeFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render l4lb node creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			addresses, err := parseAddressesFromText(formData.Addresses)
+			if err != nil {
+				nodeFormData.Errors.Addresses = err.Error()
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render l4lb node creation page on address error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = createL4LBNode(ctx, dbc, ad, formData.Name, formData.Description, addresses, true)
+			if err != nil {
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.As(err, &addrErr):
+					nodeFormData.Errors.Addresses = addrErr.Error()
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					nodeFormData.Errors.Name = consoleAlreadyExists
+				default:
+					nodeFormData.Errors.ServerError = "L4LB node creation failed"
+				}
+				logger.Err(err).Msg("l4lb node creation failed")
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render l4lb node creation page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("L4LB node '%s' created!", formData.Name), flashMessageKeys.l4lbNodes)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserL4LBNodes, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-l4lb-node handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleEditL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		l4lbNodeName := chi.URLParam(r, "l4lbnode")
+		if l4lbNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit L4LB node: %s", l4lbNodeName)
+
+		switch r.Method {
+		case http.MethodGet:
+			l4lbNode, err := selectL4LBNodeByName(ctx, dbc, ad, l4lbNodeName)
+			if err != nil {
+				logger.Err(err).Msg("edit l4lb node: unable to fetch l4lb node")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			formData := components.L4LBNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        l4lbNode.Name,
+					Description: l4lbNode.Description,
+					Addresses:   components.AddressesString(l4lbNode.Node),
+				},
+			}
+
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeName, formData))
+			if err != nil {
+				logger.Err(err).Msg("unable to render edit l4lb node page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse edit-l4lb-node POST form")
+				return
+			}
+
+			formData := createNodeForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST edit-l4lb-node form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			nodeFormData := components.L4LBNodeFormData{
+				NodeFormFields: components.NodeFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+					Addresses:   formData.Addresses,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						nodeFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						nodeFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit l4lb node page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			addresses, err := parseAddressesFromText(formData.Addresses)
+			if err != nil {
+				nodeFormData.Errors.Addresses = err.Error()
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit l4lb node page on address error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = updateL4LBNode(ctx, dbc, ad, l4lbNodeName, formData.Name, formData.Description, addresses)
+			if err != nil {
+				logger.Err(err).Msg("l4lb node update failed")
+				var addrErr *cdnerrors.AddressConflictError
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					nodeFormData.Errors.ServerError = "Not allowed to modify L4LB node"
+				case errors.Is(err, pgx.ErrNoRows):
+					nodeFormData.Errors.ServerError = "L4LB node not found"
+				case errors.As(err, &addrErr):
+					nodeFormData.Errors.Addresses = addrErr.Error()
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					nodeFormData.Errors.Name = consoleAlreadyExists
+				default:
+					nodeFormData.Errors.ServerError = "L4LB node update failed"
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeName, nodeFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit l4lb node page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("L4LB node '%s' updated!", formData.Name), flashMessageKeys.l4lbNodes)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserL4LBNodes, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for edit-l4lb-node handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleL4LBNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		l4lbNodeName := chi.URLParam(r, "l4lbnode")
+		if l4lbNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse l4lb node maintenance form")
+			return
+		}
+
+		// Checkbox sends "maintenance=on" when checked, absent when unchecked
+		maintenance := r.Form.Get("maintenance") == "on"
+
+		err := setL4LBNodeMaintenance(ctx, ad, dbc, l4lbNodeName, maintenance)
+		if err != nil {
+			logger.Err(err).Msg("l4lb node maintenance: set failed")
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			case errors.Is(err, pgx.ErrNoRows):
+				http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+			default:
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		state := "disabled"
+		if maintenance {
+			state = "enabled"
+		}
+		session.AddFlash(fmt.Sprintf("Maintenance mode %s for '%s'", state, l4lbNodeName), flashMessageKeys.l4lbNodes)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserL4LBNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleL4LBNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		l4lbNodeName := chi.URLParam(r, "l4lbnode")
+		if l4lbNodeName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse l4lb node group form")
+			return
+		}
+
+		formData := nodeGroupAssignForm{}
+		if err := schemaDecoder.Decode(&formData, r.PostForm); err != nil {
+			logger.Err(err).Msg("unable to decode l4lb node group form data")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if formData.NodeGroup == "" {
+			err := unsetL4LBNodeGroup(ctx, ad, dbc, l4lbNodeName)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, "not allowed to modify L4LB node", http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				logger.Err(err).Msg("l4lb node group: unset failed")
+				return
+			}
+			session.AddFlash(fmt.Sprintf("Node group removed from '%s'", l4lbNodeName), flashMessageKeys.l4lbNodes)
+		} else {
+			err := setL4LBNodeGroup(ctx, ad, dbc, l4lbNodeName, formData.NodeGroup)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, "not allowed to modify L4LB node", http.StatusForbidden)
+				case errors.Is(err, pgx.ErrNoRows):
+					http.Error(w, "L4LB node or node group not found", http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				logger.Err(err).Msg("l4lb node group: set failed")
+				return
+			}
+			session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, l4lbNodeName), flashMessageKeys.l4lbNodes)
+		}
+
+		err := session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserL4LBNodes, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleNodeGroupsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		nodeGroups, err := selectNodeGroups(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("node groups console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.nodeGroups)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("node groups console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, flashMessageStrings))
+		if err != nil {
+			logger.Err(err).Msg("unable to render node groups page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleNodeGroupDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		nodeGroupName := chi.URLParam(r, "nodegroup")
+		if nodeGroupName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err := deleteNodeGroup(ctx, dbc, ad, nodeGroupName)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("node groups console: not authorized to delete node group")
+				http.Error(w, "not allowed to delete node group", http.StatusForbidden)
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("node groups console: node group not found")
+				http.Error(w, nodeGroupNotFound, http.StatusNotFound)
+			default:
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+					logger.Err(err).Msg("node group deletion failed: nodes may still be assigned")
+					http.Error(w, "Cannot delete node group: nodes are still assigned to it", http.StatusConflict)
+					return
+				}
+				logger.Err(err).Msg("node groups console: deletion failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Node group '%s' deleted!", nodeGroupName), flashMessageKeys.nodeGroups)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserNodeGroups, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add node group"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(components.NodeGroupFormData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render node group creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-node-group POST form")
+				return
+			}
+
+			formData := createNodeGroupForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-node-group form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			groupFormData := components.NodeGroupFormData{
+				NodeGroupFormFields: components.NodeGroupFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						groupFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						groupFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(groupFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render node group creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = insertNodeGroup(ctx, logger, ad, dbc, formData.Name, formData.Description)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					groupFormData.Errors.Name = consoleAlreadyExists
+				} else {
+					groupFormData.Errors.ServerError = "Node group creation failed"
+				}
+				logger.Err(err).Msg("node group creation failed")
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(groupFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render node group creation page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Node group '%s' created!", formData.Name), flashMessageKeys.nodeGroups)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserNodeGroups, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-node-group handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		nodeGroupName := chi.URLParam(r, "nodegroup")
+		if nodeGroupName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit node group: %s", nodeGroupName)
+
+		switch r.Method {
+		case http.MethodGet:
+			nodeGroup, err := selectNodeGroupByName(ctx, dbc, ad, nodeGroupName)
+			if err != nil {
+				logger.Err(err).Msg("edit node group: unable to fetch node group")
+				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+				return
+			}
+
+			formData := components.NodeGroupFormData{
+				NodeGroupFormFields: components.NodeGroupFormFields{
+					Name:        nodeGroup.Name,
+					Description: nodeGroup.Description,
+				},
+			}
+
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupName, formData))
+			if err != nil {
+				logger.Err(err).Msg("unable to render edit node group page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse edit-node-group POST form")
+				return
+			}
+
+			formData := createNodeGroupForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST edit-node-group form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			groupFormData := components.NodeGroupFormData{
+				NodeGroupFormFields: components.NodeGroupFormFields{
+					Name:        formData.Name,
+					Description: formData.Description,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						groupFormData.Errors.Name = fieldError.Error()
+					case "Description":
+						groupFormData.Errors.Description = fieldError.Error()
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupName, groupFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit node group page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = updateNodeGroup(ctx, dbc, ad, nodeGroupName, formData.Name, formData.Description)
+			if err != nil {
+				logger.Err(err).Msg("node group update failed")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					groupFormData.Errors.ServerError = "Not allowed to modify node group"
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					groupFormData.Errors.ServerError = "Node group not found"
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					groupFormData.Errors.Name = consoleAlreadyExists
+				default:
+					groupFormData.Errors.ServerError = "Node group update failed"
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupName, groupFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit node group page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Node group '%s' updated!", formData.Name), flashMessageKeys.nodeGroups)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserNodeGroups, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for edit-node-group handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func selectCacheNodeListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.CacheNodeListItem, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	rows, err := dbc.dbPool.Query(
+		ctx,
+		`SELECT
+			cache_nodes.id,
+			cache_nodes.name,
+			cache_nodes.description,
+			cache_nodes.maintenance,
+			COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses,
+			cache_nodes.node_group_id,
+			node_groups.name as node_group_name
+		FROM cache_nodes
+		LEFT JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM cache_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
+		LEFT JOIN node_groups ON node_groups.id = cache_nodes.node_group_id
+		ORDER BY cache_nodes.name
+		`)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for cache node list items: %w", err)
+	}
+
+	cacheNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.CacheNodeListItem])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for cache node list items: %w", err)
+	}
+
+	return cacheNodes, nil
+}
+
+func selectL4LBNodeListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.L4LBNodeListItem, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	rows, err := dbc.dbPool.Query(
+		ctx,
+		`SELECT
+			l4lb_nodes.id,
+			l4lb_nodes.name,
+			l4lb_nodes.description,
+			l4lb_nodes.maintenance,
+			COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses,
+			l4lb_nodes.node_group_id,
+			node_groups.name as node_group_name
+		FROM l4lb_nodes
+		LEFT JOIN (
+			SELECT node_id, array_agg(address ORDER BY address) as addresses
+			FROM l4lb_node_addresses
+			GROUP BY node_id
+		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
+		LEFT JOIN node_groups ON node_groups.id = l4lb_nodes.node_group_id
+		ORDER BY l4lb_nodes.name
+		`)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for l4lb node list items: %w", err)
+	}
+
+	l4lbNodes, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.L4LBNodeListItem])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for l4lb node list items: %w", err)
+	}
+
+	return l4lbNodes, nil
+}
+
+func selectCacheNodeByName(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name string) (cdntypes.CacheNode, error) {
+	if !ad.Superuser {
+		return cdntypes.CacheNode{}, cdnerrors.ErrForbidden
+	}
+
+	var cacheNode cdntypes.CacheNode
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(ctx, tx, name)
+		if err != nil {
+			return fmt.Errorf("selectCacheNodeByName: unable to find cache node: %w", err)
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT
+				cache_nodes.id,
+				cache_nodes.name,
+				cache_nodes.description,
+				cache_nodes.maintenance,
+				COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses
+			FROM cache_nodes
+			LEFT JOIN (
+				SELECT node_id, array_agg(address ORDER BY address) as addresses
+				FROM cache_node_addresses
+				GROUP BY node_id
+			) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
+			WHERE cache_nodes.id = $1`, cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("selectCacheNodeByName: query failed: %w", err)
+		}
+
+		cacheNode, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.CacheNode])
+		if err != nil {
+			return fmt.Errorf("selectCacheNodeByName: collect row failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.CacheNode{}, fmt.Errorf("selectCacheNodeByName: transaction failed: %w", err)
+	}
+
+	return cacheNode, nil
+}
+
+func selectL4LBNodeByName(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name string) (cdntypes.L4LBNode, error) {
+	if !ad.Superuser {
+		return cdntypes.L4LBNode{}, cdnerrors.ErrForbidden
+	}
+
+	var l4lbNode cdntypes.L4LBNode
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(ctx, tx, name)
+		if err != nil {
+			return fmt.Errorf("selectL4LBNodeByName: unable to find l4lb node: %w", err)
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT
+				l4lb_nodes.id,
+				l4lb_nodes.name,
+				l4lb_nodes.description,
+				l4lb_nodes.maintenance,
+				COALESCE(agg_addresses.addresses, ARRAY[]::inet[]) as addresses
+			FROM l4lb_nodes
+			LEFT JOIN (
+				SELECT node_id, array_agg(address ORDER BY address) as addresses
+				FROM l4lb_node_addresses
+				GROUP BY node_id
+			) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
+			WHERE l4lb_nodes.id = $1`, l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("selectL4LBNodeByName: query failed: %w", err)
+		}
+
+		l4lbNode, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.L4LBNode])
+		if err != nil {
+			return fmt.Errorf("selectL4LBNodeByName: collect row failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.L4LBNode{}, fmt.Errorf("selectL4LBNodeByName: transaction failed: %w", err)
+	}
+
+	return l4lbNode, nil
+}
+
+func selectNodeGroupByName(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name string) (cdntypes.NodeGroup, error) {
+	if !ad.Superuser {
+		return cdntypes.NodeGroup{}, cdnerrors.ErrForbidden
+	}
+
+	var nodeGroup cdntypes.NodeGroup
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		nodeGroupIdent, err := newNodeGroupIdentifier(ctx, tx, name)
+		if err != nil {
+			return fmt.Errorf("selectNodeGroupByName: unable to find node group: %w", err)
+		}
+
+		rows, err := tx.Query(ctx,
+			"SELECT id, name, description FROM node_groups WHERE id = $1",
+			nodeGroupIdent.id)
+		if err != nil {
+			return fmt.Errorf("selectNodeGroupByName: query failed: %w", err)
+		}
+
+		nodeGroup, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.NodeGroup])
+		if err != nil {
+			return fmt.Errorf("selectNodeGroupByName: collect row failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return cdntypes.NodeGroup{}, fmt.Errorf("selectNodeGroupByName: transaction failed: %w", err)
+	}
+
+	return nodeGroup, nil
+}
+
+func updateCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cacheNodeNameOrID string, name string, description string, addresses []netip.Addr) (cdntypes.CacheNode, error) {
+	if !ad.Superuser {
+		return cdntypes.CacheNode{}, cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var updatedNode cdntypes.CacheNode
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("updateCacheNode: unable to parse cache node identifier: %w", err)
+		}
+
+		var maintenance bool
+		err = tx.QueryRow(dbCtx, "UPDATE cache_nodes SET name = $1, description = $2 WHERE id = $3 RETURNING maintenance",
+			name, description, cacheNodeIdent.id).Scan(&maintenance)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+				return cdnerrors.ErrAlreadyExists
+			}
+			return fmt.Errorf("updateCacheNode: UPDATE failed: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM cache_node_addresses WHERE node_id = $1", cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("updateCacheNode: DELETE addresses failed: %w", err)
+		}
+
+		for _, address := range addresses {
+			_, err = tx.Exec(dbCtx, "INSERT INTO cache_node_addresses (node_id, address) VALUES ($1, $2)",
+				cacheNodeIdent.id, address)
+			if err != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+					return &cdnerrors.AddressConflictError{Address: address.String()}
+				}
+				return fmt.Errorf("updateCacheNode: INSERT address failed: %w", err)
+			}
+		}
+
+		updatedNode = cdntypes.CacheNode{
+			Node: cdntypes.Node{
+				ID:          cacheNodeIdent.id,
+				Name:        name,
+				Description: description,
+				Addresses:   addresses,
+				Maintenance: maintenance,
+			},
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) {
+			return cdntypes.CacheNode{}, err
+		}
+		return cdntypes.CacheNode{}, fmt.Errorf("updateCacheNode: transaction failed: %w", err)
+	}
+
+	return updatedNode, nil
+}
+
+func updateL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lbNodeNameOrID string, name string, description string, addresses []netip.Addr) (cdntypes.L4LBNode, error) {
+	if !ad.Superuser {
+		return cdntypes.L4LBNode{}, cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var updatedNode cdntypes.L4LBNode
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("updateL4LBNode: unable to parse l4lb node identifier: %w", err)
+		}
+
+		var maintenance bool
+		err = tx.QueryRow(dbCtx, "UPDATE l4lb_nodes SET name = $1, description = $2 WHERE id = $3 RETURNING maintenance",
+			name, description, l4lbNodeIdent.id).Scan(&maintenance)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+				return cdnerrors.ErrAlreadyExists
+			}
+			return fmt.Errorf("updateL4LBNode: UPDATE failed: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM l4lb_node_addresses WHERE node_id = $1", l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("updateL4LBNode: DELETE addresses failed: %w", err)
+		}
+
+		for _, address := range addresses {
+			_, err = tx.Exec(dbCtx, "INSERT INTO l4lb_node_addresses (node_id, address) VALUES ($1, $2)",
+				l4lbNodeIdent.id, address)
+			if err != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+					return &cdnerrors.AddressConflictError{Address: address.String()}
+				}
+				return fmt.Errorf("updateL4LBNode: INSERT address failed: %w", err)
+			}
+		}
+
+		updatedNode = cdntypes.L4LBNode{
+			Node: cdntypes.Node{
+				ID:          l4lbNodeIdent.id,
+				Name:        name,
+				Description: description,
+				Addresses:   addresses,
+				Maintenance: maintenance,
+			},
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) {
+			return cdntypes.L4LBNode{}, err
+		}
+		return cdntypes.L4LBNode{}, fmt.Errorf("updateL4LBNode: transaction failed: %w", err)
+	}
+
+	return updatedNode, nil
+}
+
+func updateNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nodeGroupNameOrID string, name string, description string) (cdntypes.NodeGroup, error) {
+	if !ad.Superuser {
+		return cdntypes.NodeGroup{}, cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var updatedGroup cdntypes.NodeGroup
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("updateNodeGroup: unable to parse node group identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "UPDATE node_groups SET name = $1, description = $2 WHERE id = $3",
+			name, description, nodeGroupIdent.id)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+				return cdnerrors.ErrAlreadyExists
+			}
+			return fmt.Errorf("updateNodeGroup: UPDATE failed: %w", err)
+		}
+
+		updatedGroup = cdntypes.NodeGroup{
+			ID:          nodeGroupIdent.id,
+			Name:        name,
+			Description: description,
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) {
+			return cdntypes.NodeGroup{}, err
+		}
+		return cdntypes.NodeGroup{}, fmt.Errorf("updateNodeGroup: transaction failed: %w", err)
+	}
+
+	return updatedGroup, nil
+}
+
+func deleteCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cacheNodeNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteCacheNode: unable to parse cache node identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM cache_node_addresses WHERE node_id = $1", cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteCacheNode: DELETE addresses failed: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM cache_nodes WHERE id = $1", cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteCacheNode: DELETE node failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("deleteCacheNode: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func deleteL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lbNodeNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteL4LBNode: unable to parse l4lb node identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM l4lb_node_addresses WHERE node_id = $1", l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteL4LBNode: DELETE addresses failed: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM l4lb_nodes WHERE id = $1", l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteL4LBNode: DELETE node failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("deleteL4LBNode: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func deleteNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nodeGroupNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteNodeGroup: unable to parse node group identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM node_groups WHERE id = $1", nodeGroupIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteNodeGroup: DELETE node group failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("deleteNodeGroup: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func unsetCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, cacheNodeNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unsetCacheNodeGroup: unable to parse cache node identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "UPDATE cache_nodes SET node_group_id = NULL WHERE id = $1", cacheNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unsetCacheNodeGroup: UPDATE failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("unsetCacheNodeGroup: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func unsetL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, l4lbNodeNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unsetL4LBNodeGroup: unable to parse l4lb node identifier: %w", err)
+		}
+
+		_, err = tx.Exec(dbCtx, "UPDATE l4lb_nodes SET node_group_id = NULL WHERE id = $1", l4lbNodeIdent.id)
+		if err != nil {
+			return fmt.Errorf("unsetL4LBNodeGroup: UPDATE failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("unsetL4LBNodeGroup: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+func parseAddressesFromText(text string) ([]netip.Addr, error) {
+	addresses := []netip.Addr{}
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		addr, err := netip.ParseAddr(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid IP address %q: %w", line, err)
+		}
+		addresses = append(addresses, addr)
+	}
+	slices.SortFunc(addresses, netip.Addr.Compare)
+	addresses = slices.Compact(addresses)
+	return addresses, nil
 }
