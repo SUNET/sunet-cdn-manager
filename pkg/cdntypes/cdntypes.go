@@ -255,8 +255,20 @@ type L4LBNode struct {
 	Node
 }
 
+type CacheNodeListItem struct {
+	CacheNode
+	NodeGroupID   *pgtype.UUID `json:"node_group_id"`
+	NodeGroupName *string      `json:"node_group_name"`
+}
+
+type L4LBNodeListItem struct {
+	L4LBNode
+	NodeGroupID   *pgtype.UUID `json:"node_group_id"`
+	NodeGroupName *string      `json:"node_group_name"`
+}
+
 type L4LBNodeConfig struct {
-	L4LBNode   L4LBNode              `josn:"l4lb_node"`
+	L4LBNode   L4LBNode              `json:"l4lb_node"`
 	Services   []ServiceConnectivity `json:"service_ip_info"`
 	CacheNodes []CacheNode           `json:"cache_nodes"`
 }
