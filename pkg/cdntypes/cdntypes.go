@@ -36,9 +36,9 @@ type Org struct {
 
 type OrgListItem struct {
 	Org
-	ServiceCount     int64 `json:"service_count" db:"service_count"`
-	DomainCount      int64 `json:"domain_count" db:"domain_count"`
-	ClientTokenCount int64 `json:"client_token_count" db:"client_token_count"`
+	ServiceCount     int64 `db:"service_count"`
+	DomainCount      int64 `db:"domain_count"`
+	ClientTokenCount int64 `db:"client_token_count"`
 }
 
 // OrgClientCredentialSafe contains the fields we can share with users via e.g. the API
