@@ -7896,3 +7896,261 @@ func TestConsoleFormLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestPutOrganization(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		expectedStatus   int
+		org              string
+		name             string
+		serviceQuota     int64
+		domainQuota      int64
+		clientTokenQuota int64
+	}{
+		{
+			description:      "successful superuser request",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusOK,
+			org:              "org4",
+			name:             "org4-renamed",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+		{
+			description:      "successful superuser request, update quotas",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusOK,
+			org:              "org4-renamed",
+			name:             "org4-renamed",
+			serviceQuota:     50,
+			domainQuota:      100,
+			clientTokenQuota: 200,
+		},
+		{
+			description:      "failed non-superuser request",
+			username:         "username1",
+			password:         validUserPassword,
+			expectedStatus:   http.StatusForbidden,
+			org:              "org1",
+			name:             "org1",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+		{
+			description:      "failed superuser request, not found",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusNotFound,
+			org:              "nonexistent-org",
+			name:             "nonexistent-org",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+		{
+			description:      "failed superuser request, conflict on rename",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusConflict,
+			org:              "org1",
+			name:             "org2",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+		{
+			description:      "failed superuser request, invalid name",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusUnprocessableEntity,
+			org:              "org1",
+			name:             "INVALID NAME",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			body := struct {
+				Name             string `json:"name"`
+				ServiceQuota     int64  `json:"service_quota"`
+				DomainQuota      int64  `json:"domain_quota"`
+				ClientTokenQuota int64  `json:"client_token_quota"`
+			}{
+				Name:             test.name,
+				ServiceQuota:     test.serviceQuota,
+				DomainQuota:      test.domainQuota,
+				ClientTokenQuota: test.clientTokenQuota,
+			}
+
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/orgs/"+test.org, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: PUT org unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusOK {
+				var result cdntypes.Org
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+				}
+				if result.Name != test.name {
+					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+				}
+				if result.ServiceQuota != test.serviceQuota {
+					t.Fatalf("%s: expected service_quota %d, got %d", test.description, test.serviceQuota, result.ServiceQuota)
+				}
+				if result.DomainQuota != test.domainQuota {
+					t.Fatalf("%s: expected domain_quota %d, got %d", test.description, test.domainQuota, result.DomainQuota)
+				}
+				if result.ClientTokenQuota != test.clientTokenQuota {
+					t.Fatalf("%s: expected client_token_quota %d, got %d", test.description, test.clientTokenQuota, result.ClientTokenQuota)
+				}
+			}
+		}()
+	}
+}
+
+func TestDeleteOrganization(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		org            string
+	}{
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			org:            "org4",
+		},
+		{
+			description:    "failed superuser request, bad password",
+			username:       "admin",
+			password:       "badadminpass1",
+			expectedStatus: http.StatusUnauthorized,
+			org:            "org4",
+		},
+		{
+			description:    "failed superuser request, not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			org:            "nonexistent-org",
+		},
+		{
+			description:    "failed superuser request, org has dependents",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusConflict,
+			org:            "org1",
+		},
+		{
+			description:    "successful superuser request, org with no children",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			org:            "org4",
+		},
+	}
+
+	for _, test := range tests {
+		func() {
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.org, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("%s: DELETE org unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+			}
+
+			// Verify the resource is actually gone by retrying the DELETE
+			if test.expectedStatus == http.StatusNoContent {
+				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.org, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				retryReq.SetBasicAuth(test.username, test.password)
+				retryResp, err := http.DefaultClient.Do(retryReq) // #nosec G704 -- filled in by test
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer retryResp.Body.Close()
+				if retryResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+				}
+			}
+		}()
+	}
+}

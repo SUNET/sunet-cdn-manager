@@ -29,6 +29,7 @@ var (
 	ErrUnknownDomain                 = errors.New("unknown domain name")
 	ErrReEncryptionMissingPassword   = errors.New("re-encryption needs at least two configured encryption passwords")
 	ErrReEncryptionFailed            = errors.New("re-encryption failed for at least one token")
+	ErrHasDependents                 = errors.New("resource has dependent resources")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
@@ -66,4 +67,52 @@ func (e *AddressConflictError) Error() string {
 
 func (e *AddressConflictError) Unwrap() error {
 	return ErrAlreadyExists
+}
+
+// DependentsError identifies as ErrHasDependents and includes counts of
+// dependent resources that prevent deletion.
+type DependentsError struct {
+	Name              string
+	Services          int64
+	Domains           int64
+	ClientCredentials int64
+}
+
+func (e *DependentsError) Error() string {
+	parts := []string{}
+	if e.Services > 0 {
+		parts = append(parts, fmt.Sprintf("%d services", e.Services))
+	}
+	if e.Domains > 0 {
+		parts = append(parts, fmt.Sprintf("%d domains", e.Domains))
+	}
+	if e.ClientCredentials > 0 {
+		parts = append(parts, fmt.Sprintf("%d client credentials", e.ClientCredentials))
+	}
+	return fmt.Sprintf("cannot delete %q: has %s", e.Name, joinParts(parts))
+}
+
+func (e *DependentsError) Unwrap() error {
+	return ErrHasDependents
+}
+
+func joinParts(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return "dependents"
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " and " + parts[1]
+	default:
+		result := ""
+		for i, p := range parts {
+			if i == len(parts)-1 {
+				result += "and " + p
+			} else {
+				result += p + ", "
+			}
+		}
+		return result
+	}
 }
