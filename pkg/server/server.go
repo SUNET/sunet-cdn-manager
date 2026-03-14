@@ -7696,7 +7696,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Org  string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body struct {
-					Name        string `json:"name" example:"Some-name" doc:"Name for the token, must be a valid DNS label" minLength:"1" maxLength:"63"`
+					Name        string `json:"name" example:"my-token" doc:"Name for the token, must be a valid DNS label" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 					Description string `json:"description" example:"Some description" doc:"Description for the token" minLength:"1" maxLength:"100"`
 				}
 			},
@@ -7869,7 +7869,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Org  string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body struct {
-					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
+					Name string `json:"name" example:"example.com" doc:"Domain name" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
 				}
 			},
 			) (*orgDomainOutput, error) {
@@ -8130,8 +8130,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string `json:"name" example:"Some name" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
-					Org  string `json:"org" example:"org1" doc:"Name or ID of organization" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Name string `json:"name" example:"my-service" doc:"Service name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Org  string `json:"org" example:"my-org" doc:"Name or ID of organization" minLength:"1" maxLength:"63"`
 				}
 			},
 			) (*serviceOutput, error) {
@@ -8375,7 +8375,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Org     string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body    struct {
-					Name string `json:"name" example:"myname" doc:"name of origin group" minLength:"1" maxLength:"63"`
+					Name string `json:"name" example:"my-origin-group" doc:"name of origin group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 				}
 			},
 			) (*originGroupOutput, error) {
@@ -8829,7 +8829,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name        string `json:"name" example:"myname" doc:"name of node group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Name        string `json:"name" example:"my-node-group" doc:"name of node group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 					Description string `json:"description" doc:"some identifying info for the node group" minLength:"1" maxLength:"100" `
 				}
 			},
@@ -9053,7 +9053,7 @@ type user struct {
 type userBodyInput struct {
 	Name string  `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
 	Role string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-	Org  *string `json:"org,omitempty" example:"Some name" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+	Org  *string `json:"org,omitempty" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 }
 
 type userPostInput struct {
@@ -9106,7 +9106,7 @@ func (ip *IPAddress) UnmarshalJSON(data []byte) error {
 }
 
 type NodeInput struct {
-	Name        string      `json:"name" example:"Some name" doc:"Node name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+	Name        string      `json:"name" example:"my-node" doc:"Node name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
 	Description string      `json:"description" doc:"some identifying info for the node" minLength:"1" maxLength:"100" `
 	Addresses   []IPAddress `json:"addresses,omitempty" doc:"The IPv4 and IPv6 addresses of the node"`
 	Maintenance *bool       `json:"maintenance,omitempty" doc:"If the node should start in maintenance mode or not, defaults to maintenance mode"`

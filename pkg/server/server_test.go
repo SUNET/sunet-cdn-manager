@@ -2660,6 +2660,75 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	}
 }
 
+func TestPostOrgClientCredentialInvalidName(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		credName       string
+		orgNameOrID    string
+	}{
+		{
+			description:    "failed superuser request with invalid DNS label name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			credName:       "INVALID NAME",
+			orgNameOrID:    "org1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			newCred := struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}{
+				Name:        test.credName,
+				Description: "a description",
+			}
+
+			b, err := json.Marshal(newCred)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r := bytes.NewReader(b)
+
+			req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("POST org client credentials unexpected status code: %d (%s)", resp.StatusCode, string(body))
+			}
+		})
+	}
+}
+
 func createCred(t *testing.T, testDesc string, ts *httptest.Server, username, password, org string, name string, desc string) cdntypes.NewOrgClientCredential {
 	t.Helper()
 
@@ -5006,6 +5075,15 @@ func TestPostOriginGroups(t *testing.T) {
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			name:            "origin-group-new2",
 			expectedStatus:  http.StatusCreated,
+		},
+		{
+			description:     "failed superuser request with invalid DNS label name",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			name:            "INVALID NAME",
+			expectedStatus:  http.StatusUnprocessableEntity,
 		},
 	}
 
