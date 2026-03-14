@@ -856,7 +856,7 @@ func TestGetUsers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -875,7 +875,7 @@ func TestGetUsers(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET users unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -884,7 +884,7 @@ func TestGetUsers(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -964,7 +964,7 @@ func TestGetUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.nameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -983,7 +983,7 @@ func TestGetUser(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET users/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+				t.Fatalf("GET users/%s unexpected status code: %d (%s)", test.nameOrID, resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -992,7 +992,7 @@ func TestGetUser(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -1090,7 +1090,7 @@ func TestPostUsers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newUser := struct {
 				Name string `json:"name"`
 				Role string `json:"role"`
@@ -1128,7 +1128,7 @@ func TestPostUsers(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST users unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1137,7 +1137,7 @@ func TestPostUsers(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -1204,7 +1204,7 @@ func TestPutUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			putUser := struct {
 				Org  string `json:"org,omitempty"`
 				Role string `json:"role"`
@@ -1244,7 +1244,7 @@ func TestPutUser(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT users unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT users unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1253,7 +1253,7 @@ func TestPutUser(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -1326,7 +1326,7 @@ func TestDeleteUser(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			ctx := context.Background()
 			// Verify uses exists prior to deletion
 			var testQuery string
@@ -1361,7 +1361,7 @@ func TestDeleteUser(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE user unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE user unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1386,7 +1386,7 @@ func TestDeleteUser(t *testing.T) {
 					t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", name, id, err)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -1453,7 +1453,7 @@ func TestPutPassword(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			patchUser := struct {
 				Old string `json:"old,omitempty"`
 				New string `json:"new,omitempty"`
@@ -1491,7 +1491,7 @@ func TestPutPassword(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT local-password unexpected status code: want %d, got: %d (%s)", test.description, test.expectedStatus, resp.StatusCode, string(r))
+				t.Fatalf("PUT local-password unexpected status code: want %d, got: %d (%s)", test.expectedStatus, resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1526,7 +1526,7 @@ func TestPutPassword(t *testing.T) {
 					t.Fatal(fmt.Errorf("unexected status code: %d", statusCode))
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -1603,7 +1603,7 @@ func TestGetOrgs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -1622,7 +1622,7 @@ func TestGetOrgs(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET orgs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET orgs unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1631,7 +1631,7 @@ func TestGetOrgs(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -1704,7 +1704,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -1723,7 +1723,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+				t.Fatalf("GET orgs/%s unexpected status code: %d (%s)", test.nameOrID, resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1732,7 +1732,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -2463,200 +2463,202 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		newCred := struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}{
-			Name:        test.credName,
-			Description: test.credDescription,
-		}
+		t.Run(test.description, func(t *testing.T) {
+			newCred := struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}{
+				Name:        test.credName,
+				Description: test.credDescription,
+			}
 
-		b, err := json.Marshal(newCred)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		r := bytes.NewReader(b)
-
-		postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		postReq.SetBasicAuth(test.username, test.password)
-
-		postResp, err := http.DefaultClient.Do(postReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer postResp.Body.Close()
-
-		if postResp.StatusCode != test.expectedPostStatus {
-			r, err := io.ReadAll(postResp.Body)
+			b, err := json.Marshal(newCred)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST org client credentials unexpected status code: %d (%s)", test.description, postResp.StatusCode, string(r))
-		}
 
-		postJSONData, err := io.ReadAll(postResp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			r := bytes.NewReader(b)
 
-		// Try to use the new client cred if it was expected to be created
-		if test.expectedPostStatus == http.StatusCreated {
-			var newClientCred cdntypes.NewOrgClientCredential
-
-			err := json.Unmarshal(postJSONData, &newClientCred)
+			postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
 			if err != nil {
-				t.Fatalf("unable to unmarshal JSON for new cred: %s", err)
+				t.Fatal(err)
 			}
 
-			// Make sure the client_secret is set
-			if newClientCred.ClientSecret == "" {
-				t.Fatalf("new client cred has an empty password, that's not expected")
+			postReq.SetBasicAuth(test.username, test.password)
+
+			postResp, err := http.DefaultClient.Do(postReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer postResp.Body.Close()
+
+			if postResp.StatusCode != test.expectedPostStatus {
+				r, err := io.ReadAll(postResp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("POST org client credentials unexpected status code: %d (%s)", postResp.StatusCode, string(r))
 			}
 
-			// Try to do requests with the new client cred, it is
-			// expected to be able to to look up its own organization
-			// if it has the proper Authorization header from
-			// keycloak and otherwise it should fail.
-			clientCredTests := []struct {
-				description         string
-				authorizationHeader string
-				getKeycloakToken    bool
-				expectedStatus      int
-			}{
-				{
-					description:         "valid request with access token from keycloak",
-					authorizationHeader: "",
-					getKeycloakToken:    true,
-					expectedStatus:      http.StatusOK,
-				},
-				{
-					description:         "authorization header missing",
-					authorizationHeader: "",
-					getKeycloakToken:    false,
-					expectedStatus:      http.StatusUnauthorized,
-				},
-				{
-					description:         "authorization header with invalid content",
-					authorizationHeader: "Invalid abcd1234",
-					getKeycloakToken:    false,
-					expectedStatus:      http.StatusUnauthorized,
-				},
+			postJSONData, err := io.ReadAll(postResp.Body)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, clientCredTest := range clientCredTests {
-				// Wrap loop body in anonymous function to properly call the deferred Body.Close()
-				func() {
-					ctx := context.Background()
-					clientCredGetReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.orgNameOrID, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
 
-					client := &http.Client{
-						Timeout: 10 * time.Second,
-					}
+			// Try to use the new client cred if it was expected to be created
+			if test.expectedPostStatus == http.StatusCreated {
+				var newClientCred cdntypes.NewOrgClientCredential
 
-					if clientCredTest.getKeycloakToken {
-						apiClientCred := clientcredentials.Config{
-							ClientID:     newClientCred.ClientID,
-							ClientSecret: newClientCred.ClientSecret,
-							TokenURL:     provider.Endpoint().TokenURL,
-						}
+				err := json.Unmarshal(postJSONData, &newClientCred)
+				if err != nil {
+					t.Fatalf("unable to unmarshal JSON for new cred: %s", err)
+				}
 
-						client = apiClientCred.Client(ctx)
-					} else if clientCredTest.authorizationHeader != "" {
-						clientCredGetReq.Header.Set("Authorization", clientCredTest.authorizationHeader)
-					}
+				// Make sure the client_secret is set
+				if newClientCred.ClientSecret == "" {
+					t.Fatalf("new client cred has an empty password, that's not expected")
+				}
 
-					clientCredResp, err := client.Do(clientCredGetReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer func() {
-						err := clientCredResp.Body.Close()
+				// Try to do requests with the new client cred, it is
+				// expected to be able to to look up its own organization
+				// if it has the proper Authorization header from
+				// keycloak and otherwise it should fail.
+				clientCredTests := []struct {
+					description         string
+					authorizationHeader string
+					getKeycloakToken    bool
+					expectedStatus      int
+				}{
+					{
+						description:         "valid request with access token from keycloak",
+						authorizationHeader: "",
+						getKeycloakToken:    true,
+						expectedStatus:      http.StatusOK,
+					},
+					{
+						description:         "authorization header missing",
+						authorizationHeader: "",
+						getKeycloakToken:    false,
+						expectedStatus:      http.StatusUnauthorized,
+					},
+					{
+						description:         "authorization header with invalid content",
+						authorizationHeader: "Invalid abcd1234",
+						getKeycloakToken:    false,
+						expectedStatus:      http.StatusUnauthorized,
+					},
+				}
+				for _, clientCredTest := range clientCredTests {
+					// Wrap loop body in anonymous function to properly call the deferred Body.Close()
+					t.Run(clientCredTest.description, func(t *testing.T) {
+						ctx := context.Background()
+						clientCredGetReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.orgNameOrID, nil)
 						if err != nil {
 							t.Fatal(err)
 						}
-					}()
-					t.Logf("client cred resp: %#v", clientCredResp)
 
-					if clientCredResp.StatusCode != clientCredTest.expectedStatus {
-						t.Fatalf("%s: client cred got unexpected status code when looking up own org, want: %d, have: %d", clientCredTest.description, clientCredTest.expectedStatus, clientCredResp.StatusCode)
-					}
-				}()
+						client := &http.Client{
+							Timeout: 10 * time.Second,
+						}
+
+						if clientCredTest.getKeycloakToken {
+							apiClientCred := clientcredentials.Config{
+								ClientID:     newClientCred.ClientID,
+								ClientSecret: newClientCred.ClientSecret,
+								TokenURL:     provider.Endpoint().TokenURL,
+							}
+
+							client = apiClientCred.Client(ctx)
+						} else if clientCredTest.authorizationHeader != "" {
+							clientCredGetReq.Header.Set("Authorization", clientCredTest.authorizationHeader)
+						}
+
+						clientCredResp, err := client.Do(clientCredGetReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer func() {
+							err := clientCredResp.Body.Close()
+							if err != nil {
+								t.Fatal(err)
+							}
+						}()
+						t.Logf("client cred resp: %#v", clientCredResp)
+
+						if clientCredResp.StatusCode != clientCredTest.expectedStatus {
+							t.Fatalf("client cred got unexpected status code when looking up own org, want: %d, have: %d", clientCredTest.expectedStatus, clientCredResp.StatusCode)
+						}
+					})
+				}
+
 			}
 
-		}
-
-		// Attempt re-encryption prior to DELETE
-		reEncryptReq, err := http.NewRequest("POST", ts.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		reEncryptReq.SetBasicAuth(test.username, test.password)
-
-		reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer reEncryptResp.Body.Close()
-
-		if reEncryptResp.StatusCode != http.StatusOK {
-			r, err := io.ReadAll(reEncryptResp.Body)
+			// Attempt re-encryption prior to DELETE
+			reEncryptReq, err := http.NewRequest("POST", ts.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: POST org client credentials re-encryption unexpected status code: %d (%s)", test.description, reEncryptResp.StatusCode, string(r))
-		}
 
-		reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
-		if err != nil {
-			t.Fatalf("%s: POST org client credentials re-encryption failed to parse body: %s", test.description, err)
-		}
+			reEncryptReq.SetBasicAuth(test.username, test.password)
 
-		var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
-
-		if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
-			t.Fatalf("%s: failed to decode re-encryption response JSON: %v (body: %s)", test.description, err, string(reEncryptBody))
-		}
-
-		// Since the token was created above (so using the last password in the list) we expect to skip it
-		if reEncryptResult.TotalTokens != 1 || reEncryptResult.UpdatedTokens != 0 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
-			t.Fatalf("%s: invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", test.description, reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
-		}
-
-		deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		deleteReq.SetBasicAuth(test.username, test.password)
-
-		deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer deleteResp.Body.Close()
-
-		if deleteResp.StatusCode != test.expectedDeleteStatus {
-			r, err := io.ReadAll(deleteResp.Body)
+			reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Fatalf("%s: DELETE org client credentials unexpected status code: %d (%s)", test.description, deleteResp.StatusCode, string(r))
-		}
+			defer reEncryptResp.Body.Close()
 
-		deleteJSONData, err := io.ReadAll(deleteResp.Body)
-		if err != nil {
-			t.Fatalf("%s: %s", test.description, err)
-		}
+			if reEncryptResp.StatusCode != http.StatusOK {
+				r, err := io.ReadAll(reEncryptResp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("POST org client credentials re-encryption unexpected status code: %d (%s)", reEncryptResp.StatusCode, string(r))
+			}
 
-		t.Logf("%s\n", deleteJSONData)
+			reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
+			if err != nil {
+				t.Fatalf("POST org client credentials re-encryption failed to parse body: %s", err)
+			}
+
+			var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
+
+			if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
+				t.Fatalf("failed to decode re-encryption response JSON: %v (body: %s)", err, string(reEncryptBody))
+			}
+
+			// Since the token was created above (so using the last password in the list) we expect to skip it
+			if reEncryptResult.TotalTokens != 1 || reEncryptResult.UpdatedTokens != 0 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
+				t.Fatalf("invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
+			}
+
+			deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			deleteReq.SetBasicAuth(test.username, test.password)
+
+			deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer deleteResp.Body.Close()
+
+			if deleteResp.StatusCode != test.expectedDeleteStatus {
+				r, err := io.ReadAll(deleteResp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("DELETE org client credentials unexpected status code: %d (%s)", deleteResp.StatusCode, string(r))
+			}
+
+			deleteJSONData, err := io.ReadAll(deleteResp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			t.Logf("%s\n", deleteJSONData)
+		})
 	}
 }
 
@@ -2729,7 +2731,7 @@ func TestPostOrgClientCredentialsInvalidName(t *testing.T) {
 	}
 }
 
-func createCred(t *testing.T, testDesc string, ts *httptest.Server, username, password, org string, name string, desc string) cdntypes.NewOrgClientCredential {
+func createCred(t *testing.T, ts *httptest.Server, username, password, org string, name string, desc string) cdntypes.NewOrgClientCredential {
 	t.Helper()
 
 	newCred := struct {
@@ -2765,12 +2767,12 @@ func createCred(t *testing.T, testDesc string, ts *httptest.Server, username, pa
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("%s: POST org client credentials unexpected status code: %d (%s)", testDesc, postResp.StatusCode, string(r))
+		t.Fatalf("POST org client credentials unexpected status code: %d (%s)", postResp.StatusCode, string(r))
 	}
 
 	postJSONData, err := io.ReadAll(postResp.Body)
 	if err != nil {
-		t.Fatalf("%s: %s", testDesc, err)
+		t.Fatal(err)
 	}
 
 	var newClientCred cdntypes.NewOrgClientCredential
@@ -2830,163 +2832,164 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			createdCredNames := []string{}
 
-		createdCredNames := []string{}
-
-		var cred1 cdntypes.NewOrgClientCredential
-		var cred1CiphertextOrig []byte
-		var cred1CiphertextUpdated []byte
-		var cred2 cdntypes.NewOrgClientCredential
-		var cred2CiphertextOrig []byte
-		var cred2CiphertextUpdated []byte
-		// First server instance, run in func so we can easily defer
-		// closing it at the end
-		func() {
-			tsi.encryptionPasswords = test.server1Passwords
-			// Since we supply our own dbPool in tsi it will not be returned here
-			ts1, _, err := prepareServer(t, tsi)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ts1.Close()
-
-			// Create first client cred
-			cred1 = createCred(t, test.description, ts1, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-1", "re-encrypt desc 1")
-			createdCredNames = append(createdCredNames, cred1.Name)
-
-			// Save the actual crypto data for later comparision
-			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextOrig)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}()
-
-		// Second server instance
-		func() {
-			// Here we must have at least two passwords
-			tsi.encryptionPasswords = test.server2Passwords
-			// Since we supply our own dbPool in tsi it will not be returned here
-			ts2, _, err := prepareServer(t, tsi)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ts2.Close()
-
-			// Create second client cred
-			cred2 = createCred(t, test.description, ts2, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-2", "re-encrypt desc 2")
-			createdCredNames = append(createdCredNames, cred2.Name)
-
-			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextOrig)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Attempt re-encryption
-			reEncryptReq, err := http.NewRequest("POST", ts2.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			reEncryptReq.SetBasicAuth(test.username, test.password)
-
-			reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer reEncryptResp.Body.Close()
-
-			if reEncryptResp.StatusCode != http.StatusOK {
-				r, err := io.ReadAll(reEncryptResp.Body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Fatalf("%s: POST org client credentials re-encryption unexpected status code: %d (%s)", test.description, reEncryptResp.StatusCode, string(r))
-			}
-
-			reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
-			if err != nil {
-				t.Fatalf("%s: POST org client credentials re-encryption failed to parse body: %s", test.description, err)
-			}
-
-			var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
-
-			if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
-				t.Fatalf("%s: failed to decode re-encryption response JSON: %v (body: %s)", test.description, err, string(reEncryptBody))
-			}
-
-			// Since the first token was created by ts1 and the second by ts2 we expect to update one and skip one
-			if reEncryptResult.TotalTokens != 2 || reEncryptResult.UpdatedTokens != 1 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
-				t.Fatalf("%s: invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", test.description, reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
-			}
-		}()
-
-		err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextUpdated)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if len(cred1CiphertextOrig) == 0 {
-			t.Fatal("expected cred1CiphertextOrig to have content")
-		}
-
-		// cred1 should have had its crypto data modified
-		if bytes.Equal(cred1CiphertextOrig, cred1CiphertextUpdated) {
-			t.Fatal("expected cred1CiphertextOrig to have changed")
-		}
-
-		if len(cred2CiphertextOrig) == 0 {
-			t.Fatal("expected cred2CiphertextOrig to have content")
-		}
-
-		err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextUpdated)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// cred2 should NOT have had its crypto data modified (since we ran re-encryption with the same password as it was created with)
-		if !bytes.Equal(cred2CiphertextOrig, cred2CiphertextUpdated) {
-			t.Fatal("expected cred2CiphertextOrig to have remained the same")
-		}
-
-		// Now we only have the new password, verify we can delete both creds (e.g. we can decrypt both client reg tokens for talking to keycloak)
-		tsi.encryptionPasswords = test.server3Passwords
-		ts3, _, err := prepareServer(t, tsi)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer ts3.Close()
-
-		for _, credName := range createdCredNames {
+			var cred1 cdntypes.NewOrgClientCredential
+			var cred1CiphertextOrig []byte
+			var cred1CiphertextUpdated []byte
+			var cred2 cdntypes.NewOrgClientCredential
+			var cred2CiphertextOrig []byte
+			var cred2CiphertextUpdated []byte
+			// First server instance, run in func so we can easily defer
+			// closing it at the end
 			func() {
-				deleteReq, err := http.NewRequest("DELETE", ts3.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+credName, nil)
+				tsi.encryptionPasswords = test.server1Passwords
+				// Since we supply our own dbPool in tsi it will not be returned here
+				ts1, _, err := prepareServer(t, tsi)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer ts1.Close()
+
+				// Create first client cred
+				cred1 = createCred(t, ts1, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-1", "re-encrypt desc 1")
+				createdCredNames = append(createdCredNames, cred1.Name)
+
+				// Save the actual crypto data for later comparision
+				err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextOrig)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}()
+
+			// Second server instance
+			func() {
+				// Here we must have at least two passwords
+				tsi.encryptionPasswords = test.server2Passwords
+				// Since we supply our own dbPool in tsi it will not be returned here
+				ts2, _, err := prepareServer(t, tsi)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer ts2.Close()
+
+				// Create second client cred
+				cred2 = createCred(t, ts2, test.username, test.password, test.orgNameOrID, "re-encrypt-cred-2", "re-encrypt desc 2")
+				createdCredNames = append(createdCredNames, cred2.Name)
+
+				err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextOrig)
 				if err != nil {
 					t.Fatal(err)
 				}
 
-				deleteReq.SetBasicAuth(test.username, test.password)
-
-				deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+				// Attempt re-encryption
+				reEncryptReq, err := http.NewRequest("POST", ts2.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer deleteResp.Body.Close()
 
-				if deleteResp.StatusCode != test.expectedDeleteStatus {
-					r, err := io.ReadAll(deleteResp.Body)
+				reEncryptReq.SetBasicAuth(test.username, test.password)
+
+				reEncryptResp, err := http.DefaultClient.Do(reEncryptReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reEncryptResp.Body.Close()
+
+				if reEncryptResp.StatusCode != http.StatusOK {
+					r, err := io.ReadAll(reEncryptResp.Body)
 					if err != nil {
 						t.Fatal(err)
 					}
-					t.Fatalf("%s: DELETE org client credentials unexpected status code: %d (%s)", test.description, deleteResp.StatusCode, string(r))
+					t.Fatalf("POST org client credentials re-encryption unexpected status code: %d (%s)", reEncryptResp.StatusCode, string(r))
 				}
 
-				deleteJSONData, err := io.ReadAll(deleteResp.Body)
+				reEncryptBody, err := io.ReadAll(reEncryptResp.Body)
 				if err != nil {
-					t.Fatalf("%s: %s", test.description, err)
+					t.Fatalf("POST org client credentials re-encryption failed to parse body: %s", err)
 				}
 
-				t.Logf("%s\n", deleteJSONData)
+				var reEncryptResult cdntypes.OrgClientRegistrationTokenReEncryptResult
+
+				if err := json.Unmarshal(reEncryptBody, &reEncryptResult); err != nil {
+					t.Fatalf("failed to decode re-encryption response JSON: %v (body: %s)", err, string(reEncryptBody))
+				}
+
+				// Since the first token was created by ts1 and the second by ts2 we expect to update one and skip one
+				if reEncryptResult.TotalTokens != 2 || reEncryptResult.UpdatedTokens != 1 || reEncryptResult.SkippedTokens != 1 || reEncryptResult.FailedTokens != 0 {
+					t.Fatalf("invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
+				}
 			}()
-		}
+
+			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred1.ID).Scan(&cred1CiphertextUpdated)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(cred1CiphertextOrig) == 0 {
+				t.Fatal("expected cred1CiphertextOrig to have content")
+			}
+
+			// cred1 should have had its crypto data modified
+			if bytes.Equal(cred1CiphertextOrig, cred1CiphertextUpdated) {
+				t.Fatal("expected cred1CiphertextOrig to have changed")
+			}
+
+			if len(cred2CiphertextOrig) == 0 {
+				t.Fatal("expected cred2CiphertextOrig to have content")
+			}
+
+			err = dbPool.QueryRow(ctx, "SELECT crypt_registration_access_token FROM org_keycloak_client_credentials WHERE id = $1", cred2.ID).Scan(&cred2CiphertextUpdated)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// cred2 should NOT have had its crypto data modified (since we ran re-encryption with the same password as it was created with)
+			if !bytes.Equal(cred2CiphertextOrig, cred2CiphertextUpdated) {
+				t.Fatal("expected cred2CiphertextOrig to have remained the same")
+			}
+
+			// Now we only have the new password, verify we can delete both creds (e.g. we can decrypt both client reg tokens for talking to keycloak)
+			tsi.encryptionPasswords = test.server3Passwords
+			ts3, _, err := prepareServer(t, tsi)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ts3.Close()
+
+			for _, credName := range createdCredNames {
+				func() {
+					deleteReq, err := http.NewRequest("DELETE", ts3.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+credName, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					deleteReq.SetBasicAuth(test.username, test.password)
+
+					deleteResp, err := http.DefaultClient.Do(deleteReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer deleteResp.Body.Close()
+
+					if deleteResp.StatusCode != test.expectedDeleteStatus {
+						r, err := io.ReadAll(deleteResp.Body)
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Fatalf("DELETE org client credentials unexpected status code: %d (%s)", deleteResp.StatusCode, string(r))
+					}
+
+					deleteJSONData, err := io.ReadAll(deleteResp.Body)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					t.Logf("%s\n", deleteJSONData)
+				}()
+			}
+		})
 	}
 }
 
@@ -3059,7 +3062,7 @@ func TestGetOrg(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -3078,7 +3081,7 @@ func TestGetOrg(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET orgs/%s unexpected status code: %d (%s)", test.description, test.nameOrID, resp.StatusCode, string(r))
+				t.Fatalf("GET orgs/%s unexpected status code: %d (%s)", test.nameOrID, resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3087,7 +3090,7 @@ func TestGetOrg(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3181,7 +3184,7 @@ func TestGetDomains(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/domains", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -3206,7 +3209,7 @@ func TestGetDomains(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET '%s' unexpected status code: %d (%s)", test.description, req.URL.String(), resp.StatusCode, string(r))
+				t.Fatalf("GET '%s' unexpected status code: %d (%s)", req.URL.String(), resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3215,7 +3218,7 @@ func TestGetDomains(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3285,7 +3288,7 @@ func TestGetServiceIPs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -3310,7 +3313,7 @@ func TestGetServiceIPs(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3319,7 +3322,7 @@ func TestGetServiceIPs(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3385,7 +3388,7 @@ func TestPostOrganizations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newOrganization := struct {
 				Name string `json:"name"`
 			}{
@@ -3428,7 +3431,7 @@ func TestPostOrganizations(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3504,7 +3507,7 @@ func TestGetServices(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -3529,7 +3532,7 @@ func TestGetServices(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET services unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3538,7 +3541,7 @@ func TestGetServices(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3631,7 +3634,7 @@ func TestGetService(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			if test.serviceNameOrID == "" {
 				t.Fatal("user needs service name or ID for service test")
 			}
@@ -3660,7 +3663,7 @@ func TestGetService(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3669,7 +3672,7 @@ func TestGetService(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3762,7 +3765,7 @@ func TestDeleteService(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			if test.serviceNameOrID == "" {
 				t.Fatal("user needs service name or ID for service test")
 			}
@@ -3791,7 +3794,7 @@ func TestDeleteService(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -3800,7 +3803,7 @@ func TestDeleteService(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -3942,7 +3945,7 @@ func TestPostServices(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newService := struct {
 				Name string  `json:"name"`
 				Org  *string `json:"org,omitempty"`
@@ -3979,16 +3982,16 @@ func TestPostServices(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST services unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -4068,7 +4071,7 @@ func TestDeleteDomain(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			if test.domainNameOrID == "" {
 				t.Fatal("user needs domain name or ID for domain test")
 			}
@@ -4091,7 +4094,7 @@ func TestDeleteDomain(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE service by ID unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -4100,7 +4103,7 @@ func TestDeleteDomain(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -4149,7 +4152,7 @@ func TestPostDomains(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newDomain := struct {
 				Name string `json:"name"`
 			}{
@@ -4187,16 +4190,16 @@ func TestPostDomains(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST services unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST services unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -4272,7 +4275,7 @@ func TestGetServiceVersions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -4297,16 +4300,16 @@ func TestGetServiceVersions(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET service versions unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -4722,7 +4725,7 @@ func TestPostServiceVersion(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newServiceVersion := struct {
 				Org     string                 `json:"org"`
 				Active  bool                   `json:"active"`
@@ -4772,16 +4775,16 @@ func TestPostServiceVersion(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET service versions unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -4878,7 +4881,7 @@ func TestActivateServiceVersion(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			active := struct {
 				Active bool `json:"active"`
 			}{
@@ -4916,16 +4919,16 @@ func TestActivateServiceVersion(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET service versions unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5009,7 +5012,7 @@ func TestGetOriginGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -5034,16 +5037,16 @@ func TestGetOriginGroups(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET origin groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET origin groups unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5096,7 +5099,7 @@ func TestPostOriginGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newOriginGroup := struct {
 				Name string `json:"name"`
 			}{
@@ -5136,16 +5139,16 @@ func TestPostOriginGroups(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST origin group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST origin group unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5234,7 +5237,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -5257,16 +5260,16 @@ func TestGetServiceVersionVCL(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET service versions unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET service versions unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5335,7 +5338,7 @@ func TestGetIPNetworks(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/ip-networks", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -5360,7 +5363,7 @@ func TestGetIPNetworks(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET ip-networks unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5369,7 +5372,7 @@ func TestGetIPNetworks(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5449,7 +5452,7 @@ func TestPostIPNetworks(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newIPNetwork := struct {
 				Network netip.Prefix `json:"network"`
 			}{
@@ -5483,7 +5486,7 @@ func TestPostIPNetworks(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST ip-networks unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST ip-networks unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5492,7 +5495,7 @@ func TestPostIPNetworks(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5579,7 +5582,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -5598,7 +5601,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET cache-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET cache-node-configs unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5607,7 +5610,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5701,7 +5704,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -5720,7 +5723,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET l4lb-node-configs unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET l4lb-node-configs unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5729,7 +5732,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5782,10 +5785,12 @@ func TestCamelCaseToSnakeCase(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result := camelCaseToSnakeCase(test.input)
-		if result != test.expected {
-			t.Fatalf("%s: input '%s' resulted in '%s', expected: '%s'", test.description, test.input, result, test.expected)
-		}
+		t.Run(test.description, func(t *testing.T) {
+			result := camelCaseToSnakeCase(test.input)
+			if result != test.expected {
+				t.Fatalf("input '%s' resulted in '%s', expected: '%s'", test.input, result, test.expected)
+			}
+		})
 	}
 }
 
@@ -5873,7 +5878,7 @@ func TestPostCacheNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newCacheNode := struct {
 				Description string       `json:"description"`
 				Addresses   []netip.Addr `json:"addresses,omitempty"`
@@ -5911,7 +5916,7 @@ func TestPostCacheNodes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST cache-nodes unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5926,16 +5931,16 @@ func TestPostCacheNodes(t *testing.T) {
 			if test.expectedStatus == http.StatusCreated {
 				err = json.Unmarshal(jsonData, &resultData)
 				if err != nil {
-					t.Fatalf("%s: POST cache-nodes unable to unmarshal response: (%s)", test.description, err)
+					t.Fatalf("POST cache-nodes unable to unmarshal response: (%s)", err)
 				}
 
 				if newCacheNode.Name != resultData.Name {
-					t.Fatalf("%s: POST cache-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+					t.Fatalf("POST cache-nodes unexpected name in response, want: '%s', have: '%s'", newCacheNode.Name, resultData.Name)
 				}
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -5994,7 +5999,7 @@ func TestGetCacheNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -6013,7 +6018,7 @@ func TestGetCacheNodes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET cache-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET cache-nodes unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6024,27 +6029,27 @@ func TestGetCacheNodes(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var cacheNodes []cdntypes.CacheNode
 				if err := json.Unmarshal(jsonData, &cacheNodes); err != nil {
-					t.Fatalf("%s: unable to unmarshal cache nodes: %s", test.description, err)
+					t.Fatalf("unable to unmarshal cache nodes: %s", err)
 				}
 
 				if len(cacheNodes) != 5 {
-					t.Fatalf("%s: expected 5 cache nodes (including address-less), got %d", test.description, len(cacheNodes))
+					t.Fatalf("expected 5 cache nodes (including address-less), got %d", len(cacheNodes))
 				}
 
 				idx := slices.IndexFunc(cacheNodes, func(n cdntypes.CacheNode) bool {
 					return n.Name == "cache-node2"
 				})
 				if idx == -1 {
-					t.Fatalf("%s: address-less cache-node2 not found in response", test.description)
+					t.Fatal("address-less cache-node2 not found in response")
 				}
 
 				if len(cacheNodes[idx].Addresses) != 0 {
-					t.Fatalf("%s: cache-node2 should have 0 addresses, got %d", test.description, len(cacheNodes[idx].Addresses))
+					t.Fatalf("cache-node2 should have 0 addresses, got %d", len(cacheNodes[idx].Addresses))
 				}
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6125,7 +6130,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			maintenance := struct {
 				Maintenance bool `json:"maintenance"`
 			}{
@@ -6159,7 +6164,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT cache-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT cache-nodes maintenance unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6168,7 +6173,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6257,7 +6262,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			maintenance := struct {
 				NodeGroup string `json:"node-group"`
 			}{
@@ -6291,7 +6296,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT l4lb-nodes group-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6300,7 +6305,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6359,7 +6364,7 @@ func TestGetL4LBNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -6378,7 +6383,7 @@ func TestGetL4LBNodes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET l4lb-nodes unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6389,27 +6394,27 @@ func TestGetL4LBNodes(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var l4lbNodes []cdntypes.L4LBNode
 				if err := json.Unmarshal(jsonData, &l4lbNodes); err != nil {
-					t.Fatalf("%s: unable to unmarshal l4lb nodes: %s", test.description, err)
+					t.Fatalf("unable to unmarshal l4lb nodes: %s", err)
 				}
 
 				if len(l4lbNodes) != 5 {
-					t.Fatalf("%s: expected 5 l4lb nodes (including address-less), got %d", test.description, len(l4lbNodes))
+					t.Fatalf("expected 5 l4lb nodes (including address-less), got %d", len(l4lbNodes))
 				}
 
 				idx := slices.IndexFunc(l4lbNodes, func(n cdntypes.L4LBNode) bool {
 					return n.Name == "l4lb-node2"
 				})
 				if idx == -1 {
-					t.Fatalf("%s: address-less l4lb-node2 not found in response", test.description)
+					t.Fatal("address-less l4lb-node2 not found in response")
 				}
 
 				if len(l4lbNodes[idx].Addresses) != 0 {
-					t.Fatalf("%s: l4lb-node2 should have 0 addresses, got %d", test.description, len(l4lbNodes[idx].Addresses))
+					t.Fatalf("l4lb-node2 should have 0 addresses, got %d", len(l4lbNodes[idx].Addresses))
 				}
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6497,7 +6502,7 @@ func TestPostL4LBNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newCacheNode := struct {
 				Description string       `json:"description"`
 				Addresses   []netip.Addr `json:"addresses,omitempty"`
@@ -6535,7 +6540,7 @@ func TestPostL4LBNodes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST l4lb-nodes unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST l4lb-nodes unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6550,16 +6555,16 @@ func TestPostL4LBNodes(t *testing.T) {
 			if test.expectedStatus == http.StatusCreated {
 				err = json.Unmarshal(jsonData, &resultData)
 				if err != nil {
-					t.Fatalf("%s: POST l4lb-nodes unable to unmarshal response: (%s)", test.description, err)
+					t.Fatalf("POST l4lb-nodes unable to unmarshal response: (%s)", err)
 				}
 
 				if newCacheNode.Name != resultData.Name {
-					t.Fatalf("%s: POST l4lb-nodes unexpected name in response, want: '%s', have: '%s'", test.description, newCacheNode.Name, resultData.Name)
+					t.Fatalf("POST l4lb-nodes unexpected name in response, want: '%s', have: '%s'", newCacheNode.Name, resultData.Name)
 				}
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6640,7 +6645,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			maintenance := struct {
 				Maintenance bool `json:"maintenance"`
 			}{
@@ -6674,7 +6679,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT l4lb-nodes maintenance unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT l4lb-nodes maintenance unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6683,7 +6688,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6772,7 +6777,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			maintenance := struct {
 				NodeGroup string `json:"node-group"`
 			}{
@@ -6806,7 +6811,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT l4lb-nodes group-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT l4lb-nodes group-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -6815,7 +6820,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6862,7 +6867,7 @@ func TestGetNodeGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("GET", ts.URL+"/api/v1/node-groups", nil)
 			if err != nil {
 				t.Fatal(err)
@@ -6881,16 +6886,16 @@ func TestGetNodeGroups(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: GET node groups unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("GET node groups unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -6923,7 +6928,7 @@ func TestPostNodeGroups(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			newOriginGroup := struct {
 				Name        string `json:"name"`
 				Description string `json:"description"`
@@ -6959,16 +6964,16 @@ func TestPostNodeGroups(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: POST node group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("POST node group unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: %s", test.description, err)
+				t.Fatal(err)
 			}
 
 			t.Logf("%s\n", jsonData)
-		}()
+		})
 	}
 }
 
@@ -7045,7 +7050,7 @@ func TestPutCacheNode(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			body := struct {
 				Name        string       `json:"name"`
 				Description string       `json:"description"`
@@ -7082,7 +7087,7 @@ func TestPutCacheNode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT cache-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT cache-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -7095,23 +7100,23 @@ func TestPutCacheNode(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var result cdntypes.CacheNode
 				if err := json.Unmarshal(jsonData, &result); err != nil {
-					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+					t.Fatalf("unable to unmarshal response: %v", err)
 				}
 				if result.Name != test.name {
-					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+					t.Fatalf("expected name %q, got %q", test.name, result.Name)
 				}
 				if result.Description != test.nodeDescr {
-					t.Fatalf("%s: expected description %q, got %q", test.description, test.nodeDescr, result.Description)
+					t.Fatalf("expected description %q, got %q", test.nodeDescr, result.Description)
 				}
 				expected := slices.Clone(test.addresses)
 				slices.SortFunc(expected, netip.Addr.Compare)
 				got := slices.Clone(result.Addresses)
 				slices.SortFunc(got, netip.Addr.Compare)
 				if !slices.Equal(expected, got) {
-					t.Fatalf("%s: expected addresses %v, got %v", test.description, expected, got)
+					t.Fatalf("expected addresses %v, got %v", expected, got)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7170,7 +7175,7 @@ func TestDeleteCacheNode(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -7189,7 +7194,7 @@ func TestDeleteCacheNode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE cache-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE cache-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			// Verify the resource is actually gone by retrying the DELETE
@@ -7205,10 +7210,10 @@ func TestDeleteCacheNode(t *testing.T) {
 				}
 				defer retryResp.Body.Close()
 				if retryResp.StatusCode != http.StatusNotFound {
-					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+					t.Fatalf("expected 404 on retry DELETE, got %d", retryResp.StatusCode)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7285,7 +7290,7 @@ func TestPutL4LBNode(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			body := struct {
 				Name        string       `json:"name"`
 				Description string       `json:"description"`
@@ -7322,7 +7327,7 @@ func TestPutL4LBNode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT l4lb-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT l4lb-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -7335,23 +7340,23 @@ func TestPutL4LBNode(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var result cdntypes.L4LBNode
 				if err := json.Unmarshal(jsonData, &result); err != nil {
-					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+					t.Fatalf("unable to unmarshal response: %v", err)
 				}
 				if result.Name != test.name {
-					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+					t.Fatalf("expected name %q, got %q", test.name, result.Name)
 				}
 				if result.Description != test.nodeDescr {
-					t.Fatalf("%s: expected description %q, got %q", test.description, test.nodeDescr, result.Description)
+					t.Fatalf("expected description %q, got %q", test.nodeDescr, result.Description)
 				}
 				expected := slices.Clone(test.addresses)
 				slices.SortFunc(expected, netip.Addr.Compare)
 				got := slices.Clone(result.Addresses)
 				slices.SortFunc(got, netip.Addr.Compare)
 				if !slices.Equal(expected, got) {
-					t.Fatalf("%s: expected addresses %v, got %v", test.description, expected, got)
+					t.Fatalf("expected addresses %v, got %v", expected, got)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7410,7 +7415,7 @@ func TestDeleteL4LBNode(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -7429,7 +7434,7 @@ func TestDeleteL4LBNode(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE l4lb-node unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE l4lb-node unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			// Verify the resource is actually gone by retrying the DELETE
@@ -7445,10 +7450,10 @@ func TestDeleteL4LBNode(t *testing.T) {
 				}
 				defer retryResp.Body.Close()
 				if retryResp.StatusCode != http.StatusNotFound {
-					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+					t.Fatalf("expected 404 on retry DELETE, got %d", retryResp.StatusCode)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7519,7 +7524,7 @@ func TestPutNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			body := struct {
 				Name        string `json:"name"`
 				Description string `json:"description"`
@@ -7554,7 +7559,7 @@ func TestPutNodeGroup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT node-group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT node-group unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -7567,16 +7572,16 @@ func TestPutNodeGroup(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var result cdntypes.NodeGroup
 				if err := json.Unmarshal(jsonData, &result); err != nil {
-					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+					t.Fatalf("unable to unmarshal response: %v", err)
 				}
 				if result.Name != test.name {
-					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+					t.Fatalf("expected name %q, got %q", test.name, result.Name)
 				}
 				if result.Description != test.groupDescription {
-					t.Fatalf("%s: expected description %q, got %q", test.description, test.groupDescription, result.Description)
+					t.Fatalf("expected description %q, got %q", test.groupDescription, result.Description)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7642,7 +7647,7 @@ func TestDeleteNodeGroup(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -7661,7 +7666,7 @@ func TestDeleteNodeGroup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE node-group unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE node-group unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			// Verify the resource is actually gone by retrying the DELETE
@@ -7677,10 +7682,10 @@ func TestDeleteNodeGroup(t *testing.T) {
 				}
 				defer retryResp.Body.Close()
 				if retryResp.StatusCode != http.StatusNotFound {
-					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+					t.Fatalf("expected 404 on retry DELETE, got %d", retryResp.StatusCode)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -7761,7 +7766,7 @@ func TestRetryWithBackoff(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -7772,7 +7777,7 @@ func TestRetryWithBackoff(t *testing.T) {
 			if !errors.Is(err, test.err) {
 				t.Fatalf("wanted err to be: %#v, got: %#v", test.err, err)
 			}
-		}()
+		})
 	}
 }
 
@@ -7815,7 +7820,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 		t.Run(test.description, func(t *testing.T) {
 			jar, err := cookiejar.New(nil)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			client := &http.Client{Jar: jar}
@@ -7827,12 +7832,12 @@ func TestConsoleServicesComponent(t *testing.T) {
 
 			u, err := url.Parse(ts.URL)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -7841,12 +7846,12 @@ func TestConsoleServicesComponent(t *testing.T) {
 
 			loginResp, err := client.Do(req)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 			defer loginResp.Body.Close()
 
 			if loginResp.StatusCode != http.StatusOK {
-				t.Fatalf("%s: unexpected console login status code: %d", test.description, loginResp.StatusCode)
+				t.Fatalf("unexpected console login status code: %d", loginResp.StatusCode)
 			}
 
 			// As the status code is 200 even for failed logins we
@@ -7860,27 +7865,27 @@ func TestConsoleServicesComponent(t *testing.T) {
 				}
 			}
 			if !cookieFound {
-				t.Fatalf("%s: login failed: session cookie is missing", test.description)
+				t.Fatal("login failed: session cookie is missing")
 			}
 
 			req, err = http.NewRequest("GET", ts.URL+"/console/org/"+test.orgNameOrID+"/services", nil)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			resp, err := client.Do(req)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s: unexpected status code: %d", test.description, resp.StatusCode)
+				t.Fatalf("unexpected status code: %d", resp.StatusCode)
 			}
 
 			doc, err := goquery.NewDocumentFromReader(resp.Body)
 			if err != nil {
-				t.Fatalf("%s: failed to read template: %v", test.description, err)
+				t.Fatalf("failed to read template: %v", err)
 			}
 
 			seenServices := []string{}
@@ -7893,7 +7898,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 					if addrStr != "" {
 						addr, err := netip.ParseAddr(addrStr)
 						if err != nil {
-							t.Fatal(test.description, err)
+							t.Fatal(err)
 						}
 						foundAddrs = append(foundAddrs, addr)
 					}
@@ -7904,7 +7909,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 					for _, expectedAddr := range expectedAddrs {
 						addressPresent := slices.Contains(foundAddrs, expectedAddr)
 						if !addressPresent {
-							t.Fatalf("%s: service '%s' missing expected address %s", test.description, name, expectedAddr)
+							t.Fatalf("service '%s' missing expected address %s", name, expectedAddr)
 						}
 					}
 				}
@@ -7916,7 +7921,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 			for serviceName := range test.serviceIPs {
 				serviceFound := slices.Contains(seenServices, serviceName)
 				if !serviceFound {
-					t.Fatalf("%s: unable to find a service with name '%s'", test.description, serviceName)
+					t.Fatalf("unable to find a service with name '%s'", serviceName)
 				}
 			}
 		})
@@ -7951,7 +7956,7 @@ func TestConsoleFormLimit(t *testing.T) {
 		t.Run(test.description, func(t *testing.T) {
 			jar, err := cookiejar.New(nil)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			client := &http.Client{Jar: jar}
@@ -7963,7 +7968,7 @@ func TestConsoleFormLimit(t *testing.T) {
 
 			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -7972,12 +7977,12 @@ func TestConsoleFormLimit(t *testing.T) {
 
 			loginResp, err := client.Do(req)
 			if err != nil {
-				t.Fatal(test.description, err)
+				t.Fatal(err)
 			}
 			defer loginResp.Body.Close()
 
 			if loginResp.StatusCode != test.statusCode {
-				t.Fatalf("%s: unexpected console login status code: %d, expected %d", test.description, loginResp.StatusCode, test.statusCode)
+				t.Fatalf("unexpected console login status code: %d, expected %d", loginResp.StatusCode, test.statusCode)
 			}
 		})
 	}
@@ -8073,7 +8078,7 @@ func TestPutOrganization(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			body := struct {
 				Name             string `json:"name"`
 				ServiceQuota     int64  `json:"service_quota"`
@@ -8112,7 +8117,7 @@ func TestPutOrganization(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: PUT org unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("PUT org unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -8125,22 +8130,22 @@ func TestPutOrganization(t *testing.T) {
 			if test.expectedStatus == http.StatusOK {
 				var result cdntypes.Org
 				if err := json.Unmarshal(jsonData, &result); err != nil {
-					t.Fatalf("%s: unable to unmarshal response: %v", test.description, err)
+					t.Fatalf("unable to unmarshal response: %v", err)
 				}
 				if result.Name != test.name {
-					t.Fatalf("%s: expected name %q, got %q", test.description, test.name, result.Name)
+					t.Fatalf("expected name %q, got %q", test.name, result.Name)
 				}
 				if result.ServiceQuota != test.serviceQuota {
-					t.Fatalf("%s: expected service_quota %d, got %d", test.description, test.serviceQuota, result.ServiceQuota)
+					t.Fatalf("expected service_quota %d, got %d", test.serviceQuota, result.ServiceQuota)
 				}
 				if result.DomainQuota != test.domainQuota {
-					t.Fatalf("%s: expected domain_quota %d, got %d", test.description, test.domainQuota, result.DomainQuota)
+					t.Fatalf("expected domain_quota %d, got %d", test.domainQuota, result.DomainQuota)
 				}
 				if result.ClientTokenQuota != test.clientTokenQuota {
-					t.Fatalf("%s: expected client_token_quota %d, got %d", test.description, test.clientTokenQuota, result.ClientTokenQuota)
+					t.Fatalf("expected client_token_quota %d, got %d", test.clientTokenQuota, result.ClientTokenQuota)
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -8199,7 +8204,7 @@ func TestDeleteOrganization(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		func() {
+		t.Run(test.description, func(t *testing.T) {
 			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.org, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -8218,7 +8223,7 @@ func TestDeleteOrganization(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("%s: DELETE org unexpected status code: %d (%s)", test.description, resp.StatusCode, string(r))
+				t.Fatalf("DELETE org unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			// Verify the resource is actually gone by retrying the DELETE
@@ -8234,9 +8239,9 @@ func TestDeleteOrganization(t *testing.T) {
 				}
 				defer retryResp.Body.Close()
 				if retryResp.StatusCode != http.StatusNotFound {
-					t.Fatalf("%s: expected 404 on retry DELETE, got %d", test.description, retryResp.StatusCode)
+					t.Fatalf("expected 404 on retry DELETE, got %d", retryResp.StatusCode)
 				}
 			}
-		}()
+		})
 	}
 }
