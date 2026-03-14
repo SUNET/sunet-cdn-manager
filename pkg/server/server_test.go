@@ -8245,3 +8245,227 @@ func TestDeleteOrganization(t *testing.T) {
 		})
 	}
 }
+
+func TestConsoleDeleteErrorRendering(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		method           string
+		path             string
+		formBody         string
+		expectedStatus   int
+		expectedErrorMsg string
+	}{
+		{
+			description:      "delete nonexistent cache node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/superuser/cache-nodes/nonexistent-node",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleCacheNodeNotFound,
+		},
+		{
+			description:      "delete nonexistent L4LB node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/superuser/l4lb-nodes/nonexistent-node",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleL4LBNodeNotFound,
+		},
+		{
+			description:      "delete nonexistent node group shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/superuser/node-groups/nonexistent-group",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Node group not found",
+		},
+		{
+			description:      "delete nonexistent domain shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/org/org1/domains/nonexistent.example.com",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Domain not found",
+		},
+		{
+			description:      "delete nonexistent service shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/org/org1/services/nonexistent-service",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Service not found",
+		},
+		{
+			description:      "toggle maintenance on nonexistent cache node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "PUT",
+			path:             "/console/superuser/cache-nodes/nonexistent-node/maintenance",
+			formBody:         "maintenance=on",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleCacheNodeNotFound,
+		},
+		{
+			description:      "toggle maintenance on nonexistent L4LB node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "PUT",
+			path:             "/console/superuser/l4lb-nodes/nonexistent-node/maintenance",
+			formBody:         "maintenance=on",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleL4LBNodeNotFound,
+		},
+		{
+			description:      "assign node group on nonexistent cache node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "PUT",
+			path:             "/console/superuser/cache-nodes/nonexistent-node/node-group",
+			formBody:         "node-group=node-group-1",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Cache node or node group not found",
+		},
+		{
+			description:      "assign node group on nonexistent L4LB node shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "PUT",
+			path:             "/console/superuser/l4lb-nodes/nonexistent-node/node-group",
+			formBody:         "node-group=node-group-1",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "L4LB node or node group not found",
+		},
+		{
+			description:      "org1 user deleting org2 domain shows forbidden error",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           "DELETE",
+			path:             "/console/org/org2/domains/example.se",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNotAllowedDeleteDomain,
+		},
+		{
+			description:      "org1 user deleting org2 service shows forbidden error",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           "DELETE",
+			path:             "/console/org/org2/services/org1-service1",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Not allowed to delete service",
+		},
+		{
+			description:      "delete node group with assigned nodes shows conflict error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/superuser/node-groups/node-group-1",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Cannot delete node group: nodes are still assigned to it",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			client := &http.Client{Jar: jar}
+
+			form := url.Values{
+				"username": {test.username},
+				"password": {test.password},
+			}
+
+			u, err := url.Parse(ts.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			loginResp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer loginResp.Body.Close()
+
+			if loginResp.StatusCode != http.StatusOK {
+				t.Fatalf("unexpected console login status code: %d", loginResp.StatusCode)
+			}
+
+			cookieFound := false
+			for _, c := range client.Jar.Cookies(u) {
+				if c.Name == cookieName {
+					cookieFound = true
+					break
+				}
+			}
+			if !cookieFound {
+				t.Fatal("login failed: session cookie is missing")
+			}
+
+			var reqBody io.Reader
+			if test.formBody != "" {
+				reqBody = strings.NewReader(test.formBody)
+			}
+			req, err = http.NewRequest(test.method, ts.URL+test.path, reqBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			if test.formBody != "" {
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				body, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				t.Fatalf("unexpected status code: got %d, want %d (%s)", resp.StatusCode, test.expectedStatus, string(body))
+			}
+
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to parse response HTML: %v", err)
+			}
+
+			errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+			if !strings.Contains(errorText, test.expectedErrorMsg) {
+				t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+			}
+		})
+	}
+}
