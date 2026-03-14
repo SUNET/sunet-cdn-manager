@@ -87,6 +87,7 @@ var flashMessageKeys = struct {
 	cacheNodes string
 	l4lbNodes  string
 	nodeGroups string
+	orgs       string
 }{
 	apiTokens:  "_flash_api_tokens",
 	domains:    "_flash_domains",
@@ -94,6 +95,7 @@ var flashMessageKeys = struct {
 	cacheNodes: "_flash_cache_nodes",
 	l4lbNodes:  "_flash_l4lb_nodes",
 	nodeGroups: "_flash_node_groups",
+	orgs:       "_flash_orgs",
 }
 
 const (
@@ -111,12 +113,18 @@ const (
 	consoleSuperuserCacheNodes  = "/console/superuser/cache-nodes"
 	consoleSuperuserL4LBNodes   = "/console/superuser/l4lb-nodes"
 	consoleSuperuserNodeGroups  = "/console/superuser/node-groups"
+	consoleSuperuserOrgs        = "/console/superuser/orgs"
+	apiV1OrgPath                = "/v1/orgs/{org}"
+	orgNotFound                 = "organization not found"
 	api403String                = "not allowed to access resource"
 	api403DeleteString          = "not allowed to delete resource"
 	cacheNodeNotFound           = "cache node not found"
 	l4lbNodeNotFound            = "l4lb node not found"
 	nodeGroupNotFound           = "node group not found"
 	consoleAlreadyExists        = "already exists"
+	validationNotDNSLabel       = "not a valid DNS label"
+	validationNotFQDN           = "not a valid FQDN"
+	validationMinZero           = "must be 0 or greater"
 	consoleNeedOrgMembershipMsg = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
@@ -963,7 +971,7 @@ func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 					switch fieldError.StructField() {
 					case "Name":
 						if fieldError.Tag() == "dns_rfc1035_label" {
-							apiTokenData.Errors.Name = "not a valid DNS label"
+							apiTokenData.Errors.Name = validationNotDNSLabel
 						} else {
 							apiTokenData.Errors.Name = fieldError.Error()
 						}
@@ -1258,7 +1266,7 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				for _, fieldError := range validationErrors {
 					if fieldError.StructField() == "Name" {
 						if fieldError.Tag() == "fqdn" {
-							domainData.Errors.Name = "not a valid FQDN"
+							domainData.Errors.Name = validationNotFQDN
 						} else {
 							domainData.Errors.Name = fieldError.Error()
 						}
@@ -2198,6 +2206,13 @@ type createNodeForm struct {
 type createNodeGroupForm struct {
 	Name        string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
 	Description string `schema:"description" validate:"min=1,max=100"`
+}
+
+type createOrgForm struct {
+	Name             string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
+	ServiceQuota     int64  `schema:"service-quota" validate:"min=0"`
+	DomainQuota      int64  `schema:"domain-quota" validate:"min=0"`
+	ClientTokenQuota int64  `schema:"client-token-quota" validate:"min=0"`
 }
 
 type nodeGroupAssignForm struct {
@@ -3747,12 +3762,12 @@ func selectOrgs(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdnty
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name FROM orgs ORDER BY time_created")
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs ORDER BY time_created")
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
 	} else if ad.OrgID != nil {
-		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name FROM orgs WHERE id=$1 ORDER BY time_created", *ad.OrgID)
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs WHERE id=$1 ORDER BY time_created", *ad.OrgID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
@@ -3975,8 +3990,14 @@ func selectOrg(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes
 			return cdnerrors.ErrNotFound
 		}
 
-		o.Name = orgIdent.name
-		o.ID = orgIdent.id
+		err = tx.QueryRow(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs WHERE id = $1",
+			orgIdent.id).Scan(&o.ID, &o.Name, &o.ServiceQuota, &o.DomainQuota, &o.ClientTokenQuota)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("selectOrg: unable to read org quotas: %w", err)
+		}
 
 		return nil
 	})
@@ -4587,21 +4608,185 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 	return reEncryptRes, nil
 }
 
-func insertOrg(ctx context.Context, dbc *dbConn, name string, ad cdntypes.AuthData) (pgtype.UUID, error) {
-	var id pgtype.UUID
+func insertOrg(ctx context.Context, dbc *dbConn, name string, serviceQuota, domainQuota, clientTokenQuota *int64, ad cdntypes.AuthData) (cdntypes.Org, error) {
 	if !ad.Superuser {
-		return pgtype.UUID{}, cdnerrors.ErrForbidden
+		return cdntypes.Org{}, cdnerrors.ErrForbidden
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
-	err := dbc.dbPool.QueryRow(dbCtx, "INSERT INTO orgs (name) VALUES ($1) RETURNING id", name).Scan(&id)
+	// Build INSERT dynamically so omitted quotas get their DB column defaults.
+	// Column names and placeholders are static strings — no injection risk.
+	cols := []string{"name"}
+	args := []any{name}
+	vals := []string{"$1"}
+	for _, q := range []struct {
+		col string
+		val *int64
+	}{
+		{"service_quota", serviceQuota},
+		{"domain_quota", domainQuota},
+		{"client_token_quota", clientTokenQuota},
+	} {
+		if q.val != nil {
+			args = append(args, *q.val)
+			cols = append(cols, q.col)
+			vals = append(vals, fmt.Sprintf("$%d", len(args)))
+		}
+	}
+	var o cdntypes.Org
+	query := fmt.Sprintf("INSERT INTO orgs (%s) VALUES (%s) RETURNING id, name, service_quota, domain_quota, client_token_quota",
+		strings.Join(cols, ", "), strings.Join(vals, ", "))
+	err := dbc.dbPool.QueryRow(dbCtx, query, args...).Scan(&o.ID, &o.Name, &o.ServiceQuota, &o.DomainQuota, &o.ClientTokenQuota)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("unable to INSERT organization: %w", err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return cdntypes.Org{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return cdntypes.Org{}, cdnerrors.ErrCheckViolation
+			}
+		}
+		return cdntypes.Org{}, fmt.Errorf("unable to INSERT organization: %w", err)
 	}
 
-	return id, nil
+	return o, nil
+}
+
+func selectOrgListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.OrgListItem, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	rows, err := dbc.dbPool.Query(ctx,
+		`SELECT
+			orgs.id,
+			orgs.name,
+			orgs.service_quota,
+			orgs.domain_quota,
+			orgs.client_token_quota,
+			COALESCE(svc.cnt, 0) AS service_count,
+			COALESCE(dom.cnt, 0) AS domain_count,
+			COALESCE(cred.cnt, 0) AS client_token_count
+		FROM orgs
+		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM services GROUP BY org_id) AS svc ON svc.org_id = orgs.id
+		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM domains GROUP BY org_id) AS dom ON dom.org_id = orgs.id
+		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM org_keycloak_client_credentials GROUP BY org_id) AS cred ON cred.org_id = orgs.id
+		ORDER BY orgs.name`)
+	if err != nil {
+		return nil, fmt.Errorf("selectOrgListItems: unable to query orgs: %w", err)
+	}
+
+	orgItems, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.OrgListItem])
+	if err != nil {
+		return nil, fmt.Errorf("selectOrgListItems: unable to CollectRows: %w", err)
+	}
+
+	return orgItems, nil
+}
+
+func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string, name string, serviceQuota, domainQuota, clientTokenQuota int64) (cdntypes.Org, error) {
+	if !ad.Superuser {
+		return cdntypes.Org{}, cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var updatedOrg cdntypes.Org
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("updateOrg: unable to parse org identifier: %w", err)
+		}
+
+		err = tx.QueryRow(dbCtx,
+			"UPDATE orgs SET name = $1, service_quota = $2, domain_quota = $3, client_token_quota = $4 WHERE id = $5 RETURNING id, name, service_quota, domain_quota, client_token_quota",
+			name, serviceQuota, domainQuota, clientTokenQuota, orgIdent.id).Scan(
+			&updatedOrg.ID, &updatedOrg.Name, &updatedOrg.ServiceQuota, &updatedOrg.DomainQuota, &updatedOrg.ClientTokenQuota)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case pgUniqueViolation:
+					return cdnerrors.ErrAlreadyExists
+				case pgCheckViolation:
+					return cdnerrors.ErrCheckViolation
+				}
+			}
+			return fmt.Errorf("updateOrg: UPDATE failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) || errors.Is(err, cdnerrors.ErrCheckViolation) {
+			return cdntypes.Org{}, err
+		}
+		return cdntypes.Org{}, fmt.Errorf("updateOrg: transaction failed: %w", err)
+	}
+
+	return updatedOrg, nil
+}
+
+func deleteOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteOrg: unable to parse org identifier: %w", err)
+		}
+
+		var serviceCount, domainCount, clientCredCount int64
+		err = tx.QueryRow(dbCtx,
+			`SELECT
+				(SELECT COUNT(*) FROM services WHERE org_id = $1),
+				(SELECT COUNT(*) FROM domains WHERE org_id = $1),
+				(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1)`,
+			orgIdent.id).Scan(&serviceCount, &domainCount, &clientCredCount)
+		if err != nil {
+			return fmt.Errorf("deleteOrg: unable to count dependents: %w", err)
+		}
+
+		if serviceCount > 0 || domainCount > 0 || clientCredCount > 0 {
+			return &cdnerrors.DependentsError{
+				Name:         orgIdent.name,
+				Services:     serviceCount,
+				Domains:      domainCount,
+				ClientTokens: clientCredCount,
+			}
+		}
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM orgs WHERE id = $1", orgIdent.id)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+				return &cdnerrors.DependentsError{Name: orgIdent.name}
+			}
+			return fmt.Errorf("deleteOrg: DELETE failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("deleteOrg: transaction failed: %w", err)
+	}
+
+	return nil
 }
 
 func selectServices(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
@@ -7006,6 +7191,12 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
 		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
 		// Superuser console routes
+		r.Get("/superuser/orgs", consoleOrgsHandler(dbc, cookieStore))
+		r.Delete("/superuser/orgs/{org}", consoleOrgDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/org", consoleCreateOrgHandler(dbc, cookieStore))
+		r.Post("/superuser/create/org", consoleCreateOrgHandler(dbc, cookieStore))
+		r.Get("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
+		r.Post("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
 		r.Get("/superuser/cache-nodes", consoleCacheNodesHandler(dbc, cookieStore))
 		r.Delete("/superuser/cache-nodes/{cachenode}", consoleCacheNodeDeleteHandler(dbc, cookieStore))
 		r.Get("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
@@ -7443,7 +7634,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			return resp, nil
 		})
 
-		huma.Get(api, "/v1/orgs/{org}", func(ctx context.Context, input *struct {
+		huma.Get(api, apiV1OrgPath, func(ctx context.Context, input *struct {
 			Org string `path:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 		},
 		) (*orgOutput, error) {
@@ -7459,15 +7650,12 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("organization not found")
+					return nil, huma.Error404NotFound(orgNotFound)
 				}
 				logger.Err(err).Msg("unable to query organization")
 				return nil, err
 			}
-			resp := &orgOutput{}
-			resp.Body.ID = org.ID
-			resp.Body.Name = org.Name
-			return resp, nil
+			return &orgOutput{Body: org}, nil
 		})
 
 		huma.Get(api, "/v1/orgs/{org}/client-credentials", func(ctx context.Context, input *struct {
@@ -7759,7 +7947,10 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 			func(ctx context.Context, input *struct {
 				Body struct {
-					Name string `json:"name" example:"Some name" doc:"Organization name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					Name             string `json:"name" example:"my-org" doc:"Organization name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+					ServiceQuota     *int64 `json:"service_quota,omitempty" example:"1" doc:"Service quota for the organization" minimum:"0"`
+					DomainQuota      *int64 `json:"domain_quota,omitempty" example:"5" doc:"Domain quota for the organization" minimum:"0"`
+					ClientTokenQuota *int64 `json:"client_token_quota,omitempty" example:"10" doc:"Client token quota for the organization" minimum:"0"`
 				}
 			},
 			) (*orgOutput, error) {
@@ -7770,20 +7961,81 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from organization POST handler")
 				}
 
-				id, err := insertOrg(ctx, dbc, input.Body.Name, ad)
+				org, err := insertOrg(ctx, dbc, input.Body.Name, input.Body.ServiceQuota, input.Body.DomainQuota, input.Body.ClientTokenQuota, ad)
 				if err != nil {
-					if errors.Is(err, cdnerrors.ErrForbidden) {
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("organization already exists")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid organization data")
 					}
 					logger.Err(err).Msg("unable to add organization")
 					return nil, err
 				}
-				resp := &orgOutput{}
-				resp.Body.ID = id
-				resp.Body.Name = input.Body.Name
-				return resp, nil
+				return &orgOutput{Body: org}, nil
 			},
 		)
+
+		huma.Put(api, apiV1OrgPath, func(ctx context.Context, input *struct {
+			Org  string `path:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+			Body struct {
+				Name             string `json:"name" example:"my-org" doc:"Organization name" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label"`
+				ServiceQuota     int64  `json:"service_quota" example:"1" doc:"Service quota for the organization" minimum:"0"`
+				DomainQuota      int64  `json:"domain_quota" example:"5" doc:"Domain quota for the organization" minimum:"0"`
+				ClientTokenQuota int64  `json:"client_token_quota" example:"10" doc:"Client token quota for the organization" minimum:"0"`
+			}
+		},
+		) (*orgOutput, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from organization PUT handler")
+			}
+
+			org, err := updateOrg(ctx, dbc, ad, input.Org, input.Body.Name, input.Body.ServiceQuota, input.Body.DomainQuota, input.Body.ClientTokenQuota)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("not allowed to modify resource")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(orgNotFound)
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					return nil, huma.Error409Conflict("organization already exists")
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					return nil, huma.Error422UnprocessableEntity("invalid organization data")
+				default:
+					return nil, fmt.Errorf("unable to update organization: %w", err)
+				}
+			}
+			return &orgOutput{Body: org}, nil
+		})
+
+		huma.Delete(api, apiV1OrgPath, func(ctx context.Context, input *struct {
+			Org string `path:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from organization DELETE handler")
+			}
+
+			err := deleteOrg(ctx, dbc, ad, input.Org)
+			if err != nil {
+				var depErr *cdnerrors.DependentsError
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403DeleteString)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(orgNotFound)
+				case errors.As(err, &depErr):
+					return nil, huma.Error409Conflict(depErr.Error())
+				default:
+					return nil, fmt.Errorf("unable to delete organization: %w", err)
+				}
+			}
+			return nil, nil
+		})
 
 		huma.Get(api, "/v1/services", func(ctx context.Context, input *struct {
 			Org string `query:"org" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
@@ -9838,6 +10090,368 @@ func sessionSelectedOrg(session *sessions.Session) string {
 		}
 	}
 	return ""
+}
+
+func consoleOrgsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		orgs, err := selectOrgListItems(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("orgs console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.orgs)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("orgs console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sessionSelectedOrg(session), components.OrgsContent(orgs, flashMessageStrings, ""))
+		if err != nil {
+			logger.Err(err).Msg("unable to render organizations page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleOrgDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err := deleteOrg(ctx, dbc, ad, orgName)
+		if err != nil {
+			var errorMessage string
+			var depErr *cdnerrors.DependentsError
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("orgs console: not authorized to delete organization")
+				errorMessage = "Not allowed to delete organization"
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("orgs console: organization not found")
+				errorMessage = "Organization not found"
+			case errors.As(err, &depErr):
+				logger.Err(err).Msg("orgs console: organization has dependents")
+				errorMessage = depErr.Error()
+			default:
+				logger.Err(err).Msg("orgs console: deletion failed")
+				errorMessage = "Organization deletion failed"
+			}
+			orgs, listErr := selectOrgListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg("orgs console: unable to fetch org list for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sessionSelectedOrg(session), components.OrgsContent(orgs, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render organizations page with delete error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Organization '%s' deleted!", orgName), flashMessageKeys.orgs)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserOrgs, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add organization"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(components.OrgFormData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render org creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-org POST form")
+				return
+			}
+
+			formData := createOrgForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-org form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			orgFormData := components.OrgFormData{
+				OrgFormFields: components.OrgFormFields{
+					Name:             formData.Name,
+					ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
+					DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
+					ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						if fieldError.Tag() == "dns_rfc1035_label" {
+							orgFormData.Errors.Name = validationNotDNSLabel
+						} else {
+							orgFormData.Errors.Name = fieldError.Error()
+						}
+					case "ServiceQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.ServiceQuota = validationMinZero
+						} else {
+							orgFormData.Errors.ServiceQuota = fieldError.Error()
+						}
+					case "DomainQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.DomainQuota = validationMinZero
+						} else {
+							orgFormData.Errors.DomainQuota = fieldError.Error()
+						}
+					case "ClientTokenQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.ClientTokenQuota = validationMinZero
+						} else {
+							orgFormData.Errors.ClientTokenQuota = fieldError.Error()
+						}
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(orgFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render org creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			sq := formData.ServiceQuota
+			dq := formData.DomainQuota
+			ctq := formData.ClientTokenQuota
+			_, err = insertOrg(ctx, dbc, formData.Name, &sq, &dq, &ctq, ad)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
+					orgFormData.Errors.Name = consoleAlreadyExists
+				} else {
+					orgFormData.Errors.ServerError = "Organization creation failed"
+				}
+				logger.Err(err).Msg("org creation failed")
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(orgFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render org creation page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Organization '%s' created!", formData.Name), flashMessageKeys.orgs)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserOrgs, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-org handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleEditOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit organization: %s", orgName)
+
+		switch r.Method {
+		case http.MethodGet:
+			org, err := selectOrg(ctx, dbc, orgName, ad)
+			if err != nil {
+				logger.Err(err).Msg("edit org: unable to fetch organization")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				case errors.Is(err, cdnerrors.ErrNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+					http.Error(w, orgNotFound, http.StatusNotFound)
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			formData := components.OrgFormData{
+				OrgFormFields: components.OrgFormFields{
+					Name:             org.Name,
+					ServiceQuota:     fmt.Sprintf("%d", org.ServiceQuota),
+					DomainQuota:      fmt.Sprintf("%d", org.DomainQuota),
+					ClientTokenQuota: fmt.Sprintf("%d", org.ClientTokenQuota),
+				},
+			}
+
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, formData))
+			if err != nil {
+				logger.Err(err).Msg("unable to render edit org page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse edit-org POST form")
+				return
+			}
+
+			formData := createOrgForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST edit-org form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			orgFormData := components.OrgFormData{
+				OrgFormFields: components.OrgFormFields{
+					Name:             formData.Name,
+					ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
+					DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
+					ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						if fieldError.Tag() == "dns_rfc1035_label" {
+							orgFormData.Errors.Name = validationNotDNSLabel
+						} else {
+							orgFormData.Errors.Name = fieldError.Error()
+						}
+					case "ServiceQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.ServiceQuota = validationMinZero
+						} else {
+							orgFormData.Errors.ServiceQuota = fieldError.Error()
+						}
+					case "DomainQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.DomainQuota = validationMinZero
+						} else {
+							orgFormData.Errors.DomainQuota = fieldError.Error()
+						}
+					case "ClientTokenQuota":
+						if fieldError.Tag() == "min" {
+							orgFormData.Errors.ClientTokenQuota = validationMinZero
+						} else {
+							orgFormData.Errors.ClientTokenQuota = fieldError.Error()
+						}
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, orgFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit org page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			_, err = updateOrg(ctx, dbc, ad, orgName, formData.Name, formData.ServiceQuota, formData.DomainQuota, formData.ClientTokenQuota)
+			if err != nil {
+				logger.Err(err).Msg("org update failed")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					orgFormData.Errors.ServerError = "Not allowed to modify organization"
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					orgFormData.Errors.ServerError = "Organization not found"
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					orgFormData.Errors.Name = consoleAlreadyExists
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					orgFormData.Errors.ServerError = "Invalid organization data"
+				default:
+					orgFormData.Errors.ServerError = "Organization update failed"
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, orgFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit org page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("Organization '%s' updated!", formData.Name), flashMessageKeys.orgs)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserOrgs, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for edit-org handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
 }
 
 func consoleCacheNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {

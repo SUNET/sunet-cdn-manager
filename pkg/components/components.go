@@ -83,6 +83,26 @@ type L4LBNodeFormData struct {
 	Errors NodeFormErrors
 }
 
+type OrgFormFields struct {
+	Name             string
+	ServiceQuota     string
+	DomainQuota      string
+	ClientTokenQuota string
+}
+
+type OrgFormErrors struct {
+	Name             string
+	ServiceQuota     string
+	DomainQuota      string
+	ClientTokenQuota string
+	ServerError      string
+}
+
+type OrgFormData struct {
+	OrgFormFields
+	Errors OrgFormErrors
+}
+
 type NodeGroupFormFields struct {
 	Name        string
 	Description string
@@ -169,6 +189,7 @@ var sections = map[string]section{
 	"cache-nodes": {Label: "Cache nodes", CreateSlug: "cache-node"},
 	"l4lb-nodes":  {Label: "L4LB nodes", CreateSlug: "l4lb-node"},
 	"node-groups": {Label: "Node groups", CreateSlug: "node-group"},
+	"orgs":        {Label: "Organizations", CreateSlug: "org"},
 }
 
 // createSlugToSection provides reverse lookup from the singular create/ path

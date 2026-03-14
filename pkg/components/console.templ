@@ -165,6 +165,7 @@ templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames
 					}
 					if ad.Superuser {
 						<li><p class="nav-section-label">Superuser</p></li>
+						<li><a href="/console/superuser/orgs" { activeAttr("orgs", u)... }>Organizations</a></li>
 						<li><a href="/console/superuser/cache-nodes" { activeAttr("cache-nodes", u)... }>Cache nodes</a></li>
 						<li><a href="/console/superuser/l4lb-nodes" { activeAttr("l4lb-nodes", u)... }>L4LB nodes</a></li>
 						<li><a href="/console/superuser/node-groups" { activeAttr("node-groups", u)... }>Node groups</a></li>
@@ -1222,6 +1223,108 @@ templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
 			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
 		<span class="error-text">{ formData.Errors.Description }</span>
+		<button type="submit">Save changes</button>
+	</form>
+}
+
+templ OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessage string) {
+	@flashMessagesComponent(flashMessages)
+	<span class="error-text">{ errorMessage }</span>
+	if len(orgs) == 0 {
+		<article class="empty-state">
+			<p>No organizations added yet</p>
+			<a href="/console/superuser/create/org" role="button">Add your first organization</a>
+		</article>
+	} else {
+		<table>
+			<thead>
+				<tr>
+					<th>Name</th>
+					<th>Services</th>
+					<th>Domains</th>
+					<th>Client tokens</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, org := range orgs {
+					<tr>
+						<td>{ org.Name }</td>
+						<td>{ fmt.Sprintf("%d/%d", org.ServiceCount, org.ServiceQuota) }</td>
+						<td>{ fmt.Sprintf("%d/%d", org.DomainCount, org.DomainQuota) }</td>
+						<td>{ fmt.Sprintf("%d/%d", org.ClientTokenCount, org.ClientTokenQuota) }</td>
+						<td>
+							<a href={ templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", org.Name)) } role="button" class="secondary">Edit</a>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/orgs/%s", org.Name))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", org.Name) }
+								hx-disabled-elt="this"
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p>
+			<a href="/console/superuser/create/org" role="button">Add organization</a>
+		</p>
+	}
+}
+
+templ CreateOrgContent(formData OrgFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action="/console/superuser/create/org" hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="service-quota">
+			Service quota
+			<input type="number" id="service-quota" name="service-quota" min="0" placeholder="1" value={ formData.ServiceQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.ServiceQuota }</span>
+		<label for="domain-quota">
+			Domain quota
+			<input type="number" id="domain-quota" name="domain-quota" min="0" placeholder="5" value={ formData.DomainQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.DomainQuota }</span>
+		<label for="client-token-quota">
+			Client token quota
+			<input type="number" id="client-token-quota" name="client-token-quota" min="0" placeholder="10" value={ formData.ClientTokenQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.ClientTokenQuota }</span>
+		<button type="submit">Add organization</button>
+	</form>
+}
+
+templ EditOrgContent(orgName string, formData OrgFormData) {
+	<span class="error-text">{ formData.Errors.ServerError }</span>
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", orgName)) } hx-disabled-elt="find button[type='submit']">
+		<label for="name">
+			Name
+			<input type="text" id="name" name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Name }</span>
+		<label for="service-quota">
+			Service quota
+			<input type="number" id="service-quota" name="service-quota" min="0" value={ formData.ServiceQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.ServiceQuota }</span>
+		<label for="domain-quota">
+			Domain quota
+			<input type="number" id="domain-quota" name="domain-quota" min="0" value={ formData.DomainQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.DomainQuota }</span>
+		<label for="client-token-quota">
+			Client token quota
+			<input type="number" id="client-token-quota" name="client-token-quota" min="0" value={ formData.ClientTokenQuota } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.ClientTokenQuota }</span>
 		<button type="submit">Save changes</button>
 	</form>
 }

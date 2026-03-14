@@ -27,8 +27,18 @@ type AuthData struct {
 
 // Types that can be shared across the other packages
 type Org struct {
-	ID   pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
-	Name string      `json:"name" example:"organization 1" doc:"name of organization"`
+	ID               pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
+	Name             string      `json:"name" example:"organization 1" doc:"name of organization"`
+	ServiceQuota     int64       `json:"service_quota" example:"1" doc:"maximum number of services allowed"`
+	DomainQuota      int64       `json:"domain_quota" example:"5" doc:"maximum number of domains allowed"`
+	ClientTokenQuota int64       `json:"client_token_quota" example:"10" doc:"maximum number of client tokens allowed"`
+}
+
+type OrgListItem struct {
+	Org
+	ServiceCount     int64 `json:"service_count"`
+	DomainCount      int64 `json:"domain_count"`
+	ClientTokenCount int64 `json:"client_token_count"`
 }
 
 // OrgClientCredentialSafe contains the fields we can share with users via e.g. the API
