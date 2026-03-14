@@ -109,23 +109,33 @@ const (
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
 
-	consolePath                 = "/console"
-	consoleSuperuserCacheNodes  = "/console/superuser/cache-nodes"
-	consoleSuperuserL4LBNodes   = "/console/superuser/l4lb-nodes"
-	consoleSuperuserNodeGroups  = "/console/superuser/node-groups"
-	consoleSuperuserOrgs        = "/console/superuser/orgs"
-	apiV1OrgPath                = "/v1/orgs/{org}"
-	orgNotFound                 = "organization not found"
-	api403String                = "not allowed to access resource"
-	api403DeleteString          = "not allowed to delete resource"
-	cacheNodeNotFound           = "cache node not found"
-	l4lbNodeNotFound            = "l4lb node not found"
-	nodeGroupNotFound           = "node group not found"
-	consoleAlreadyExists        = "already exists"
-	validationNotDNSLabel       = "not a valid DNS label"
-	validationNotFQDN           = "not a valid FQDN"
-	validationMinZero           = "must be 0 or greater"
-	consoleNeedOrgMembershipMsg = "not allowed to view this page, you need to be a member of an organization"
+	consolePath                      = "/console"
+	consoleSuperuserCacheNodes       = "/console/superuser/cache-nodes"
+	consoleSuperuserL4LBNodes        = "/console/superuser/l4lb-nodes"
+	consoleSuperuserNodeGroups       = "/console/superuser/node-groups"
+	consoleSuperuserOrgs             = "/console/superuser/orgs"
+	apiV1OrgPath                     = "/v1/orgs/{org}"
+	orgNotFound                      = "organization not found"
+	api403String                     = "not allowed to access resource"
+	api403DeleteString               = "not allowed to delete resource"
+	cacheNodeNotFound                = "cache node not found"
+	l4lbNodeNotFound                 = "l4lb node not found"
+	nodeGroupNotFound                = "node group not found"
+	consoleAlreadyExists             = "already exists"
+	validationNotDNSLabel            = "not a valid DNS label"
+	validationNotFQDN                = "not a valid FQDN"
+	validationMinZero                = "must be 0 or greater"
+	consoleAPITokensTitle            = "API Tokens"
+	consoleCacheNodesTitle           = "Cache nodes"
+	consoleCacheNodeNotFound         = "Cache node not found"
+	consoleNotAllowedModifyCacheNode = "Not allowed to modify cache node"
+	consoleL4LBNodesTitle            = "L4LB nodes"
+	consoleL4LBNodeNotFound          = "L4LB node not found"
+	consoleNotAllowedModifyL4LBNode  = "Not allowed to modify L4LB node"
+	consoleNotAllowedDeleteDomain    = "Not allowed to delete domain"
+	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
+	consoleOrgNotFound               = "Organization not found"
+	consoleNeedOrgMembershipMsg      = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
 	sunetTxtTag       = "sunet-cdn-verification"
@@ -308,12 +318,18 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	consoleMissingAuthData    = "console: session missing AuthData"
-	consoleMissingServicePath = "console: missing service path in URL"
-	consoleMissingOrgPath     = "console: missing org path in URL"
-	consoleMissingOrgParam    = "console: missing org parameter in URL"
-	unableToSetFlashMessage   = "unable to set flash message"
-	consoleServiceOrgRedirect = "/console/org/%s/services/%s"
+	consoleMissingAuthData           = "console: session missing AuthData"
+	consoleMissingServicePath        = "console: missing service path in URL"
+	consoleMissingOrgPath            = "console: missing org path in URL"
+	consoleMissingOrgParam           = "console: missing org parameter in URL"
+	unableToSetFlashMessage          = "unable to set flash message"
+	consoleServiceOrgRedirect        = "/console/org/%s/services/%s"
+	consoleDomainListReRenderErr     = "domains console: unable to fetch domain list for re-render"
+	consoleAPITokenListReRenderErr   = "api-tokens console: unable to fetch API token list for re-render" // #nosec G101 -- Not a hardcoded credential
+	consoleCacheNodeListReRenderErr  = "cache nodes console: unable to fetch cache node list for re-render"
+	consoleNodeGroupsReRenderErr     = "cache nodes console: unable to fetch node groups for re-render"
+	consoleL4LBNodeListReRenderErr   = "l4lb nodes console: unable to fetch L4LB node list for re-render"
+	consoleL4LBNodeGroupsReRenderErr = "l4lb nodes console: unable to fetch node groups for re-render"
 )
 
 func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
@@ -641,7 +657,7 @@ func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render domains page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -676,18 +692,33 @@ func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleDomainDeleteHandler: db request for looking up orgName failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, nil, sunetTxtTag, sunetTxtSeparator, nil, consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render domains page with org error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
 		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Error().Msg("consoleDomainDelete: user is not superuser and not member of any org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-				return
-			} else if *ad.OrgName != orgIdent.name {
+			if ad.OrgName == nil || *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleDomainDelete: user is not superuser and not member of the matching org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				// Render with nil domain list and the user's own org for navigation:
+				// the user lacks access to the target org, so re-fetching domains
+				// would also fail with ErrForbidden.
+				userOrg := ""
+				if ad.OrgName != nil {
+					userOrg = *ad.OrgName
+				}
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", userOrg, components.DomainsContent(userOrg, nil, sunetTxtTag, sunetTxtSeparator, nil, consoleNotAllowedDeleteDomain))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render domains page with auth error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 		}
@@ -701,13 +732,28 @@ func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 
 		_, err = deleteDomain(ctx, logger, dbc, ad, domainName)
 		if err != nil {
-			if errors.Is(err, cdnerrors.ErrForbidden) {
-				logger.Err(err).Msg("domains console: not authorized to delete domain")
-				http.Error(w, "not allowed to delete domain", http.StatusForbidden)
+			var errorMessage string
+			switch {
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("domains console: domain not found")
+				errorMessage = "Domain not found"
+			default:
+				logger.Err(err).Msg("domains console: domain deletion failed")
+				errorMessage = "Domain deletion failed"
+			}
+			// Treat ErrForbidden as non-fatal: the user may lack access to this
+			// org's domains, but we can still render the error message with an empty list.
+			domains, listErr := selectDomains(ctx, dbc, ad, orgIdent.name)
+			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrForbidden) {
+				logger.Err(listErr).Msg(consoleDomainListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			logger.Err(err).Msg("domains console: domain deletion failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgIdent.name, components.DomainsContent(orgIdent.name, domains, sunetTxtTag, sunetTxtSeparator, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render domains page with delete error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -780,7 +826,7 @@ func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tok
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "API Tokens", orgName, components.APITokensContent(orgName, orgClientCreds, flashMessageStrings, tokenURL, serverURL))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgName, components.APITokensContent(orgName, orgClientCreds, flashMessageStrings, tokenURL, serverURL, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render api-tokens page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -789,7 +835,7 @@ func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tok
 	}
 }
 
-func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
+func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -815,18 +861,33 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleAPITokenDeleteHandler: db request for looking up orgName failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgName, components.APITokensContent(orgName, nil, nil, tokenURL, serverURL, consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render api-tokens page with org error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
 		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Error().Msg("consoleAPITokenDeleteHandler: user is not superuser and not member of any org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-				return
-			} else if *ad.OrgName != orgIdent.name {
+			if ad.OrgName == nil || *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleAPITokenDeleteHandler: user is not superuser and not member of the matching org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				// Render with nil credential list and the user's own org for navigation:
+				// the user lacks access to the target org, so re-fetching credentials
+				// would also fail with ErrNotFound.
+				userOrg := ""
+				if ad.OrgName != nil {
+					userOrg = *ad.OrgName
+				}
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, userOrg, components.APITokensContent(userOrg, nil, nil, tokenURL, serverURL, consoleNotAllowedDeleteAPIToken))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render api-tokens page with auth error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 		}
@@ -840,15 +901,29 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 
 		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEADs, ad, kccm, orgName, apiTokenName)
 		if err != nil {
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				logger.Err(err).Msg("api-tokens console: not authorized to delete API token")
-				http.Error(w, "not allowed to delete api-token", http.StatusForbidden)
+				errorMessage = consoleNotAllowedDeleteAPIToken
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("api-tokens console: API token not found")
-				http.Error(w, "api-token not found", http.StatusNotFound)
+				errorMessage = "API token not found"
 			default:
 				logger.Err(err).Msg("API token console: API token deletion failed")
+				errorMessage = "API token deletion failed"
+			}
+			// Treat ErrNotFound/ErrForbidden as non-fatal: the user may lack access to this
+			// org's credentials, but we can still render the error message with an empty list.
+			creds, listErr := selectSafeOrgClientCredentials(ctx, dbc, orgIdent.name, ad)
+			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrNotFound) && !errors.Is(listErr, cdnerrors.ErrForbidden) {
+				logger.Err(listErr).Msg(consoleAPITokenListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgIdent.name, components.APITokensContent(orgIdent.name, creds, nil, tokenURL, serverURL, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render api-tokens page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return
@@ -1057,6 +1132,40 @@ func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			return
 		}
 
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDeleteHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, nil, nil, consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render services page with org error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if !ad.Superuser {
+			if ad.OrgName == nil || *ad.OrgName != orgIdent.name {
+				logger.Error().Msg("consoleServiceDelete: user is not superuser and not member of the matching org")
+				// Render with nil service list and the user's own org for navigation:
+				// the user lacks access to the target org, so re-fetching services
+				// would also fail with ErrForbidden.
+				userOrg := ""
+				if ad.OrgName != nil {
+					userOrg = *ad.OrgName
+				}
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", userOrg, components.ServicesContent(userOrg, nil, nil, "Not allowed to delete service"))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render services page with auth error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+		}
+
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
 			logger.Error().Msg("console: missing service name in URL")
@@ -1064,15 +1173,50 @@ func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			return
 		}
 
-		_, err := deleteService(ctx, logger, dbc, orgName, serviceName, ad)
+		_, err = deleteService(ctx, logger, dbc, orgIdent.name, serviceName, ad)
 		if err != nil {
-			if errors.Is(err, cdnerrors.ErrForbidden) {
-				logger.Err(err).Msg("services console: not authorized to delete service")
-				http.Error(w, "not allowed to delete service", http.StatusForbidden)
+			var errorMessage string
+			switch {
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("services console: service not found")
+				errorMessage = "Service not found"
+			default:
+				logger.Err(err).Msg("services console: service deletion failed")
+				errorMessage = "Service deletion failed"
+			}
+			serviceEntries := []components.ServiceEntry{}
+			txErr := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+				services, sErr := selectServicesTx(ctx, tx, ad, orgIdent.name)
+				if sErr != nil {
+					return fmt.Errorf("database lookup failed: %w", sErr)
+				}
+				orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
+				if sErr != nil {
+					return fmt.Errorf("database lookup failed for org service ips: %w", sErr)
+				}
+				for _, s := range services {
+					entry := components.ServiceEntry{Service: s}
+					if addrs, ok := orgServiceIPAddrs[s.ID]; ok {
+						for _, addr := range addrs {
+							entry.IPAddresses = append(entry.IPAddresses, addr.Address)
+						}
+					}
+					serviceEntries = append(serviceEntries, entry)
+				}
+				return nil
+			})
+			// Treat ErrForbidden as non-fatal: the user may lack access to this
+			// org's services, but we can still render the error message with an empty list.
+			if txErr != nil && !errors.Is(txErr, cdnerrors.ErrForbidden) {
+				logger.Err(txErr).Msg("services console: unable to fetch service list for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			logger.Err(err).Msg("services console: service deletion failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ServicesContent(orgIdent.name, serviceEntries, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render services page with delete error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -1083,7 +1227,7 @@ func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			return
 		}
 
-		redirectURL, err := url.JoinPath(consolePath, "org", orgName, "services")
+		redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "services")
 		if err != nil {
 			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to create redirect URL")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1177,7 +1321,7 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -3858,8 +4002,10 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		domainIdent, err := newDomainIdentifier(dbCtx, tx, domainNameOrID)
 		if err != nil {
-			logger.Err(err).Msg("unable to look up domain identifier")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteDomain: unable to look up domain identifier: %w", err)
 		}
 
 		// A normal user can only delete a domain belonging to the
@@ -5833,8 +5979,10 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 
 		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgID)
 		if err != nil {
-			logger.Err(err).Msg("unable to look up service identifier")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteService: unable to look up service identifier: %w", err)
 		}
 
 		// A normal user can only delete a service belonging to the
@@ -7184,7 +7332,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
 		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, cookieStore, tokenURL, serverURL))
-		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEADs, kccm))
+		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEADs, kccm, tokenURL, serverURL))
 		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
 		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
 		// htmx helpers
@@ -10155,7 +10303,7 @@ func consoleOrgDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 				errorMessage = "Not allowed to delete organization"
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("orgs console: organization not found")
-				errorMessage = "Organization not found"
+				errorMessage = consoleOrgNotFound
 			case errors.As(err, &depErr):
 				logger.Err(err).Msg("orgs console: organization has dependents")
 				errorMessage = depErr.Error()
@@ -10422,7 +10570,7 @@ func consoleEditOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					orgFormData.Errors.ServerError = "Not allowed to modify organization"
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					orgFormData.Errors.ServerError = "Organization not found"
+					orgFormData.Errors.ServerError = consoleOrgNotFound
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					orgFormData.Errors.Name = consoleAlreadyExists
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
@@ -10489,7 +10637,7 @@ func consoleCacheNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Cache nodes", sessionSelectedOrg(session), components.CacheNodesContent(cacheNodes, nodeGroups, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(cacheNodes, nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render cache nodes page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -10516,15 +10664,33 @@ func consoleCacheNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 
 		err := deleteCacheNode(ctx, dbc, ad, cacheNodeNameOrID)
 		if err != nil {
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				logger.Err(err).Msg("cache nodes console: not authorized to delete cache node")
-				http.Error(w, "not allowed to delete cache node", http.StatusForbidden)
+				errorMessage = "Not allowed to delete cache node"
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("cache nodes console: cache node not found")
-				http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+				errorMessage = consoleCacheNodeNotFound
 			default:
 				logger.Err(err).Msg("cache nodes console: deletion failed")
+				errorMessage = "Cache node deletion failed"
+			}
+			nodes, listErr := selectCacheNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleCacheNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render cache nodes page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return
@@ -10754,9 +10920,9 @@ func consoleEditCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 				var addrErr *cdnerrors.AddressConflictError
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					nodeFormData.Errors.ServerError = "Not allowed to modify cache node"
+					nodeFormData.Errors.ServerError = consoleNotAllowedModifyCacheNode
 				case errors.Is(err, pgx.ErrNoRows):
-					nodeFormData.Errors.ServerError = "Cache node not found"
+					nodeFormData.Errors.ServerError = consoleCacheNodeNotFound
 				case errors.As(err, &addrErr):
 					nodeFormData.Errors.Addresses = addrErr.Error()
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
@@ -10814,13 +10980,33 @@ func consoleCacheNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.Cooki
 
 		err := setCacheNodeMaintenance(ctx, ad, dbc, cacheNodeNameOrID, maintenance)
 		if err != nil {
-			logger.Err(err).Msg("cache node maintenance: set failed")
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				logger.Err(err).Msg("cache node maintenance: not authorized")
+				errorMessage = consoleNotAllowedModifyCacheNode
 			case errors.Is(err, pgx.ErrNoRows):
-				http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+				logger.Err(err).Msg("cache node maintenance: not found")
+				errorMessage = consoleCacheNodeNotFound
 			default:
+				logger.Err(err).Msg("cache node maintenance: set failed")
+				errorMessage = "Failed to update maintenance mode"
+			}
+			nodes, listErr := selectCacheNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleCacheNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render cache nodes page with maintenance error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return
@@ -10869,36 +11055,49 @@ func consoleCacheNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 			return
 		}
 
+		var groupErr error
 		if formData.NodeGroup == "" {
-			err := unsetCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID)
-			if err != nil {
-				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, "not allowed to modify cache node", http.StatusForbidden)
-				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, cacheNodeNotFound, http.StatusNotFound)
-				default:
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				logger.Err(err).Msg("cache node group: unset failed")
-				return
+			groupErr = unsetCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID)
+			if groupErr == nil {
+				session.AddFlash(fmt.Sprintf("Node group removed from '%s'", cacheNodeNameOrID), flashMessageKeys.cacheNodes)
 			}
-			session.AddFlash(fmt.Sprintf("Node group removed from '%s'", cacheNodeNameOrID), flashMessageKeys.cacheNodes)
 		} else {
-			err := setCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID, formData.NodeGroup)
-			if err != nil {
-				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, "not allowed to modify cache node", http.StatusForbidden)
-				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, "cache node or node group not found", http.StatusNotFound)
-				default:
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				logger.Err(err).Msg("cache node group: set failed")
+			groupErr = setCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID, formData.NodeGroup)
+			if groupErr == nil {
+				session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, cacheNodeNameOrID), flashMessageKeys.cacheNodes)
+			}
+		}
+		if groupErr != nil {
+			var errorMessage string
+			switch {
+			case errors.Is(groupErr, cdnerrors.ErrForbidden):
+				logger.Err(groupErr).Msg("cache node group: not authorized")
+				errorMessage = consoleNotAllowedModifyCacheNode
+			case errors.Is(groupErr, pgx.ErrNoRows):
+				logger.Err(groupErr).Msg("cache node group: not found")
+				errorMessage = "Cache node or node group not found"
+			default:
+				logger.Err(groupErr).Msg("cache node group: update failed")
+				errorMessage = "Failed to update node group"
+			}
+			nodes, listErr := selectCacheNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleCacheNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, cacheNodeNameOrID), flashMessageKeys.cacheNodes)
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render cache nodes page with group error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
 		}
 
 		err := session.Save(r, w)
@@ -10946,7 +11145,7 @@ func consoleL4LBNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "L4LB nodes", sessionSelectedOrg(session), components.L4LBNodesContent(l4lbNodes, nodeGroups, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(l4lbNodes, nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render l4lb nodes page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -10973,15 +11172,33 @@ func consoleL4LBNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 
 		err := deleteL4LBNode(ctx, dbc, ad, l4lbNodeNameOrID)
 		if err != nil {
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				logger.Err(err).Msg("l4lb nodes console: not authorized to delete L4LB node")
-				http.Error(w, "not allowed to delete L4LB node", http.StatusForbidden)
+				errorMessage = "Not allowed to delete L4LB node"
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("l4lb nodes console: L4LB node not found")
-				http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+				errorMessage = consoleL4LBNodeNotFound
 			default:
 				logger.Err(err).Msg("l4lb nodes console: deletion failed")
+				errorMessage = "L4LB node deletion failed"
+			}
+			nodes, listErr := selectL4LBNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render L4LB nodes page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return
@@ -11211,9 +11428,9 @@ func consoleEditL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				var addrErr *cdnerrors.AddressConflictError
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					nodeFormData.Errors.ServerError = "Not allowed to modify L4LB node"
+					nodeFormData.Errors.ServerError = consoleNotAllowedModifyL4LBNode
 				case errors.Is(err, pgx.ErrNoRows):
-					nodeFormData.Errors.ServerError = "L4LB node not found"
+					nodeFormData.Errors.ServerError = consoleL4LBNodeNotFound
 				case errors.As(err, &addrErr):
 					nodeFormData.Errors.Addresses = addrErr.Error()
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
@@ -11271,13 +11488,33 @@ func consoleL4LBNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.Cookie
 
 		err := setL4LBNodeMaintenance(ctx, ad, dbc, l4lbNodeNameOrID, maintenance)
 		if err != nil {
-			logger.Err(err).Msg("l4lb node maintenance: set failed")
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				logger.Err(err).Msg("l4lb node maintenance: not authorized")
+				errorMessage = consoleNotAllowedModifyL4LBNode
 			case errors.Is(err, pgx.ErrNoRows):
-				http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+				logger.Err(err).Msg("l4lb node maintenance: not found")
+				errorMessage = consoleL4LBNodeNotFound
 			default:
+				logger.Err(err).Msg("l4lb node maintenance: set failed")
+				errorMessage = "Failed to update maintenance mode"
+			}
+			nodes, listErr := selectL4LBNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render L4LB nodes page with maintenance error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return
@@ -11326,36 +11563,49 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			return
 		}
 
+		var groupErr error
 		if formData.NodeGroup == "" {
-			err := unsetL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID)
-			if err != nil {
-				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, "not allowed to modify L4LB node", http.StatusForbidden)
-				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
-				default:
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				logger.Err(err).Msg("l4lb node group: unset failed")
-				return
+			groupErr = unsetL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID)
+			if groupErr == nil {
+				session.AddFlash(fmt.Sprintf("Node group removed from '%s'", l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
 			}
-			session.AddFlash(fmt.Sprintf("Node group removed from '%s'", l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
 		} else {
-			err := setL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID, formData.NodeGroup)
-			if err != nil {
-				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, "not allowed to modify L4LB node", http.StatusForbidden)
-				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, "L4LB node or node group not found", http.StatusNotFound)
-				default:
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				logger.Err(err).Msg("l4lb node group: set failed")
+			groupErr = setL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID, formData.NodeGroup)
+			if groupErr == nil {
+				session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
+			}
+		}
+		if groupErr != nil {
+			var errorMessage string
+			switch {
+			case errors.Is(groupErr, cdnerrors.ErrForbidden):
+				logger.Err(groupErr).Msg("l4lb node group: not authorized")
+				errorMessage = consoleNotAllowedModifyL4LBNode
+			case errors.Is(groupErr, pgx.ErrNoRows):
+				logger.Err(groupErr).Msg("l4lb node group: not found")
+				errorMessage = "L4LB node or node group not found"
+			default:
+				logger.Err(groupErr).Msg("l4lb node group: update failed")
+				errorMessage = "Failed to update node group"
+			}
+			nodes, listErr := selectL4LBNodeListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg(consoleL4LBNodeGroupsReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render L4LB nodes page with group error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
 		}
 
 		err := session.Save(r, w)
@@ -11396,7 +11646,7 @@ func consoleNodeGroupsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, flashMessageStrings))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render node groups page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -11423,21 +11673,33 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 
 		err := deleteNodeGroup(ctx, dbc, ad, nodeGroupNameOrID)
 		if err != nil {
+			var errorMessage string
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				logger.Err(err).Msg("node groups console: not authorized to delete node group")
-				http.Error(w, "not allowed to delete node group", http.StatusForbidden)
+				errorMessage = "Not allowed to delete node group"
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("node groups console: node group not found")
-				http.Error(w, nodeGroupNotFound, http.StatusNotFound)
+				errorMessage = "Node group not found"
 			default:
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
 					logger.Err(err).Msg("node group deletion failed: nodes may still be assigned")
-					http.Error(w, "Cannot delete node group: nodes are still assigned to it", http.StatusConflict)
-					return
+					errorMessage = "Cannot delete node group: nodes are still assigned to it"
+				} else {
+					logger.Err(err).Msg("node groups console: deletion failed")
+					errorMessage = "Node group deletion failed"
 				}
-				logger.Err(err).Msg("node groups console: deletion failed")
+			}
+			nodeGroups, listErr := selectNodeGroups(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg("node groups console: unable to fetch node group list for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render node groups page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
 			return

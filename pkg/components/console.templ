@@ -188,8 +188,11 @@ templ flashMessagesComponent(flashMessages []string) {
 	}
 }
 
-templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string) {
+templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag string, tagSeparator string, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(domains) == 0 {
 		<article class="empty-state">
 			<p>No domains added yet</p>
@@ -236,8 +239,11 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 	}
 }
 
-templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCredentialSafe, flashMessages []string, tokenURL *url.URL, serverURL *url.URL) {
+templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCredentialSafe, flashMessages []string, tokenURL *url.URL, serverURL *url.URL, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(orgClientCreds) == 0 {
 		<article class="empty-state">
 			<p>No API tokens added yet</p>
@@ -292,8 +298,11 @@ templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCreden
 	</div>
 }
 
-templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []string) {
+templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(services) == 0 {
 		<article class="empty-state">
 			<p>No services created yet</p>
@@ -900,8 +909,11 @@ templ LoginPage(returnTo string, loginFailed bool) {
 	</html>
 }
 
-templ CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+templ CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(nodes) == 0 {
 		<article class="empty-state">
 			<p>No cache nodes added yet</p>
@@ -1025,8 +1037,11 @@ templ EditCacheNodeContent(nodeName string, formData CacheNodeFormData) {
 	</form>
 }
 
-templ L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+templ L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.NodeGroup, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(nodes) == 0 {
 		<article class="empty-state">
 			<p>No L4LB nodes added yet</p>
@@ -1150,8 +1165,11 @@ templ EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) {
 	</form>
 }
 
-templ NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string) {
+templ NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(nodeGroups) == 0 {
 		<article class="empty-state">
 			<p>No node groups added yet</p>
@@ -1229,7 +1247,9 @@ templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
 
 templ OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
-	<span class="error-text">{ errorMessage }</span>
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
 	if len(orgs) == 0 {
 		<article class="empty-state">
 			<p>No organizations added yet</p>
