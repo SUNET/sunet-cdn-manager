@@ -28,7 +28,7 @@ type AuthData struct {
 // Types that can be shared across the other packages
 type Org struct {
 	ID               pgtype.UUID `json:"id" doc:"ID of organization, UUIDv4"`
-	Name             string      `json:"name" example:"organization 1" doc:"name of organization"`
+	Name             string      `json:"name" example:"my-org" doc:"name of organization"`
 	ServiceQuota     int64       `json:"service_quota" example:"1" doc:"maximum number of services allowed"`
 	DomainQuota      int64       `json:"domain_quota" example:"5" doc:"maximum number of domains allowed"`
 	ClientTokenQuota int64       `json:"client_token_quota" example:"10" doc:"maximum number of client tokens allowed"`
@@ -78,7 +78,7 @@ type OrgClientRegistrationTokenReEncryptResult struct {
 
 type Service struct {
 	ID            pgtype.UUID `json:"id" doc:"ID of service"`
-	Name          string      `json:"name" example:"service 1" doc:"name of service"`
+	Name          string      `json:"name" example:"my-service" doc:"name of service"`
 	OrgID         pgtype.UUID `json:"org_id" doc:"ID of related organization"`
 	OrgName       string      `json:"org_name" doc:"Name of related organization"`
 	UIDRangeFirst int64       `json:"uid_range_first" doc:"First process UID allocated to this service" db:"uid_range_first"`
