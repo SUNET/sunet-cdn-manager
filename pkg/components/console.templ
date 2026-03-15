@@ -1348,3 +1348,9 @@ templ EditOrgContent(orgName string, formData OrgFormData) {
 		<button type="submit">Save changes</button>
 	</form>
 }
+
+templ ConsoleErrorContent(errorMessage string) {
+	<article aria-label="Error">
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	</article>
+}

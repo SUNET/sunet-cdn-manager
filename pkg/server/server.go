@@ -135,6 +135,7 @@ const (
 	consoleNotAllowedDeleteDomain    = "Not allowed to delete domain"
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
 	consoleOrgNotFound               = "Organization not found"
+	consoleNodeGroupNotFound         = "Node group not found"
 	consoleNeedOrgMembershipMsg      = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
@@ -330,6 +331,10 @@ const (
 	consoleNodeGroupsReRenderErr     = "cache nodes console: unable to fetch node groups for re-render"
 	consoleL4LBNodeListReRenderErr   = "l4lb nodes console: unable to fetch L4LB node list for re-render"
 	consoleL4LBNodeGroupsReRenderErr = "l4lb nodes console: unable to fetch node groups for re-render"
+	consoleDashboardRenderErr        = "unable to render dashboard error page"
+	consoleCreateAPITokenRenderErr   = "unable to render create api token error page"
+	consoleCreateDomainRenderErr     = "unable to render create domain error page"
+	consoleCreateServiceRenderErr    = "unable to render create service error page"
 )
 
 func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
@@ -531,6 +536,8 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			return
 		}
 
+		ad := adRef.(cdntypes.AuthData)
+
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
 			logger.Error().Msg(consoleMissingOrgPath)
@@ -541,11 +548,17 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if err != nil {
+					logger.Err(err).Msg(consoleDashboardRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Username == nil {
 			logger.Error().Msg("consoleOrgDashboardHandler: ad.Username is not set")
@@ -558,7 +571,15 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				logger.Err(err).Msg("consoleOrgDashboardHandler: forbidden from looking up dashboard data")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleDashboardRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 			default:
 				logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up dashboard data failed")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -576,7 +597,11 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 		} else if ad.OrgName != nil {
 			if *ad.OrgName != orgIdent.name {
 				logger.Error().Msgf("user is not superuser or belongs to the '%s' org", orgIdent.name)
-				http.Error(w, "invalid organization name", http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleDashboardRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
@@ -587,7 +612,7 @@ func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			}
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belongs to an org")
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -636,7 +661,15 @@ func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("domains console: not authorized to view page")
-				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, "Domains", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg("unable to render domains error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			logger.Err(err).Msg("domains console: database lookup failed")
@@ -712,7 +745,7 @@ func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			logger.Err(err).Msg("consoleDomainDeleteHandler: db request for looking up orgName failed")
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgParam, components.DomainsContent(orgParam, nil, sunetTxtTag, sunetTxtSeparator, nil, consoleOrgNotFound))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render domains page with org error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -805,7 +838,15 @@ func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tok
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden), errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("api tokens console: not authorized to view page")
-				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg("unable to render api tokens error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 			default:
 				logger.Err(err).Msg("api tokens console: database lookup failed")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -881,7 +922,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 			logger.Err(err).Msg("consoleAPITokenDeleteHandler: db request for looking up orgName failed")
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgParam, components.APITokensContent(orgParam, nil, nil, tokenURL, serverURL, consoleOrgNotFound))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render api-tokens page with org error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -991,7 +1032,15 @@ func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
-			logger.Err(err).Msg("db request for looking up orgName failed")
+			logger.Err(err).Msg("consoleCreateAPITokenHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -999,12 +1048,20 @@ func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 		if !ad.Superuser {
 			if ad.OrgName == nil {
 				logger.Error().Msg("consoleCreateAPITokenHandler: not member of org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			if *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleCreateAPITokenHandler: not member of correct org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 		}
@@ -1155,7 +1212,7 @@ func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			logger.Err(err).Msg("consoleServiceDeleteHandler: db request for looking up orgName failed")
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgParam, components.ServicesContent(orgParam, nil, nil, consoleOrgNotFound))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render services page with org error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1300,7 +1357,15 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 		if err != nil {
 			if errors.Is(err, cdnerrors.ErrForbidden) {
 				logger.Err(err).Msg("services console: transaction failed with forbidden result")
-				http.Error(w, consoleNeedOrgMembershipMsg, http.StatusForbidden)
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, "Services", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg("unable to render services error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			logger.Err(err).Msg("services console: database lookup failed")
@@ -1357,7 +1422,15 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
-			logger.Err(err).Msg("db request for looking up orgName failed")
+			logger.Err(err).Msg("consoleCreateDomainHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateDomainRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1365,12 +1438,20 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 		if !ad.Superuser {
 			if ad.OrgName == nil {
 				logger.Error().Msg("consoleCreateDomainHandler: not member of org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateDomainRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			if *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleCreateDomainHandler: not member of correct org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateDomainRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 		}
@@ -1494,6 +1575,14 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleCreateServiceHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1501,12 +1590,20 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 		if !ad.Superuser {
 			if ad.OrgName == nil {
 				logger.Error().Msg("consoleCreateServiceHandler: not member of org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 			if *ad.OrgName != orgIdent.name {
 				logger.Error().Msg("consoleCreateServiceHandler: not member of correct org")
-				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg(consoleCreateServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 		}
@@ -1548,17 +1645,13 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 
 			_, err = insertService(ctx, logger, dbc, formData.Name, &orgIdent.name, ad)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
-					if err != nil {
-						logger.Err(err).Msg("service already exists: unable to render service creation page")
-						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-						return
-					}
+				logger.Err(err).Msg("unable to insert service")
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service creation page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
-				logger.Err(err).Msg("unable to insert service")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 
@@ -1792,8 +1885,27 @@ func consoleServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 
 		serviceVersions, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
 		if err != nil {
-			logger.Error().Msg("console: unable to select service versions")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			logger.Err(err).Msg("console: unable to select service versions")
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			case errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent("Service not found"))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			default:
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -1855,7 +1967,26 @@ func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 		svc, err := getServiceVersionConfig(ctx, dbc, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
 			logger.Err(err).Msg("console: unable to select service version config")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				sidebarOrg := ""
+				if ad.OrgName != nil {
+					sidebarOrg = *ad.OrgName
+				}
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service version error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			case errors.Is(err, cdnerrors.ErrUnprocessable):
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent("Service version not found"))
+				if err != nil {
+					logger.Err(err).Msg("unable to render service version error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			default:
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -1988,6 +2119,21 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 
 		vclSK := cdntypes.NewVclStepKeys()
 
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if err != nil {
+					logger.Err(err).Msg("unable to render create service version error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		domains, err := selectDomains(ctx, dbc, ad, orgName)
 		if err != nil {
 			logger.Error().Msg("console: unable to lookup domains for service version creation")
@@ -1995,23 +2141,16 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
-		if err != nil {
-			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up orgName failed")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
-			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: looking up serviceName failed")
+			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up serviceName failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		originGroups, err := selectOriginGroups(ctx, dbc, ad, serviceIdent.name, orgIdent.name)
 		if err != nil {
-			logger.Err(err).Msg("consoleActivateServiceVersionHandler GET: unable to select service groups")
+			logger.Err(err).Msg("consoleCreateServiceVersionHandler: unable to select service groups")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -10493,9 +10632,17 @@ func consoleEditOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 				logger.Err(err).Msg("edit org: unable to fetch organization")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit org error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				case errors.Is(err, cdnerrors.ErrNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
-					http.Error(w, orgNotFound, http.StatusNotFound)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleOrgNotFound))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit org error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				default:
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
@@ -10855,9 +11002,17 @@ func consoleEditCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 				logger.Err(err).Msg("edit cache node: unable to fetch cache node")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNotAllowedModifyCacheNode))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit cache node error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, cacheNodeNotFound, http.StatusNotFound)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleCacheNodeNotFound))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit cache node error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				default:
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
@@ -11363,9 +11518,17 @@ func consoleEditL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				logger.Err(err).Msg("edit l4lb node: unable to fetch l4lb node")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNotAllowedModifyL4LBNode))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit l4lb node error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				case errors.Is(err, pgx.ErrNoRows):
-					http.Error(w, l4lbNodeNotFound, http.StatusNotFound)
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleL4LBNodeNotFound))
+					if err != nil {
+						logger.Err(err).Msg("unable to render edit l4lb node error page")
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
 				default:
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
@@ -11696,7 +11859,7 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 				errorMessage = "Not allowed to delete node group"
 			case errors.Is(err, cdnerrors.ErrNotFound):
 				logger.Err(err).Msg("node groups console: node group not found")
-				errorMessage = "Node group not found"
+				errorMessage = consoleNodeGroupNotFound
 			default:
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
@@ -11846,7 +12009,11 @@ func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			nodeGroup, err := selectNodeGroup(ctx, dbc, ad, nodeGroupNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("edit node group: unable to fetch node group")
-				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNodeGroupNotFound))
+				if err != nil {
+					logger.Err(err).Msg("unable to render edit node group error page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 
@@ -11910,7 +12077,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					groupFormData.Errors.ServerError = "Not allowed to modify node group"
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					groupFormData.Errors.ServerError = "Node group not found"
+					groupFormData.Errors.ServerError = consoleNodeGroupNotFound
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					groupFormData.Errors.Name = consoleAlreadyExists
 				default:

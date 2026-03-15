@@ -8487,3 +8487,170 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 		})
 	}
 }
+
+func TestConsolePhase2ErrorRendering(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		username         string
+		password         string
+		method           string
+		path             string
+		expectedStatus   int
+		expectedErrorMsg string
+	}{
+		{
+			description:      "forbidden on domains list page for non-member",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           "GET",
+			path:             "/console/org/org2/domains",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+		},
+		{
+			description:      "forbidden on services list page for non-member",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           "GET",
+			path:             "/console/org/org2/services",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+		},
+		{
+			description:      "forbidden on api tokens list page for non-member",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           "GET",
+			path:             "/console/org/org2/api-tokens",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+		},
+		{
+			description:      "org not found on dashboard",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "GET",
+			path:             "/console/org/nonexistent-org",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleOrgNotFound,
+		},
+		{
+			description:      "org not found on create domain page",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "GET",
+			path:             "/console/org/nonexistent-org/create/domain",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleOrgNotFound,
+		},
+		{
+			description:      "org not found on edit org page",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "GET",
+			path:             "/console/superuser/orgs/nonexistent-org/edit",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleOrgNotFound,
+		},
+		{
+			description:      "cache node not found on edit page",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "GET",
+			path:             "/console/superuser/cache-nodes/nonexistent/edit",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleCacheNodeNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			client := &http.Client{Jar: jar}
+
+			form := url.Values{
+				"username": {test.username},
+				"password": {test.password},
+			}
+
+			u, err := url.Parse(ts.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			loginResp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer loginResp.Body.Close()
+
+			if loginResp.StatusCode != http.StatusOK {
+				t.Fatalf("unexpected console login status code: %d", loginResp.StatusCode)
+			}
+
+			cookieFound := false
+			for _, c := range client.Jar.Cookies(u) {
+				if c.Name == cookieName {
+					cookieFound = true
+					break
+				}
+			}
+			if !cookieFound {
+				t.Fatal("login failed: session cookie is missing")
+			}
+
+			req, err = http.NewRequest(test.method, ts.URL+test.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				body, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				t.Fatalf("unexpected status code: got %d, want %d (%s)", resp.StatusCode, test.expectedStatus, string(body))
+			}
+
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to parse response HTML: %v", err)
+			}
+
+			errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+			if !strings.Contains(errorText, test.expectedErrorMsg) {
+				t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+			}
+		})
+	}
+}
