@@ -8654,3 +8654,639 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRoles(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+	}{
+		{
+			description:    "superuser can list roles",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			description:    "non-superuser gets 403",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/roles", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			}
+
+			if test.expectedStatus == http.StatusOK {
+				var roles []cdntypes.Role
+				err := json.NewDecoder(resp.Body).Decode(&roles)
+				if err != nil {
+					t.Fatalf("unable to decode roles response: %v", err)
+				}
+				if len(roles) == 0 {
+					t.Fatal("expected at least one role")
+				}
+				roleNames := []string{}
+				for _, r := range roles {
+					roleNames = append(roleNames, r.Name)
+				}
+				for _, expected := range []string{"admin", "user", "node"} {
+					if !slices.Contains(roleNames, expected) {
+						t.Fatalf("expected role %q not found in %v", expected, roleNames)
+					}
+				}
+			}
+		})
+	}
+}
+
+// consoleLogin is a helper that performs console login and returns an authenticated client.
+func consoleLogin(t *testing.T, tsURL string, username, password string) *http.Client {
+	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Jar: jar}
+
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+
+	u, err := url.Parse(tsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest("POST", tsURL+"/auth/login", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	loginResp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResp.Body.Close()
+
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected console login status code: %d", loginResp.StatusCode)
+	}
+
+	cookieFound := false
+	for _, c := range client.Jar.Cookies(u) {
+		if c.Name == cookieName {
+			cookieFound = true
+			break
+		}
+	}
+	if !cookieFound {
+		t.Fatal("login failed: session cookie is missing")
+	}
+
+	return client
+}
+
+func TestConsoleUsersList(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		expectUsers    bool
+	}{
+		{
+			description:    "superuser can list users",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusOK,
+			expectUsers:    true,
+		},
+		{
+			description:    "non-superuser gets 403",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			expectUsers:    false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client := consoleLogin(t, ts.URL, test.username, test.password)
+
+			req, err := http.NewRequest("GET", ts.URL+"/console/superuser/users", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				t.Fatalf("unexpected status code: %d", resp.StatusCode)
+			}
+
+			if test.expectUsers {
+				doc, err := goquery.NewDocumentFromReader(resp.Body)
+				if err != nil {
+					t.Fatalf("failed to parse response HTML: %v", err)
+				}
+
+				rows := doc.Find("main #contents table tbody tr")
+				if rows.Length() == 0 {
+					t.Fatal("expected at least one user in the table")
+				}
+
+				adminFound := false
+				rows.Each(func(_ int, s *goquery.Selection) {
+					name := strings.TrimSpace(s.Find("td").First().Text())
+					if name == "admin" {
+						adminFound = true
+					}
+				})
+				if !adminFound {
+					t.Fatal("admin user not found in user list")
+				}
+			}
+		})
+	}
+}
+
+func TestConsoleCreateUser(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		formData         url.Values
+		expectRedirect   bool
+		expectedErrorMsg string
+	}{
+		{
+			description: "successful user creation",
+			formData: url.Values{
+				"name":             {"test-console-user"},
+				"role":             {"user"},
+				"org":              {"org1"},
+				"password":         {"testpassword12345"},
+				"confirm-password": {"testpassword12345"},
+			},
+			expectRedirect: true,
+		},
+		{
+			description: "password mismatch",
+			formData: url.Values{
+				"name":             {"test-mismatch-user"},
+				"role":             {"user"},
+				"org":              {cdntypes.OrgNotSelected},
+				"password":         {"testpassword12345"},
+				"confirm-password": {"different12345678"},
+			},
+			expectedErrorMsg: consolePasswordMismatch,
+		},
+		{
+			description: "password too short",
+			formData: url.Values{
+				"name":             {"test-short-pw-user"},
+				"role":             {"user"},
+				"org":              {cdntypes.OrgNotSelected},
+				"password":         {"short"},
+				"confirm-password": {"short"},
+			},
+			expectedErrorMsg: "Password must be at least 15 characters",
+		},
+		{
+			description: "duplicate name",
+			formData: url.Values{
+				"name":             {"admin"},
+				"role":             {"admin"},
+				"org":              {cdntypes.OrgNotSelected},
+				"password":         {"testpassword12345"},
+				"confirm-password": {"testpassword12345"},
+			},
+			expectedErrorMsg: consoleAlreadyExists,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/user", strings.NewReader(test.formData.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if test.expectRedirect {
+				if resp.StatusCode != http.StatusSeeOther {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected redirect (303), got %d (%s)", resp.StatusCode, string(body))
+				}
+				location := resp.Header.Get("Location")
+				if !strings.Contains(location, "/console/superuser/users") {
+					t.Fatalf("expected redirect to users list, got %s", location)
+				}
+			} else {
+				if resp.StatusCode != http.StatusOK {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+				}
+
+				if test.expectedErrorMsg != "" {
+					doc, err := goquery.NewDocumentFromReader(resp.Body)
+					if err != nil {
+						t.Fatalf("failed to parse response HTML: %v", err)
+					}
+					errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+					if !strings.Contains(errorText, test.expectedErrorMsg) {
+						t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestConsoleEditUser(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		method           string
+		path             string
+		formData         url.Values
+		expectRedirect   bool
+		expectedErrorMsg string
+	}{
+		{
+			description: "GET edit form for existing user",
+			method:      "GET",
+			path:        "/console/superuser/users/username1/edit",
+		},
+		{
+			description:      "GET edit form for non-existent user",
+			method:           "GET",
+			path:             "/console/superuser/users/nonexistent-user/edit",
+			expectedErrorMsg: consoleUserNotFound,
+		},
+		{
+			description: "POST edit to change user role",
+			method:      "POST",
+			path:        "/console/superuser/users/username6/edit",
+			formData: url.Values{
+				"name": {"username6"},
+				"role": {"admin"},
+				"org":  {cdntypes.OrgNotSelected},
+			},
+			expectRedirect: true,
+		},
+		{
+			description: "POST edit non-existent user",
+			method:      "POST",
+			path:        "/console/superuser/users/nonexistent-user/edit",
+			formData: url.Values{
+				"name": {"nonexistent-user"},
+				"role": {"user"},
+				"org":  {cdntypes.OrgNotSelected},
+			},
+			expectedErrorMsg: consoleUserNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+
+			var reqBody io.Reader
+			if test.formData != nil {
+				reqBody = strings.NewReader(test.formData.Encode())
+			}
+
+			req, err := http.NewRequest(test.method, ts.URL+test.path, reqBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			if test.formData != nil {
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if test.expectRedirect {
+				if resp.StatusCode != http.StatusSeeOther {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected redirect (303), got %d (%s)", resp.StatusCode, string(body))
+				}
+			} else {
+				if resp.StatusCode != http.StatusOK {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("unexpected status code: got %d (%s)", resp.StatusCode, string(body))
+				}
+
+				if test.expectedErrorMsg != "" {
+					doc, err := goquery.NewDocumentFromReader(resp.Body)
+					if err != nil {
+						t.Fatalf("failed to parse response HTML: %v", err)
+					}
+					pageText := strings.TrimSpace(doc.Find("main").Text())
+					if !strings.Contains(pageText, test.expectedErrorMsg) {
+						t.Fatalf("expected page to contain %q, got %q", test.expectedErrorMsg, pageText)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestConsoleDeleteUser(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		userToDelete     string
+		expectRedirect   bool
+		expectedErrorMsg string
+	}{
+		{
+			description:      "self-delete is prevented",
+			userToDelete:     "admin",
+			expectedErrorMsg: consoleNotAllowedDeleteSelf,
+		},
+		{
+			description:      "delete non-existent user shows error",
+			userToDelete:     "nonexistent-user",
+			expectedErrorMsg: consoleUserNotFound,
+		},
+		{
+			description:    "successful user deletion",
+			userToDelete:   "username5-no-pw",
+			expectRedirect: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+
+			req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/users/"+test.userToDelete, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if test.expectRedirect {
+				if resp.StatusCode != http.StatusSeeOther {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected redirect (303), got %d (%s)", resp.StatusCode, string(body))
+				}
+			} else {
+				if resp.StatusCode != http.StatusOK {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+				}
+
+				if test.expectedErrorMsg != "" {
+					doc, err := goquery.NewDocumentFromReader(resp.Body)
+					if err != nil {
+						t.Fatalf("failed to parse response HTML: %v", err)
+					}
+					errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+					if !strings.Contains(errorText, test.expectedErrorMsg) {
+						t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestConsoleResetPassword(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	tests := []struct {
+		description      string
+		userToReset      string
+		formData         url.Values
+		expectRedirect   bool
+		expectedErrorMsg string
+	}{
+		{
+			description: "successful password reset for local user",
+			userToReset: "username1",
+			formData: url.Values{
+				"password":         {"newpassword12345"},
+				"confirm-password": {"newpassword12345"},
+			},
+			expectRedirect: true,
+		},
+		{
+			description: "password mismatch on reset",
+			userToReset: "username1",
+			formData: url.Values{
+				"password":         {"newpassword12345"},
+				"confirm-password": {"differentpass1234"},
+			},
+			expectedErrorMsg: consolePasswordMismatch,
+		},
+		{
+			description: "password too short on reset",
+			userToReset: "username1",
+			formData: url.Values{
+				"password":         {"short"},
+				"confirm-password": {"short"},
+			},
+			expectedErrorMsg: "Password must be at least 15 characters",
+		},
+		{
+			description: "reset password for non-existent user",
+			userToReset: "nonexistent-user",
+			formData: url.Values{
+				"password":         {"newpassword12345"},
+				"confirm-password": {"newpassword12345"},
+			},
+			expectedErrorMsg: consoleUserNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+
+			req, err := http.NewRequest("POST", ts.URL+"/console/superuser/users/"+test.userToReset+"/reset-password", strings.NewReader(test.formData.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if test.expectRedirect {
+				if resp.StatusCode != http.StatusSeeOther {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected redirect (303), got %d (%s)", resp.StatusCode, string(body))
+				}
+			} else {
+				if resp.StatusCode != http.StatusOK {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("unexpected status code: got %d (%s)", resp.StatusCode, string(body))
+				}
+
+				if test.expectedErrorMsg != "" {
+					doc, err := goquery.NewDocumentFromReader(resp.Body)
+					if err != nil {
+						t.Fatalf("failed to parse response HTML: %v", err)
+					}
+					errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+					if !strings.Contains(errorText, test.expectedErrorMsg) {
+						t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+					}
+				}
+			}
+		})
+	}
+}
