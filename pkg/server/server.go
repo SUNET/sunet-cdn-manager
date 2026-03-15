@@ -88,6 +88,7 @@ var flashMessageKeys = struct {
 	l4lbNodes  string
 	nodeGroups string
 	orgs       string
+	users      string
 }{
 	apiTokens:  "_flash_api_tokens",
 	domains:    "_flash_domains",
@@ -96,6 +97,7 @@ var flashMessageKeys = struct {
 	l4lbNodes:  "_flash_l4lb_nodes",
 	nodeGroups: "_flash_node_groups",
 	orgs:       "_flash_orgs",
+	users:      "_flash_users",
 }
 
 const (
@@ -114,6 +116,7 @@ const (
 	consoleSuperuserL4LBNodes        = "/console/superuser/l4lb-nodes"
 	consoleSuperuserNodeGroups       = "/console/superuser/node-groups"
 	consoleSuperuserOrgs             = "/console/superuser/orgs"
+	consoleSuperuserUsers            = "/console/superuser/users"
 	apiV1OrgPath                     = "/v1/orgs/{org}"
 	orgNotFound                      = "organization not found"
 	api403String                     = "not allowed to access resource"
@@ -136,6 +139,18 @@ const (
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
 	consoleOrgNotFound               = "Organization not found"
 	consoleNodeGroupNotFound         = "Node group not found"
+	consoleUsersTitle                = "Users"
+	consoleUserNotFound              = "The specified user was not found."
+	consoleNotAllowedDeleteSelf      = "You cannot delete your own account."
+	consolePasswordLocalOnly         = "Password management is only available for local users."
+	consolePasswordMismatch          = "Passwords do not match."
+	consolePasswordTooShort          = "Password must be at least 15 characters."
+	consolePasswordTooLong           = "Password must be at most 64 characters."
+	consolePasswordConfirmRequired   = "Please confirm the password." // #nosec G101 -- User-facing validation message, not a credential
+	consolePasswordResetFailed       = "Password reset failed."       // #nosec G101 -- User-facing error message, not a credential
+	consoleCreateUserRenderErr       = "unable to render create user page"
+	consoleEditUserRenderErr         = "unable to render edit user page"
+	consoleUsersRenderErr            = "unable to render users page"
 	consoleNeedOrgMembershipMsg      = "not allowed to view this page, you need to be a member of an organization"
 
 	// Used for TXT domain verification
@@ -153,7 +168,7 @@ const (
 	nodeRole = "node"
 
 	// Some default auth providers
-	localAuthProvider    = "local"
+	localAuthProvider    = cdntypes.LocalAuthProvider
 	keycloakAuthProvider = "keycloak"
 
 	// Limit console form posting to 1 MiB
@@ -3355,7 +3370,10 @@ func selectUser(ctx context.Context, dbPool *pgxpool.Pool, userNameOrID string, 
 	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
 		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("selectUser: unable to look up user identifier: %w", err)
 		}
 
 		if !ad.Superuser && ad.UserID == nil {
@@ -3492,7 +3510,10 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
 		if err != nil {
-			return fmt.Errorf("unable to parse user for local-password: %w", err)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("setLocalPassword: unable to look up user identifier: %w", err)
 		}
 
 		// We only allow the setting of passwords for users using the "local" auth provider
@@ -3511,12 +3532,12 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 		}
 
 		if authProviderName != localAuthProvider {
-			return fmt.Errorf("ignoring local-password request for non-local user")
+			return cdnerrors.ErrNotLocalUser
 		}
 
-		// A normal user most supply the old password
+		// A normal user must supply the old password
 		if !ad.Superuser && oldPassword == "" {
-			return errors.New("old password required for non-superusers")
+			return cdnerrors.ErrOldPasswordRequired
 		}
 
 		// ... and finally, verify that the password supplied by a normal user actually is correct.
@@ -3867,7 +3888,7 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	return l4lbNodeID, nil
 }
 
-func createUser(ctx context.Context, dbc *dbConn, name string, role string, org *string, ad cdntypes.AuthData) (user, error) {
+func createUser(ctx context.Context, dbc *dbConn, name string, role string, org *string, a2Data *argon2Data, ad cdntypes.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -3897,12 +3918,26 @@ func createUser(ctx context.Context, dbc *dbConn, name string, role string, org 
 
 		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, localAuthProvider)
 		if err != nil {
-			return fmt.Errorf("unble to resolve authProvider name to ID: %w", err)
+			return fmt.Errorf("unable to resolve authProvider name to ID: %w", err)
 		}
 
-		userID, err = insertUserTx(dbCtx, tx, name, &orgIdent.id, roleIdent.id, authProviderID)
+		var orgID *pgtype.UUID
+		if org != nil {
+			orgID = &orgIdent.id
+		}
+
+		userID, err = insertUserTx(dbCtx, tx, name, orgID, roleIdent.id, authProviderID)
 		if err != nil {
 			return fmt.Errorf("createUser: INSERT failed: %w", err)
+		}
+
+		// When provided, set password atomically with user creation so
+		// the operation either fully succeeds or fully rolls back.
+		if a2Data != nil {
+			_, err = upsertArgon2Tx(dbCtx, tx, userID, *a2Data)
+			if err != nil {
+				return fmt.Errorf("createUser: password set failed: %w", err)
+			}
 		}
 
 		return nil
@@ -3911,11 +3946,16 @@ func createUser(ctx context.Context, dbc *dbConn, name string, role string, org 
 		return user{}, fmt.Errorf("createUser: transaction failed: %w", err)
 	}
 
+	var orgID *pgtype.UUID
+	if org != nil {
+		orgID = &orgIdent.id
+	}
+
 	return user{
 		ID:     userID,
 		Name:   name,
 		RoleID: roleIdent.id,
-		OrgID:  &orgIdent.id,
+		OrgID:  orgID,
 	}, nil
 }
 
@@ -3931,16 +3971,22 @@ func deleteUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdn
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
 		if err != nil {
-			logger.Err(err).Msg("unable to look up user identifier")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteUser: unable to look up user identifier: %w", err)
 		}
 
-		// A user can not delete itself to protect against locking
-		// yourself out of the system. For now this also locks out
-		// requests from org client credentials (API tokens) since
-		// ad.UserID is nil on those.
-		if ad.UserID == nil || *ad.UserID == userIdent.id {
+		// Org client credentials (API tokens) have no UserID and
+		// are not allowed to delete users.
+		if ad.UserID == nil {
 			return cdnerrors.ErrForbidden
+		}
+
+		// A user cannot delete itself to protect against locking
+		// yourself out of the system.
+		if *ad.UserID == userIdent.id {
+			return cdnerrors.ErrSelfDelete
 		}
 
 		err = tx.QueryRow(dbCtx, "DELETE FROM users WHERE id = $1 RETURNING id", userIdent.id).Scan(&userID)
@@ -3962,6 +4008,15 @@ func insertUserTx(ctx context.Context, tx pgx.Tx, name string, orgID *pgtype.UUI
 	var userID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
+			}
+		}
 		return pgtype.UUID{}, fmt.Errorf("INSERT user failed: %w", err)
 	}
 
@@ -3986,13 +4041,22 @@ func authProviderNameToIDTx(ctx context.Context, tx pgx.Tx, name string) (pgtype
 func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
 	_, err := tx.Exec(ctx, "UPDATE users SET name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return cdnerrors.ErrCheckViolation
+			}
+		}
 		return fmt.Errorf("unable to update user with id '%s': %w", userID, err)
 	}
 
 	return nil
 }
 
-func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID string, org *string, role string) (user, error) {
+func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID string, name string, org *string, role string) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -4004,6 +4068,9 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		userIdent, err := newUserIdentifier(dbCtx, tx, nameOrID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
 			return fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
 		}
 
@@ -4022,13 +4089,29 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 			orgID = &orgIdent.id
 		}
 
-		err = updateUserTx(dbCtx, tx, userIdent.id, userIdent.name, orgID, roleIdent.id)
+		// Non-local users (e.g. Keycloak) cannot be renamed — their
+		// name is managed by the identity provider.
+		updateName := name
+		if updateName == "" || updateName == userIdent.name {
+			updateName = userIdent.name
+		} else {
+			var authProviderName string
+			err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
+			if err != nil {
+				return fmt.Errorf("updateUser: unable to look up auth provider: %w", err)
+			}
+			if authProviderName != localAuthProvider {
+				return cdnerrors.ErrNotLocalUser
+			}
+		}
+
+		err = updateUserTx(dbCtx, tx, userIdent.id, updateName, orgID, roleIdent.id)
 		if err != nil {
 			return fmt.Errorf("update failed: %w", err)
 		}
 
 		u.ID = userIdent.id
-		u.Name = userIdent.name
+		u.Name = updateName
 		u.RoleID = roleIdent.id
 		u.OrgID = orgID
 
@@ -4039,6 +4122,89 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 	}
 
 	return u, nil
+}
+
+func selectUserListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.UserListItem, error) {
+	if !ad.Superuser {
+		return nil, cdnerrors.ErrForbidden
+	}
+
+	rows, err := dbc.dbPool.Query(ctx,
+		`SELECT u.id, u.name, r.name AS role_name,
+			o.name AS org_name, ap.name AS auth_provider
+		FROM users u
+		JOIN roles r ON u.role_id = r.id
+		JOIN auth_providers ap ON u.auth_provider_id = ap.id
+		LEFT JOIN orgs o ON u.org_id = o.id
+		ORDER BY u.name`)
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for user list items: %w", err)
+	}
+
+	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.UserListItem])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for user list items: %w", err)
+	}
+
+	return users, nil
+}
+
+func selectRoles(ctx context.Context, dbc *dbConn) ([]cdntypes.Role, error) {
+	rows, err := dbc.dbPool.Query(ctx, "SELECT id, name, superuser FROM roles ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("unable to query for roles: %w", err)
+	}
+
+	roles, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.Role])
+	if err != nil {
+		return nil, fmt.Errorf("unable to CollectRows for roles: %w", err)
+	}
+
+	return roles, nil
+}
+
+func selectUserForEdit(ctx context.Context, dbc *dbConn, userNameOrID string, ad cdntypes.AuthData) (cdntypes.UserEditData, error) {
+	if !ad.Superuser {
+		return cdntypes.UserEditData{}, cdnerrors.ErrForbidden
+	}
+
+	var userData cdntypes.UserEditData
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("selectUserForEdit: unable to parse user identifier: %w", err)
+		}
+
+		err = tx.QueryRow(ctx,
+			`SELECT u.id, u.name, r.name AS role_name,
+				o.name AS org_name, ap.name AS auth_provider
+			FROM users u
+			JOIN roles r ON u.role_id = r.id
+			JOIN auth_providers ap ON u.auth_provider_id = ap.id
+			LEFT JOIN orgs o ON u.org_id = o.id
+			WHERE u.id = $1`, userIdent.id).Scan(
+			&userData.ID, &userData.Name, &userData.RoleName,
+			&userData.OrgName, &userData.AuthProvider)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("selectUserForEdit: query failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, cdnerrors.ErrNotFound) {
+			return cdntypes.UserEditData{}, err
+		}
+		return cdntypes.UserEditData{}, fmt.Errorf("selectUserForEdit: transaction failed: %w", err)
+	}
+
+	return userData, nil
 }
 
 func selectOrgs(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.Org, error) {
@@ -7506,6 +7672,13 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Post("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc, cookieStore))
 		r.Get("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
 		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
+		r.Get("/superuser/users", consoleUsersHandler(dbc, cookieStore))
+		r.Delete("/superuser/users/{user}", consoleUserDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
+		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
+		r.Get("/superuser/users/{user}/edit", consoleEditUserHandler(dbc, cookieStore))
+		r.Post("/superuser/users/{user}/edit", consoleEditUserHandler(dbc, cookieStore))
+		r.Post("/superuser/users/{user}/reset-password", consoleUserResetPasswordHandler(dbc, cookieStore, argon2Mutex, loginCache))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -7813,13 +7986,21 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				user, err := createUser(ctx, dbc, input.Body.Name, input.Body.Role, input.Body.Org, ad)
+				user, err := createUser(ctx, dbc, input.Body.Name, input.Body.Role, input.Body.Org, nil, ad)
 				if err != nil {
-					if errors.Is(err, cdnerrors.ErrForbidden) {
+					switch {
+					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.Is(err, cdnerrors.ErrAlreadyExists):
+						return nil, huma.Error409Conflict("user already exists")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid user data")
+					case errors.Is(err, pgx.ErrNoRows):
+						return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
+					default:
+						logger.Err(err).Msg("unable to add user")
+						return nil, err
 					}
-					logger.Err(err).Msg("unable to add user")
-					return nil, err
 				}
 				return &userOutput{
 					Body: user,
@@ -7843,10 +8024,20 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 			_, err := setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrBadOldPassword) {
+				switch {
+				case errors.Is(err, cdnerrors.ErrOldPasswordRequired):
+					return nil, huma.Error400BadRequest("old password is required for non-superusers")
+				case errors.Is(err, cdnerrors.ErrBadOldPassword):
 					return nil, huma.Error400BadRequest("old password is not correct")
+				case errors.Is(err, cdnerrors.ErrNotLocalUser):
+					return nil, huma.Error422UnprocessableEntity("password management is only available for local users")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(userNotFound)
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				default:
+					return nil, fmt.Errorf("unable to set password: %w", err)
 				}
-				return nil, fmt.Errorf("unable to set password: %w", err)
 			}
 			return nil, nil
 		})
@@ -7859,15 +8050,25 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from user PUT handler")
 			}
 
-			user, err := updateUser(ctx, dbc, ad, input.User, input.Body.Org, input.Body.Role)
+			user, err := updateUser(ctx, dbc, ad, input.User, input.Body.Name, input.Body.Org, input.Body.Role)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, cdnerrors.ErrNotFound) {
+				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(userNotFound)
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					return nil, huma.Error409Conflict("user already exists")
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					return nil, huma.Error422UnprocessableEntity("invalid user data")
+				case errors.Is(err, cdnerrors.ErrNotLocalUser):
+					return nil, huma.Error422UnprocessableEntity("renaming is only available for local users")
+				case errors.Is(err, pgx.ErrNoRows):
+					return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
+				default:
+					logger.Err(err).Msg("unable to update user")
+					return nil, err
 				}
-				logger.Err(err).Msg("unable to update user")
-				return nil, err
 			}
 			return &userOutput{Body: user}, nil
 		})
@@ -7885,16 +8086,39 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 			_, err := deleteUser(ctx, logger, dbc, ad, input.User)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrNotFound) {
+				switch {
+				case errors.Is(err, cdnerrors.ErrSelfDelete):
+					return nil, huma.Error403Forbidden("users cannot delete themselves")
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(userNotFound)
-				} else if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden("access to this user is not allowed")
+				default:
+					logger.Err(err).Msg("unable to delete user")
+					return nil, err
 				}
-				logger.Err(err).Msg("unable to delete user")
-				return nil, err
 			}
 
 			return nil, nil
+		})
+
+		type rolesOutput struct {
+			Body []cdntypes.Role
+		}
+
+		huma.Get(api, "/v1/roles", func(ctx context.Context, _ *struct{}) (*rolesOutput, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from roles GET handler")
+			}
+			if !ad.Superuser {
+				return nil, huma.Error403Forbidden(api403String)
+			}
+			roles, err := selectRoles(ctx, dbc)
+			if err != nil {
+				return nil, fmt.Errorf("unable to get roles: %w", err)
+			}
+			return &rolesOutput{Body: roles}, nil
 		})
 
 		huma.Get(api, "/v1/orgs", func(ctx context.Context, _ *struct{},
@@ -12104,6 +12328,586 @@ func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
+	}
+}
+
+func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		users, err := selectUserListItems(ctx, dbc, ad)
+		if err != nil {
+			logger.Err(err).Msg("users console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.users)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("users console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sessionSelectedOrg(session), components.UsersContent(users, flashMessageStrings, ""))
+		if err != nil {
+			logger.Err(err).Msg(consoleUsersRenderErr)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		userName := chi.URLParam(r, "user")
+		if userName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		_, err := deleteUser(ctx, logger, dbc, ad, userName)
+		if err != nil {
+			var errorMessage string
+			switch {
+			case errors.Is(err, cdnerrors.ErrSelfDelete):
+				logger.Err(err).Msg("users console: user attempted to delete themselves")
+				errorMessage = consoleNotAllowedDeleteSelf
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("users console: not authorized to delete user")
+				errorMessage = "Not allowed to delete user"
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("users console: user not found")
+				errorMessage = consoleUserNotFound
+			default:
+				logger.Err(err).Msg("users console: deletion failed")
+				errorMessage = "User deletion failed"
+			}
+			users, listErr := selectUserListItems(ctx, dbc, ad)
+			if listErr != nil {
+				logger.Err(listErr).Msg("users console: unable to fetch user list for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sessionSelectedOrg(session), components.UsersContent(users, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg(consoleUsersRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("User '%s' deleted!", userName), flashMessageKeys.users)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserUsers, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, argon2Mutex *sync.Mutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add user"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		renderCreateForm := func(formData components.UserFormData) {
+			roles, rolesErr := selectRoles(ctx, dbc)
+			if rolesErr != nil {
+				logger.Err(rolesErr).Msg("create user: unable to fetch roles")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			orgs, orgsErr := selectOrgs(ctx, dbc, ad)
+			if orgsErr != nil {
+				logger.Err(orgsErr).Msg("create user: unable to fetch orgs")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateUserContent(formData, roles, orgs))
+			if err != nil {
+				logger.Err(err).Msg(consoleCreateUserRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			renderCreateForm(components.UserFormData{})
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-user POST form")
+				return
+			}
+
+			var formFields components.UserFormFields
+			err := schemaDecoder.Decode(&formFields, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-user form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			formData := components.UserFormData{
+				UserFormFields: formFields,
+			}
+
+			err = validate.Struct(formFields)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						formData.Errors.Name = fieldError.Error()
+					case "Role":
+						formData.Errors.Role = fieldError.Error()
+					}
+				}
+				renderCreateForm(formData)
+				return
+			}
+
+			// Validate password via PasswordResetFormFields (carries the validate tags)
+			pwFields := components.PasswordResetFormFields{
+				Password:        formFields.Password,
+				ConfirmPassword: formFields.ConfirmPassword,
+			}
+			err = validate.Struct(pwFields)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Password":
+						if fieldError.Tag() == "max" {
+							formData.Errors.Password = consolePasswordTooLong
+						} else {
+							formData.Errors.Password = consolePasswordTooShort
+						}
+					case "ConfirmPassword":
+						if fieldError.Tag() == "required" {
+							formData.Errors.ConfirmPassword = consolePasswordConfirmRequired
+						} else {
+							formData.Errors.ConfirmPassword = consolePasswordMismatch
+						}
+					}
+				}
+				renderCreateForm(formData)
+				return
+			}
+
+			// Resolve org
+			var org *string
+			if formFields.Org != "" && formFields.Org != cdntypes.OrgNotSelected {
+				org = &formFields.Org
+			}
+
+			// Hash password before the transaction (same pattern as setLocalPassword)
+			a2Data, err := passwordToArgon2(argon2Mutex, formFields.Password)
+			if err != nil {
+				logger.Err(err).Msg("create user: unable to hash password")
+				formData.Errors.ServerError = "User creation failed"
+				renderCreateForm(formData)
+				return
+			}
+
+			_, err = createUser(ctx, dbc, formFields.Name, formFields.Role, org, &a2Data, ad)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					formData.Errors.Name = consoleAlreadyExists
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					formData.Errors.Name = "Invalid user name"
+				case errors.Is(err, pgx.ErrNoRows):
+					formData.Errors.ServerError = "Selected role or organization does not exist"
+				default:
+					formData.Errors.ServerError = "User creation failed"
+				}
+				logger.Err(err).Msg("user creation failed")
+				renderCreateForm(formData)
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("User '%s' created!", formFields.Name), flashMessageKeys.users)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserUsers, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-user handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		userName := chi.URLParam(r, "user")
+		if userName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit user: %s", userName)
+
+		renderEditForm := func(formData components.UserFormData, authProvider string, passwordResetData components.PasswordResetFormData) {
+			roles, rolesErr := selectRoles(ctx, dbc)
+			if rolesErr != nil {
+				logger.Err(rolesErr).Msg("edit user: unable to fetch roles")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			orgs, orgsErr := selectOrgs(ctx, dbc, ad)
+			if orgsErr != nil {
+				logger.Err(orgsErr).Msg("edit user: unable to fetch orgs")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, authProvider, userName, passwordResetData))
+			if err != nil {
+				logger.Err(err).Msg(consoleEditUserRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+			if err != nil {
+				logger.Err(err).Msg("edit user: unable to fetch user")
+				switch {
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+					if renderErr != nil {
+						logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			orgName := ""
+			if userData.OrgName != nil {
+				orgName = *userData.OrgName
+			}
+
+			formData := components.UserFormData{
+				UserFormFields: components.UserFormFields{
+					Name: userData.Name,
+					Role: userData.RoleName,
+					Org:  orgName,
+				},
+			}
+
+			renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+		case http.MethodPost:
+			// Fetch existing user to determine auth provider — needed to
+			// enforce that non-local (e.g. Keycloak) users cannot be renamed
+			// (the form shows a readonly input, but that is only a UI hint).
+			userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+			if err != nil {
+				logger.Err(err).Msg("edit user POST: unable to fetch user")
+				switch {
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+					if renderErr != nil {
+						logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
+				default:
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse edit-user POST form")
+				return
+			}
+
+			var formFields components.UserFormFields
+			err = schemaDecoder.Decode(&formFields, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST edit-user form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			// Non-local users cannot be renamed — ignore submitted name
+			if userData.AuthProvider != localAuthProvider {
+				formFields.Name = userData.Name
+			}
+
+			formData := components.UserFormData{
+				UserFormFields: formFields,
+			}
+
+			err = validate.Struct(formFields)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Name":
+						formData.Errors.Name = fieldError.Error()
+					case "Role":
+						formData.Errors.Role = fieldError.Error()
+					}
+				}
+				renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+				return
+			}
+
+			// Resolve org
+			var org *string
+			if formFields.Org != "" && formFields.Org != cdntypes.OrgNotSelected {
+				org = &formFields.Org
+			}
+
+			_, err = updateUser(ctx, dbc, ad, userName, formFields.Name, org, formFields.Role)
+			if err != nil {
+				logger.Err(err).Msg("user update failed")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					formData.Errors.ServerError = "Not allowed to modify user"
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					formData.Errors.ServerError = consoleUserNotFound
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					formData.Errors.Name = consoleAlreadyExists
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					formData.Errors.ServerError = "Invalid user data"
+				case errors.Is(err, cdnerrors.ErrNotLocalUser):
+					formData.Errors.Name = "Renaming is only available for local users"
+				case errors.Is(err, pgx.ErrNoRows):
+					formData.Errors.ServerError = "Selected role or organization does not exist"
+				default:
+					formData.Errors.ServerError = "User update failed"
+				}
+				renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("User '%s' updated!", formFields.Name), flashMessageKeys.users)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserUsers, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for edit-user handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+	}
+}
+
+func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieStore, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+
+		userName := chi.URLParam(r, "user")
+		if userName == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		title := fmt.Sprintf("Edit user: %s", userName)
+
+		renderEditWithPasswordError := func(passwordResetData components.PasswordResetFormData) {
+			userData, fetchErr := selectUserForEdit(ctx, dbc, userName, ad)
+			if fetchErr != nil {
+				logger.Err(fetchErr).Msg("reset password: unable to fetch user for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			orgName := ""
+			if userData.OrgName != nil {
+				orgName = *userData.OrgName
+			}
+
+			formData := components.UserFormData{
+				UserFormFields: components.UserFormFields{
+					Name: userData.Name,
+					Role: userData.RoleName,
+					Org:  orgName,
+				},
+			}
+
+			roles, rolesErr := selectRoles(ctx, dbc)
+			if rolesErr != nil {
+				logger.Err(rolesErr).Msg("reset password: unable to fetch roles")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			orgs, orgsErr := selectOrgs(ctx, dbc, ad)
+			if orgsErr != nil {
+				logger.Err(orgsErr).Msg("reset password: unable to fetch orgs")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, userData.AuthProvider, userName, passwordResetData))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}
+
+		// Verify user exists and get auth provider
+		userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+		if err != nil {
+			logger.Err(err).Msg("reset password: unable to fetch user")
+			if errors.Is(err, cdnerrors.ErrNotFound) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if userData.AuthProvider != localAuthProvider {
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consolePasswordLocalOnly))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse reset-password POST form")
+			return
+		}
+
+		var formFields components.PasswordResetFormFields
+		err = schemaDecoder.Decode(&formFields, r.PostForm)
+		if err != nil {
+			logger.Err(err).Msg("unable to decode POST reset-password form data")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		passwordResetData := components.PasswordResetFormData{
+			PasswordResetFormFields: formFields,
+		}
+
+		err = validate.Struct(formFields)
+		if err != nil {
+			validationErrors := err.(validator.ValidationErrors)
+			for _, fieldError := range validationErrors {
+				switch fieldError.StructField() {
+				case "Password":
+					if fieldError.Tag() == "max" {
+						passwordResetData.Errors.Password = consolePasswordTooLong
+					} else {
+						passwordResetData.Errors.Password = consolePasswordTooShort
+					}
+				case "ConfirmPassword":
+					if fieldError.Tag() == "required" {
+						passwordResetData.Errors.ConfirmPassword = consolePasswordConfirmRequired
+					} else {
+						passwordResetData.Errors.ConfirmPassword = consolePasswordMismatch
+					}
+				}
+			}
+			renderEditWithPasswordError(passwordResetData)
+			return
+		}
+
+		_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userName, "", formFields.Password)
+		if err != nil {
+			logger.Err(err).Msg("reset password: unable to set password")
+			switch {
+			case errors.Is(err, cdnerrors.ErrNotLocalUser):
+				// Race condition: auth provider changed after the check above.
+				// The template won't render the password section for non-local
+				// users, so use ConsoleErrorContent instead.
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consolePasswordLocalOnly))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				passwordResetData.Errors.ServerError = "Not allowed to reset password for this user."
+				renderEditWithPasswordError(passwordResetData)
+			default:
+				passwordResetData.Errors.ServerError = consolePasswordResetFailed
+				renderEditWithPasswordError(passwordResetData)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("Password for user '%s' has been reset!", userName), flashMessageKeys.users)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		// User names are not restricted to DNS labels and may contain characters
+		// that need URL escaping (e.g. '@', spaces, '%').
+		validatedRedirect(fmt.Sprintf("/console/superuser/users/%s/edit", url.PathEscape(userName)), w, r, http.StatusSeeOther)
 	}
 }
 

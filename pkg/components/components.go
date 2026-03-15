@@ -119,6 +119,44 @@ type NodeGroupFormData struct {
 	Errors NodeGroupFormErrors
 }
 
+type UserFormFields struct {
+	Name            string `schema:"name" validate:"required,min=1,max=63"`
+	Role            string `schema:"role" validate:"required"`
+	Org             string `schema:"org"`
+	Password        string `schema:"password"`         // #nosec G117 -- Used for form password input, never used for serialized output
+	ConfirmPassword string `schema:"confirm-password"` // #nosec G117 -- Used for form password input, never used for serialized output
+}
+
+type UserFormErrors struct {
+	Name            string
+	Role            string
+	Org             string
+	Password        string // #nosec G117 -- Error message for password field, not a secret
+	ConfirmPassword string
+	ServerError     string
+}
+
+type UserFormData struct {
+	UserFormFields
+	Errors UserFormErrors
+}
+
+type PasswordResetFormFields struct {
+	Password        string `schema:"password" validate:"required,min=15,max=64"`            // #nosec G117 -- Used for form password input, never used for serialized output
+	ConfirmPassword string `schema:"confirm-password" validate:"required,eqfield=Password"` // #nosec G117 -- Used for form password input, never used for serialized output
+}
+
+type PasswordResetFormErrors struct {
+	Password        string // #nosec G117 -- Error message for password field, not a secret
+	ConfirmPassword string
+	ServerError     string
+}
+
+type PasswordResetFormData struct {
+	PasswordResetFormFields
+	Errors PasswordResetFormErrors
+}
+
 // AddressesString formats a node's addresses as newline-separated text for
 // display in textarea form fields.
 func AddressesString(node cdntypes.Node) string {
@@ -190,6 +228,7 @@ var sections = map[string]section{
 	"l4lb-nodes":  {Label: "L4LB nodes", CreateSlug: "l4lb-node"},
 	"node-groups": {Label: "Node groups", CreateSlug: "node-group"},
 	"orgs":        {Label: "Organizations", CreateSlug: "org"},
+	"users":       {Label: "Users", CreateSlug: "user"},
 }
 
 // createSlugToSection provides reverse lookup from the singular create/ path
