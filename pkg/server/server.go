@@ -2443,7 +2443,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Coo
 	}
 }
 
-func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component) error {
+func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component, itemLabel ...string) error {
 	availableOrgNames := []string{}
 	if !ad.Superuser {
 		// The orgName can be empty for users that are not belonging to
@@ -2462,7 +2462,11 @@ func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, 
 		}
 	}
 
-	component := components.ConsolePage(r.URL, title, ad, orgName, availableOrgNames, contents)
+	label := ""
+	if len(itemLabel) > 0 {
+		label = itemLabel[0]
+	}
+	component := components.ConsolePage(r.URL, title, ad, orgName, availableOrgNames, contents, label)
 	return component.Render(r.Context(), w)
 }
 
@@ -2921,7 +2925,7 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 
 type keycloakClaims struct {
 	// The length checks needs to be kept in sync with the CHECK constraint
-	// for the users.name column in the database.
+	// for the users.display_name column in the database.
 	PreferredUsername string `json:"preferred_username" validate:"min=1,max=63"`
 }
 
@@ -2929,7 +2933,7 @@ func addKeycloakUser(ctx context.Context, dbc *dbConn, subject, name string) (pg
 	var userID, keycloakProviderID pgtype.UUID
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, "INSERT INTO users (name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, keycloakAuthProvider).Scan(&userID)
+		err := tx.QueryRow(ctx, "INSERT INTO users (display_name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, keycloakAuthProvider).Scan(&userID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -2972,7 +2976,7 @@ func keycloakUser(ctx context.Context, dbc *dbConn, logger *zerolog.Logger, subj
 	var userID, keycloakProviderID pgtype.UUID
 	err := dbc.dbPool.QueryRow(
 		dbCtx,
-		"SELECT users.id, users.name FROM users JOIN auth_provider_keycloak ON users.id = auth_provider_keycloak.user_id WHERE auth_provider_keycloak.subject = $1",
+		"SELECT users.id, users.display_name FROM users JOIN auth_provider_keycloak ON users.id = auth_provider_keycloak.user_id WHERE auth_provider_keycloak.subject = $1",
 		subject,
 	).Scan(&userID, &username)
 	if err != nil {
@@ -2991,7 +2995,7 @@ func keycloakUser(ctx context.Context, dbc *dbConn, logger *zerolog.Logger, subj
 
 	if username != kcc.PreferredUsername {
 		logger.Info().Str("from", username).Str("to", kcc.PreferredUsername).Msg("keycloak username out of sync, updating local username")
-		_, err := dbc.dbPool.Exec(dbCtx, "UPDATE users SET name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
+		_, err := dbc.dbPool.Exec(dbCtx, "UPDATE users SET display_name=$1 WHERE id=$2", kcc.PreferredUsername, userID)
 		if err != nil {
 			return cdntypes.AuthData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
 		}
@@ -3016,8 +3020,8 @@ func keycloakUser(ctx context.Context, dbc *dbConn, logger *zerolog.Logger, subj
 		FROM users
 		JOIN roles ON users.role_id = roles.id
 		LEFT JOIN orgs ON users.org_id = orgs.id
-		WHERE users.name=$1`,
-		username,
+		WHERE users.id=$1`,
+		userID,
 	).Scan(
 		&userID,
 		&orgID,
@@ -3175,7 +3179,7 @@ func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2M
 		JOIN user_argon2keys ON users.id = user_argon2keys.user_id
 		JOIN roles ON users.role_id = roles.id
 		LEFT JOIN orgs ON users.org_id = orgs.id
-		WHERE users.name=$1`,
+		WHERE users.display_name=$1`,
 		username,
 	).Scan(
 		&userID,
@@ -3368,13 +3372,13 @@ func selectUsers(ctx context.Context, dbPool *pgxpool.Pool, logger *zerolog.Logg
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(ctx, "SELECT id, name, org_id, role_id FROM users ORDER BY name")
+		rows, err = dbPool.Query(ctx, "SELECT id, display_name, org_id, role_id FROM users ORDER BY display_name")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
 	} else if ad.OrgID != nil && ad.UserID != nil {
-		rows, err = dbPool.Query(ctx, "SELECT id, name, org_id, role_id FROM users WHERE users.id=$1 ORDER BY name", *ad.UserID)
+		rows, err = dbPool.Query(ctx, "SELECT id, display_name, org_id, role_id FROM users WHERE users.id=$1 ORDER BY display_name", *ad.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -3391,37 +3395,21 @@ func selectUsers(ctx context.Context, dbPool *pgxpool.Pool, logger *zerolog.Logg
 	return users, nil
 }
 
-func selectUser(ctx context.Context, dbPool *pgxpool.Pool, userNameOrID string, ad cdntypes.AuthData) (user, error) {
+func selectUser(ctx context.Context, dbPool *pgxpool.Pool, userID pgtype.UUID, ad cdntypes.AuthData) (user, error) {
 	u := user{}
-
-	err := pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("selectUser: unable to look up user identifier: %w", err)
-		}
-
-		if !ad.Superuser && ad.UserID == nil {
-			return cdnerrors.ErrNotFound
-		}
-
-		if !ad.Superuser && *ad.UserID != userIdent.id {
-			return cdnerrors.ErrNotFound
-		}
-
-		u.ID = userIdent.id
-		u.Name = userIdent.name
-		u.RoleID = userIdent.roleID
-		u.OrgID = userIdent.orgID
-
-		return nil
-	})
-	if err != nil {
-		return user{}, fmt.Errorf("selectUser transaction failed: %w", err)
+	if !ad.Superuser && ad.UserID == nil {
+		return user{}, cdnerrors.ErrNotFound
 	}
-
+	if !ad.Superuser && *ad.UserID != userID {
+		return user{}, cdnerrors.ErrNotFound
+	}
+	err := dbPool.QueryRow(ctx, "SELECT id, display_name, org_id, role_id FROM users WHERE id = $1", userID).Scan(&u.ID, &u.DisplayName, &u.OrgID, &u.RoleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return user{}, cdnerrors.ErrNotFound
+		}
+		return user{}, fmt.Errorf("selectUser: query failed: %w", err)
+	}
 	return u, nil
 }
 
@@ -3517,7 +3505,7 @@ func saltFromHex(hexString string) ([]byte, error) {
 	return salt, nil
 }
 
-func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userNameOrID string, oldPassword string, newPassword string) (pgtype.UUID, error) {
+func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userID pgtype.UUID, oldPassword string, newPassword string) (pgtype.UUID, error) {
 	// While we could potentially do the argon2 operation inside the
 	// transaction below after we know the user is actually allowed to
 	// change the password it feels wrong to keep a transaction open
@@ -3535,26 +3523,27 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 
 	var keyID pgtype.UUID
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
+		var displayName string
+		err := tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR SHARE", userID).Scan(&displayName)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
 			}
-			return fmt.Errorf("setLocalPassword: unable to look up user identifier: %w", err)
+			return fmt.Errorf("setLocalPassword: unable to look up user: %w", err)
 		}
 
 		// We only allow the setting of passwords for users using the "local" auth provider
 		var authProviderName string
-		err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
+		err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
 		if err != nil {
-			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userIdent.id, err)
+			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userID, err)
 		}
 
 		// A superuser can change any password and a normal user can only change their own password
 		if !ad.Superuser && ad.UserID == nil {
 			return cdnerrors.ErrForbidden
 		}
-		if !ad.Superuser && *ad.UserID != userIdent.id {
+		if !ad.Superuser && *ad.UserID != userID {
 			return cdnerrors.ErrForbidden
 		}
 
@@ -3573,14 +3562,14 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 		// optimal but not sure about a better way since we want to do
 		// the following upsert operation in the transaction.
 		if !ad.Superuser {
-			_, err := dbUserLogin(dbCtx, tx, logger, argon2Mutex, loginCache, userIdent.name, oldPassword)
+			_, err := dbUserLogin(dbCtx, tx, logger, argon2Mutex, loginCache, displayName, oldPassword)
 			if err != nil {
 				logger.Err(err).Msg("old password check failed")
 				return cdnerrors.ErrBadOldPassword
 			}
 		}
 
-		keyID, err = upsertArgon2Tx(dbCtx, tx, userIdent.id, a2Data)
+		keyID, err = upsertArgon2Tx(dbCtx, tx, userID, a2Data)
 		if err != nil {
 			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 		}
@@ -3915,7 +3904,7 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	return l4lbNodeID, nil
 }
 
-func createUser(ctx context.Context, dbc *dbConn, name string, role string, org *string, a2Data *argon2Data, ad cdntypes.AuthData) (user, error) {
+func createUser(ctx context.Context, dbc *dbConn, displayName string, role string, org *string, a2Data *argon2Data, ad cdntypes.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -3953,7 +3942,7 @@ func createUser(ctx context.Context, dbc *dbConn, name string, role string, org 
 			orgID = &orgIdent.id
 		}
 
-		userID, err = insertUserTx(dbCtx, tx, name, orgID, roleIdent.id, authProviderID)
+		userID, err = insertUserTx(dbCtx, tx, displayName, orgID, roleIdent.id, authProviderID)
 		if err != nil {
 			return fmt.Errorf("createUser: INSERT failed: %w", err)
 		}
@@ -3979,61 +3968,49 @@ func createUser(ctx context.Context, dbc *dbConn, name string, role string, org 
 	}
 
 	return user{
-		ID:     userID,
-		Name:   name,
-		RoleID: roleIdent.id,
-		OrgID:  orgID,
+		ID:          userID,
+		DisplayName: displayName,
+		RoleID:      roleIdent.id,
+		OrgID:       orgID,
 	}, nil
 }
 
-func deleteUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userNameOrID string) (pgtype.UUID, error) {
+func deleteUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID) (string, error) {
 	if !ad.Superuser {
-		return pgtype.UUID{}, cdnerrors.ErrForbidden
+		return "", cdnerrors.ErrForbidden
+	}
+	if ad.UserID == nil {
+		return "", cdnerrors.ErrForbidden
+	}
+	if *ad.UserID == userID {
+		return "", cdnerrors.ErrSelfDelete
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
-	var userID pgtype.UUID
+	var displayName string
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(dbCtx, tx, userNameOrID)
+		err := tx.QueryRow(dbCtx, "DELETE FROM users WHERE id = $1 RETURNING display_name", userID).Scan(&displayName)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
 			}
-			return fmt.Errorf("deleteUser: unable to look up user identifier: %w", err)
-		}
-
-		// Org client credentials (API tokens) have no UserID and
-		// are not allowed to delete users.
-		if ad.UserID == nil {
-			return cdnerrors.ErrForbidden
-		}
-
-		// A user cannot delete itself to protect against locking
-		// yourself out of the system.
-		if *ad.UserID == userIdent.id {
-			return cdnerrors.ErrSelfDelete
-		}
-
-		err = tx.QueryRow(dbCtx, "DELETE FROM users WHERE id = $1 RETURNING id", userIdent.id).Scan(&userID)
-		if err != nil {
 			return fmt.Errorf("unable to DELETE user: %w", err)
 		}
-
 		return nil
 	})
 	if err != nil {
 		logger.Err(err).Msg("deleteUser transaction failed")
-		return pgtype.UUID{}, fmt.Errorf("deleteUser transaction failed: %w", err)
+		return "", fmt.Errorf("deleteUser transaction failed: %w", err)
 	}
 
-	return userID, nil
+	return displayName, nil
 }
 
 func insertUserTx(ctx context.Context, tx pgx.Tx, name string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
 	var userID pgtype.UUID
-	err := tx.QueryRow(ctx, "INSERT INTO users (name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
+	err := tx.QueryRow(ctx, "INSERT INTO users (display_name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", name, orgID, roleID, authProviderID).Scan(&userID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -4066,7 +4043,7 @@ func authProviderNameToIDTx(ctx context.Context, tx pgx.Tx, name string) (pgtype
 }
 
 func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, name string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
-	_, err := tx.Exec(ctx, "UPDATE users SET name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
+	_, err := tx.Exec(ctx, "UPDATE users SET display_name = $1, org_id = $2, role_id = $3 WHERE id = $4", name, orgID, roleID, userID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -4083,7 +4060,7 @@ func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, name strin
 	return nil
 }
 
-func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID string, name string, org *string, role string) (user, error) {
+func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID, name string, org *string, role string) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -4093,12 +4070,13 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 
 	var u user
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(dbCtx, tx, nameOrID)
+		var currentDisplayName string
+		err := tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR SHARE", userID).Scan(&currentDisplayName)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
 			}
-			return fmt.Errorf("unable to parse user name or ID for PUT: %w", err)
+			return fmt.Errorf("unable to look up user for PUT: %w", err)
 		}
 
 		roleIdent, err := newRoleIdentifier(dbCtx, tx, role)
@@ -4119,11 +4097,11 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 		// Non-local users (e.g. Keycloak) cannot be renamed — their
 		// name is managed by the identity provider.
 		updateName := name
-		if updateName == "" || updateName == userIdent.name {
-			updateName = userIdent.name
+		if updateName == "" || updateName == currentDisplayName {
+			updateName = currentDisplayName
 		} else {
 			var authProviderName string
-			err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userIdent.id).Scan(&authProviderName)
+			err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
 			if err != nil {
 				return fmt.Errorf("updateUser: unable to look up auth provider: %w", err)
 			}
@@ -4132,13 +4110,13 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nameOrID
 			}
 		}
 
-		err = updateUserTx(dbCtx, tx, userIdent.id, updateName, orgID, roleIdent.id)
+		err = updateUserTx(dbCtx, tx, userID, updateName, orgID, roleIdent.id)
 		if err != nil {
 			return fmt.Errorf("update failed: %w", err)
 		}
 
-		u.ID = userIdent.id
-		u.Name = updateName
+		u.ID = userID
+		u.DisplayName = updateName
 		u.RoleID = roleIdent.id
 		u.OrgID = orgID
 
@@ -4157,13 +4135,13 @@ func selectUserListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData)
 	}
 
 	rows, err := dbc.dbPool.Query(ctx,
-		`SELECT u.id, u.name, r.name AS role_name,
+		`SELECT u.id, u.display_name, r.name AS role_name,
 			o.name AS org_name, ap.name AS auth_provider
 		FROM users u
 		JOIN roles r ON u.role_id = r.id
 		JOIN auth_providers ap ON u.auth_provider_id = ap.id
 		LEFT JOIN orgs o ON u.org_id = o.id
-		ORDER BY u.name`)
+		ORDER BY u.display_name`)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for user list items: %w", err)
 	}
@@ -4190,45 +4168,27 @@ func selectRoles(ctx context.Context, dbc *dbConn) ([]cdntypes.Role, error) {
 	return roles, nil
 }
 
-func selectUserForEdit(ctx context.Context, dbc *dbConn, userNameOrID string, ad cdntypes.AuthData) (cdntypes.UserEditData, error) {
+func selectUserForEdit(ctx context.Context, dbc *dbConn, userID pgtype.UUID, ad cdntypes.AuthData) (cdntypes.UserEditData, error) {
 	if !ad.Superuser {
 		return cdntypes.UserEditData{}, cdnerrors.ErrForbidden
 	}
 
 	var userData cdntypes.UserEditData
-	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		userIdent, err := newUserIdentifier(ctx, tx, userNameOrID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("selectUserForEdit: unable to parse user identifier: %w", err)
-		}
-
-		err = tx.QueryRow(ctx,
-			`SELECT u.id, u.name, r.name AS role_name,
-				o.name AS org_name, ap.name AS auth_provider
-			FROM users u
-			JOIN roles r ON u.role_id = r.id
-			JOIN auth_providers ap ON u.auth_provider_id = ap.id
-			LEFT JOIN orgs o ON u.org_id = o.id
-			WHERE u.id = $1`, userIdent.id).Scan(
-			&userData.ID, &userData.Name, &userData.RoleName,
-			&userData.OrgName, &userData.AuthProvider)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("selectUserForEdit: query failed: %w", err)
-		}
-
-		return nil
-	})
+	err := dbc.dbPool.QueryRow(ctx,
+		`SELECT u.id, u.display_name, r.name AS role_name,
+			o.name AS org_name, ap.name AS auth_provider
+		FROM users u
+		JOIN roles r ON u.role_id = r.id
+		JOIN auth_providers ap ON u.auth_provider_id = ap.id
+		LEFT JOIN orgs o ON u.org_id = o.id
+		WHERE u.id = $1`, userID).Scan(
+		&userData.ID, &userData.DisplayName, &userData.RoleName,
+		&userData.OrgName, &userData.AuthProvider)
 	if err != nil {
-		if errors.Is(err, cdnerrors.ErrNotFound) {
-			return cdntypes.UserEditData{}, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cdntypes.UserEditData{}, cdnerrors.ErrNotFound
 		}
-		return cdntypes.UserEditData{}, fmt.Errorf("selectUserForEdit: transaction failed: %w", err)
+		return cdntypes.UserEditData{}, fmt.Errorf("selectUserForEdit: query failed: %w", err)
 	}
 
 	return userData, nil
@@ -5393,12 +5353,6 @@ type roleIdentifier struct {
 	resourceIdentifier
 }
 
-type userIdentifier struct {
-	resourceIdentifier
-	orgID  *pgtype.UUID
-	roleID pgtype.UUID
-}
-
 type cacheNodeIdentifier struct {
 	resourceIdentifier
 }
@@ -5525,48 +5479,6 @@ func newRoleIdentifier(ctx context.Context, tx pgx.Tx, input string) (roleIdenti
 			name: name,
 			id:   id,
 		},
-	}, nil
-}
-
-func isUUID(input string) bool {
-	inputID := new(pgtype.UUID)
-	err := inputID.Scan(input)
-	return err == nil
-}
-
-func newUserIdentifier(ctx context.Context, tx pgx.Tx, input string) (userIdentifier, error) {
-	if input == "" {
-		return userIdentifier{}, errEmptyInputIdentifier
-	}
-
-	var id pgtype.UUID
-	var orgID *pgtype.UUID
-	var roleID pgtype.UUID
-	var name string
-
-	inputID := new(pgtype.UUID)
-	err := inputID.Scan(input)
-	if err == nil {
-		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id, role_id FROM users WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID, &roleID)
-		if err != nil {
-			return userIdentifier{}, err
-		}
-	} else {
-		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id, role_id FROM users WHERE name = $1 FOR SHARE", input).Scan(&id, &name, &orgID, &roleID)
-		if err != nil {
-			return userIdentifier{}, err
-		}
-	}
-
-	return userIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
-		orgID:  orgID,
-		roleID: roleID,
 	}, nil
 }
 
@@ -7700,12 +7612,12 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Get("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
 		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
 		r.Get("/superuser/users", consoleUsersHandler(dbc, cookieStore))
-		r.Delete("/superuser/users/{user}", consoleUserDeleteHandler(dbc, cookieStore))
+		r.Delete("/superuser/users/{userID}", consoleUserDeleteHandler(dbc, cookieStore))
 		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
 		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
-		r.Get("/superuser/users/{user}/edit", consoleEditUserHandler(dbc, cookieStore))
-		r.Post("/superuser/users/{user}/edit", consoleEditUserHandler(dbc, cookieStore))
-		r.Post("/superuser/users/{user}/reset-password", consoleUserResetPasswordHandler(dbc, cookieStore, argon2Mutex, loginCache))
+		r.Get("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc, cookieStore))
+		r.Post("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc, cookieStore))
+		r.Post("/superuser/users/{userID}/reset-password", consoleUserResetPasswordHandler(dbc, cookieStore, argon2Mutex, loginCache))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -7892,8 +7804,9 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, lo
 }
 
 const (
-	v1User                  = "/v1/users/{user}"
+	v1User                  = "/v1/users/{userID}"
 	userNotFound            = "user not found"
+	invalidUserIDFormat     = "invalid user ID format"
 	notAllowedToAddResource = "not allowed to add resource"
 )
 
@@ -7968,7 +7881,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 		})
 
 		huma.Get(api, v1User, func(ctx context.Context, input *struct {
-			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
+			UserID string `path:"userID" example:"00000006-0000-0000-0000-000000000001" doc:"User ID (UUID)"`
 		},
 		) (*userOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -7978,7 +7891,13 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from user GET handler")
 			}
 
-			user, err := selectUser(ctx, dbc.dbPool, input.User, ad)
+			var userID pgtype.UUID
+			err := userID.Scan(input.UserID)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
+			}
+
+			user, err := selectUser(ctx, dbc.dbPool, userID, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
@@ -7990,7 +7909,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			}
 			resp := &userOutput{}
 			resp.Body.ID = user.ID
-			resp.Body.Name = user.Name
+			resp.Body.DisplayName = user.DisplayName
 			return resp, nil
 		})
 
@@ -8013,7 +7932,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				user, err := createUser(ctx, dbc, input.Body.Name, input.Body.Role, input.Body.Org, nil, ad)
+				user, err := createUser(ctx, dbc, input.Body.DisplayName, input.Body.Role, input.Body.Org, nil, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -8035,9 +7954,9 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			},
 		)
 
-		huma.Put(api, "/v1/users/{user}/local-password", func(ctx context.Context, input *struct {
-			User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
-			Body struct {
+		huma.Put(api, "/v1/users/{userID}/local-password", func(ctx context.Context, input *struct {
+			UserID string `path:"userID" example:"00000006-0000-0000-0000-000000000001" doc:"User ID (UUID)"`
+			Body   struct {
 				OldPassword string `json:"old,omitempty" example:"verysecretpassword" doc:"The previous local password, not needed if superuser" minLength:"1" maxLength:"64"`
 				NewPassword string `json:"new" example:"verysecretpassword" doc:"The new user password" minLength:"15" maxLength:"64"`
 			}
@@ -8049,7 +7968,13 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from local-password PUT handler")
 			}
 
-			_, err := setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, input.User, input.Body.OldPassword, input.Body.NewPassword)
+			var userID pgtype.UUID
+			err := userID.Scan(input.UserID)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
+			}
+
+			_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userID, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrOldPasswordRequired):
@@ -8077,7 +8002,13 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from user PUT handler")
 			}
 
-			user, err := updateUser(ctx, dbc, ad, input.User, input.Body.Name, input.Body.Org, input.Body.Role)
+			var userID pgtype.UUID
+			err := userID.Scan(input.UserID)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
+			}
+
+			user, err := updateUser(ctx, dbc, ad, userID, input.Body.DisplayName, input.Body.Org, input.Body.Role)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -8101,7 +8032,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 		})
 
 		huma.Delete(api, v1User, func(ctx context.Context, input *struct {
-			User string `path:"user" example:"username" doc:"user ID or name" minLength:"1" maxLength:"63"`
+			UserID string `path:"userID" example:"00000006-0000-0000-0000-000000000001" doc:"User ID (UUID)"`
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
@@ -8111,7 +8042,13 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from user DELETE handler")
 			}
 
-			_, err := deleteUser(ctx, logger, dbc, ad, input.User)
+			var userID pgtype.UUID
+			err := userID.Scan(input.UserID)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
+			}
+
+			_, err = deleteUser(ctx, logger, dbc, ad, userID)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrSelfDelete):
@@ -9581,17 +9518,22 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 	return nil
 }
 
+// user is the API response type for user entities. Unlike other entities
+// (orgs, services, domains, nodes) where Name is an app-controlled DNS-label
+// identifier, user display names are free-form attributes from external
+// identity providers (e.g. "user@example.com" from OIDC/Keycloak) and are
+// not used for identification — users are always identified by UUID.
 type user struct {
-	ID     pgtype.UUID  `json:"id" doc:"ID of user"`
-	Name   string       `json:"name" example:"user1" doc:"name of user"`
-	RoleID pgtype.UUID  `json:"role_id" doc:"ID of organization, UUIDv4"`
-	OrgID  *pgtype.UUID `json:"org_id" doc:"ID of organization, UUIDv4"`
+	ID          pgtype.UUID  `json:"id" doc:"ID of user"`
+	DisplayName string       `json:"display_name" example:"you@example.com" doc:"display name of user"`
+	RoleID      pgtype.UUID  `json:"role_id" doc:"ID of organization, UUIDv4"`
+	OrgID       *pgtype.UUID `json:"org_id" doc:"ID of organization, UUIDv4"`
 }
 
 type userBodyInput struct {
-	Name string  `json:"name" example:"you@example.com" doc:"The username" minLength:"1" maxLength:"63"`
-	Role string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-	Org  *string `json:"org,omitempty" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+	DisplayName string  `json:"display_name" example:"you@example.com" doc:"Display name of the user" minLength:"1" maxLength:"63"`
+	Role        string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+	Org         *string `json:"org,omitempty" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 }
 
 type userPostInput struct {
@@ -9599,8 +9541,8 @@ type userPostInput struct {
 }
 
 type userPutInput struct {
-	User string `path:"user" example:"1" doc:"User ID or name" minLength:"1" maxLength:"63"`
-	Body userBodyInput
+	UserID string `path:"userID" example:"00000006-0000-0000-0000-000000000001" doc:"User ID (UUID)"`
+	Body   userBodyInput
 }
 
 type userOutput struct {
@@ -12395,6 +12337,20 @@ func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.Ha
 	}
 }
 
+func parseUserIDParam(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
+	userIDStr := chi.URLParam(r, "userID")
+	if userIDStr == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return pgtype.UUID{}, false
+	}
+	var userID pgtype.UUID
+	if err := userID.Scan(userIDStr); err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return pgtype.UUID{}, false
+	}
+	return userID, true
+}
+
 func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -12405,13 +12361,12 @@ func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 			return
 		}
 
-		userName := chi.URLParam(r, "user")
-		if userName == "" {
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		userID, ok := parseUserIDParam(w, r)
+		if !ok {
 			return
 		}
 
-		_, err := deleteUser(ctx, logger, dbc, ad, userName)
+		displayName, err := deleteUser(ctx, logger, dbc, ad, userID)
 		if err != nil {
 			var errorMessage string
 			switch {
@@ -12442,7 +12397,7 @@ func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("User '%s' deleted!", userName), flashMessageKeys.users)
+		session.AddFlash(fmt.Sprintf("User '%s' deleted!", displayName), flashMessageKeys.users)
 		err = session.Save(r, w)
 		if err != nil {
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
@@ -12510,8 +12465,8 @@ func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, ar
 				validationErrors := err.(validator.ValidationErrors)
 				for _, fieldError := range validationErrors {
 					switch fieldError.StructField() {
-					case "Name":
-						formData.Errors.Name = fieldError.Error()
+					case "DisplayName":
+						formData.Errors.DisplayName = fieldError.Error()
 					case "Role":
 						formData.Errors.Role = fieldError.Error()
 					}
@@ -12563,13 +12518,13 @@ func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, ar
 				return
 			}
 
-			_, err = createUser(ctx, dbc, formFields.Name, formFields.Role, org, &a2Data, ad)
+			_, err = createUser(ctx, dbc, formFields.DisplayName, formFields.Role, org, &a2Data, ad)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
-					formData.Errors.Name = consoleAlreadyExists
+					formData.Errors.DisplayName = consoleAlreadyExists
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
-					formData.Errors.Name = "Invalid user name"
+					formData.Errors.DisplayName = "Invalid display name"
 				case errors.Is(err, pgx.ErrNoRows):
 					formData.Errors.ServerError = "Selected role or organization does not exist"
 				default:
@@ -12580,7 +12535,7 @@ func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, ar
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("User '%s' created!", formFields.Name), flashMessageKeys.users)
+			session.AddFlash(fmt.Sprintf("User '%s' created!", formFields.DisplayName), flashMessageKeys.users)
 			err = session.Save(r, w)
 			if err != nil {
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
@@ -12606,15 +12561,14 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 			return
 		}
 
-		userName := chi.URLParam(r, "user")
-		if userName == "" {
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		userID, ok := parseUserIDParam(w, r)
+		if !ok {
 			return
 		}
 
-		title := fmt.Sprintf("Edit user: %s", userName)
+		title := fmt.Sprintf("Edit user: %s", userID.String())
 
-		renderEditForm := func(formData components.UserFormData, authProvider string, passwordResetData components.PasswordResetFormData) {
+		renderEditForm := func(displayName string, formData components.UserFormData, authProvider string, passwordResetData components.PasswordResetFormData) {
 			roles, rolesErr := selectRoles(ctx, dbc)
 			if rolesErr != nil {
 				logger.Err(rolesErr).Msg("edit user: unable to fetch roles")
@@ -12627,7 +12581,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, authProvider, userName, passwordResetData))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, authProvider, userID.String(), passwordResetData), displayName)
 			if err != nil {
 				logger.Err(err).Msg(consoleEditUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12636,7 +12590,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 
 		switch r.Method {
 		case http.MethodGet:
-			userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+			userData, err := selectUserForEdit(ctx, dbc, userID, ad)
 			if err != nil {
 				logger.Err(err).Msg("edit user: unable to fetch user")
 				switch {
@@ -12659,18 +12613,18 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 
 			formData := components.UserFormData{
 				UserFormFields: components.UserFormFields{
-					Name: userData.Name,
-					Role: userData.RoleName,
-					Org:  orgName,
+					DisplayName: userData.DisplayName,
+					Role:        userData.RoleName,
+					Org:         orgName,
 				},
 			}
 
-			renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+			renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
 		case http.MethodPost:
 			// Fetch existing user to determine auth provider — needed to
 			// enforce that non-local (e.g. Keycloak) users cannot be renamed
 			// (the form shows a readonly input, but that is only a UI hint).
-			userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+			userData, err := selectUserForEdit(ctx, dbc, userID, ad)
 			if err != nil {
 				logger.Err(err).Msg("edit user POST: unable to fetch user")
 				switch {
@@ -12701,7 +12655,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 
 			// Non-local users cannot be renamed — ignore submitted name
 			if userData.AuthProvider != localAuthProvider {
-				formFields.Name = userData.Name
+				formFields.DisplayName = userData.DisplayName
 			}
 
 			formData := components.UserFormData{
@@ -12713,13 +12667,13 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 				validationErrors := err.(validator.ValidationErrors)
 				for _, fieldError := range validationErrors {
 					switch fieldError.StructField() {
-					case "Name":
-						formData.Errors.Name = fieldError.Error()
+					case "DisplayName":
+						formData.Errors.DisplayName = fieldError.Error()
 					case "Role":
 						formData.Errors.Role = fieldError.Error()
 					}
 				}
-				renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+				renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
 				return
 			}
 
@@ -12729,7 +12683,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 				org = &formFields.Org
 			}
 
-			_, err = updateUser(ctx, dbc, ad, userName, formFields.Name, org, formFields.Role)
+			_, err = updateUser(ctx, dbc, ad, userID, formFields.DisplayName, org, formFields.Role)
 			if err != nil {
 				logger.Err(err).Msg("user update failed")
 				switch {
@@ -12738,21 +12692,21 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					formData.Errors.ServerError = consoleUserNotFound
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
-					formData.Errors.Name = consoleAlreadyExists
+					formData.Errors.DisplayName = consoleAlreadyExists
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					formData.Errors.ServerError = "Invalid user data"
 				case errors.Is(err, cdnerrors.ErrNotLocalUser):
-					formData.Errors.Name = "Renaming is only available for local users"
+					formData.Errors.DisplayName = "Renaming is only available for local users"
 				case errors.Is(err, pgx.ErrNoRows):
 					formData.Errors.ServerError = "Selected role or organization does not exist"
 				default:
 					formData.Errors.ServerError = "User update failed"
 				}
-				renderEditForm(formData, userData.AuthProvider, components.PasswordResetFormData{})
+				renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("User '%s' updated!", formFields.Name), flashMessageKeys.users)
+			session.AddFlash(fmt.Sprintf("User '%s' updated!", formFields.DisplayName), flashMessageKeys.users)
 			err = session.Save(r, w)
 			if err != nil {
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
@@ -12783,16 +12737,15 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 			return
 		}
 
-		userName := chi.URLParam(r, "user")
-		if userName == "" {
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		userID, ok := parseUserIDParam(w, r)
+		if !ok {
 			return
 		}
 
-		title := fmt.Sprintf("Edit user: %s", userName)
+		title := fmt.Sprintf("Edit user: %s", userID.String())
 
 		renderEditWithPasswordError := func(passwordResetData components.PasswordResetFormData) {
-			userData, fetchErr := selectUserForEdit(ctx, dbc, userName, ad)
+			userData, fetchErr := selectUserForEdit(ctx, dbc, userID, ad)
 			if fetchErr != nil {
 				logger.Err(fetchErr).Msg("reset password: unable to fetch user for re-render")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12806,9 +12759,9 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 
 			formData := components.UserFormData{
 				UserFormFields: components.UserFormFields{
-					Name: userData.Name,
-					Role: userData.RoleName,
-					Org:  orgName,
+					DisplayName: userData.DisplayName,
+					Role:        userData.RoleName,
+					Org:         orgName,
 				},
 			}
 
@@ -12824,7 +12777,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, userData.AuthProvider, userName, passwordResetData))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, userData.AuthProvider, userID.String(), passwordResetData), userData.DisplayName)
 			if renderErr != nil {
 				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12832,7 +12785,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 		}
 
 		// Verify user exists and get auth provider
-		userData, err := selectUserForEdit(ctx, dbc, userName, ad)
+		userData, err := selectUserForEdit(ctx, dbc, userID, ad)
 		if err != nil {
 			logger.Err(err).Msg("reset password: unable to fetch user")
 			if errors.Is(err, cdnerrors.ErrNotFound) {
@@ -12896,7 +12849,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 			return
 		}
 
-		_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userName, "", formFields.Password)
+		_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userID, "", formFields.Password)
 		if err != nil {
 			logger.Err(err).Msg("reset password: unable to set password")
 			switch {
@@ -12925,16 +12878,14 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Password for user '%s' has been reset!", userName), flashMessageKeys.users)
+		session.AddFlash(fmt.Sprintf("Password for user '%s' has been reset!", userData.DisplayName), flashMessageKeys.users)
 		err = session.Save(r, w)
 		if err != nil {
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
 
-		// User names are not restricted to DNS labels and may contain characters
-		// that need URL escaping (e.g. '@', spaces, '%').
-		validatedRedirect(fmt.Sprintf("/console/superuser/users/%s/edit", url.PathEscape(userName)), w, r, http.StatusSeeOther)
+		validatedRedirect(fmt.Sprintf("/console/superuser/users/%s/edit", userID.String()), w, r, http.StatusSeeOther)
 	}
 }
 

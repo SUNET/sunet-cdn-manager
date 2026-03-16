@@ -365,7 +365,7 @@ type Role struct {
 
 type UserListItem struct {
 	ID           pgtype.UUID `json:"id"`
-	Name         string      `json:"name"`
+	DisplayName  string      `json:"display_name"`
 	RoleName     string      `json:"role_name"`
 	OrgName      *string     `json:"org_name"`
 	AuthProvider string      `json:"auth_provider"`
@@ -375,7 +375,7 @@ type UserListItem struct {
 // base user fields with resolved names and auth provider info.
 type UserEditData struct {
 	ID           pgtype.UUID
-	Name         string
+	DisplayName  string
 	RoleName     string
 	OrgName      *string
 	AuthProvider string // "local" or "keycloak"
