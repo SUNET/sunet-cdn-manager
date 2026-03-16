@@ -327,6 +327,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				id:           "00000006-0000-0000-0000-000000000008",
 				authProvider: "local",
 			},
+			{
+				name:         "admin-with-org",
+				password:     validAdminPassword,
+				role:         "admin",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000009",
+				authProvider: "local",
+			},
 		}
 
 		for _, localUser := range localUsers {
@@ -7799,6 +7807,185 @@ func TestRetryWithBackoff(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConsoleDashboardRedirect(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Verify that a superuser with org membership hitting /console
+	// with no selectedOrgKey in their session gets 303-redirected to
+	// their org dashboard. Login is done manually (not via consoleLogin)
+	// because we need redirects disabled before the login redirect
+	// chain reaches /console.
+	t.Run("superuser with org redirects to org dashboard", func(t *testing.T) {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		client := &http.Client{
+			Jar: jar,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		form := url.Values{
+			"username": {"admin-with-org"},
+			"password": {validAdminPassword},
+		}
+
+		req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Login POST returns 302 -> /console
+		loginResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		loginResp.Body.Close()
+
+		if loginResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
+		}
+
+		loginLocation := loginResp.Header.Get("Location")
+		if loginLocation != "/console" {
+			t.Fatalf("expected login redirect to /console, got %s", loginLocation)
+		}
+
+		// Follow the redirect to /console manually — this should trigger 303 to org dashboard
+		req, err = http.NewRequest("GET", ts.URL+loginLocation, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		consoleResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		consoleResp.Body.Close()
+
+		if consoleResp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303 redirect from /console, got %d", consoleResp.StatusCode)
+		}
+
+		consoleLocation := consoleResp.Header.Get("Location")
+		if consoleLocation != "/console/org/org1" {
+			t.Fatalf("expected redirect to /console/org/org1, got %s", consoleLocation)
+		}
+	})
+
+	// Verify the redirect only fires once. consoleLogin follows the
+	// full redirect chain (login -> /console -> /console/org/org1)
+	// which sets selectedOrgKey. A subsequent GET /console should
+	// render the superuser dashboard directly (200), not redirect.
+	t.Run("superuser with org subsequent visit renders dashboard", func(t *testing.T) {
+		client := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
+
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 on subsequent visit, got %d", resp.StatusCode)
+		}
+	})
+
+	// Verify existing behavior is unchanged: a superuser without org
+	// membership (admin user) gets the generic dashboard (200) with
+	// no redirect, since ad.OrgName is nil.
+	t.Run("superuser without org sees generic dashboard", func(t *testing.T) {
+		client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for org-less superuser, got %d", resp.StatusCode)
+		}
+	})
+
+	// Verify that a superuser with org membership can return to the
+	// generic dashboard by explicitly selecting "not selected" in the
+	// org switcher. After that, GET /console should render the
+	// dashboard (200) and not re-redirect to the org.
+	t.Run("superuser with org can unselect org and stay on generic dashboard", func(t *testing.T) {
+		client := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
+
+		// Use the org switcher to explicitly unselect
+		req, err := http.NewRequest("GET", ts.URL+"/console/org-switcher?org="+url.QueryEscape(cdntypes.OrgNotSelected), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+
+		// Now GET /console should NOT redirect — selectedOrgKey is
+		// present (empty string) so the "never selected" condition
+		// is false.
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err = http.NewRequest("GET", ts.URL+"/console", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err = client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 after explicit unselect, got %d", resp.StatusCode)
+		}
+	})
 }
 
 func TestConsoleServicesComponent(t *testing.T) {
