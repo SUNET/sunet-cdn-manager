@@ -18,7 +18,7 @@ func activeAttr(section string, u *url.URL) templ.Attributes {
 	return templ.Attributes{}
 }
 
-templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component) {
+templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component, itemLabel string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		@consoleHeadComponent(title)
@@ -41,7 +41,7 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 				</header>
 				@NavBar(u, ad, orgName, availableOrgNames)
 				<main>
-					@breadcrumbNav(buildBreadcrumbs(u, orgName))
+					@breadcrumbNav(buildBreadcrumbs(u, orgName, itemLabel))
 					<h1>{ title } <span id="spinner" class="htmx-indicator spinner"></span></h1>
 					<div id="contents">
 						@contents
@@ -1370,7 +1370,7 @@ templ UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorM
 		<table>
 			<thead>
 				<tr>
-					<th>Name</th>
+					<th>Display name</th>
 					<th>Role</th>
 					<th>Organization</th>
 					<th>Auth Provider</th>
@@ -1380,7 +1380,7 @@ templ UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorM
 			<tbody>
 				for _, user := range users {
 					<tr>
-						<td>{ user.Name }</td>
+						<td>{ user.DisplayName }</td>
 						<td>{ user.RoleName }</td>
 						<td>
 							if user.OrgName != nil {
@@ -1391,12 +1391,12 @@ templ UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorM
 						</td>
 						<td>{ user.AuthProvider }</td>
 						<td>
-							<a href={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", user.Name)) } role="button" class="secondary">Edit</a>
+							<a href={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", user.ID.String())) } role="button" class="secondary">Edit</a>
 							<button
 								type="button"
-								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/users/%s", user.Name))) }
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/users/%s", user.ID.String()))) }
 								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Are you sure you want to delete user '%s'?", user.Name) }
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete user '%s'?", user.DisplayName) }
 								hx-disabled-elt="this"
 							>
 								Delete
@@ -1417,11 +1417,11 @@ templ CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdn
 		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
 	}
 	<form method="post" action="/console/superuser/create/user" hx-disabled-elt="find button[type='submit']">
-		<label for="name">
-			Name
-			<input type="text" id="name" name="name" placeholder="Enter username..." value={ formData.Name } required/>
+		<label for="display_name">
+			Display name
+			<input type="text" id="display_name" name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		<span class="error-text">{ formData.Errors.DisplayName }</span>
 		<label for="role">
 			Role
 			<select id="role" name="role" required>
@@ -1455,20 +1455,20 @@ templ CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdn
 	</form>
 }
 
-templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntypes.Org, authProvider string, userName string, passwordResetData PasswordResetFormData) {
+templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntypes.Org, authProvider string, userID string, passwordResetData PasswordResetFormData) {
 	if formData.Errors.ServerError != "" {
 		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", userName)) } hx-disabled-elt="find button[type='submit']">
-		<label for="name">
-			Name
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", userID)) } hx-disabled-elt="find button[type='submit']">
+		<label for="display_name">
+			Display name
 			if authProvider != cdntypes.LocalAuthProvider {
-				<input type="text" id="name" name="name" value={ formData.Name } readonly/>
+				<input type="text" id="display_name" name="display_name" value={ formData.DisplayName } readonly/>
 			} else {
-				<input type="text" id="name" name="name" placeholder="Enter username..." value={ formData.Name } required/>
+				<input type="text" id="display_name" name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
 			}
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		<span class="error-text">{ formData.Errors.DisplayName }</span>
 		<label for="role">
 			Role
 			<select id="role" name="role" required>
@@ -1500,7 +1500,7 @@ templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnty
 		if passwordResetData.Errors.ServerError != "" {
 			<span class="error-text" role="alert" aria-live="polite">{ passwordResetData.Errors.ServerError }</span>
 		}
-		<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userName)) } hx-disabled-elt="find button[type='submit']">
+		<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userID)) } hx-disabled-elt="find button[type='submit']">
 			<label for="password">
 				New password
 				<input type="password" id="password" name="password" placeholder="Enter new password (min 15 characters)..." required/>

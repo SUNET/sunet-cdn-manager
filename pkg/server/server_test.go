@@ -194,17 +194,17 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 
 		// Users
 		// No org, local user
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'put-user-1')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('00000014-0000-0000-0000-000000000001', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'put-user-1')",
 		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000001', '00000014-0000-0000-0000-000000000001', '\\x00', '\\x00', 3, 65536, 4, 32)",
 		// No org, local users, used to test DELETE
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000002', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-1')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('00000014-0000-0000-0000-000000000002', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-1')",
 		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000002', '00000014-0000-0000-0000-000000000002', '\\x00', '\\x00', 3, 65536, 4, 32)",
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000003', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-2')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('00000014-0000-0000-0000-000000000003', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000001', 'delete-local-user-2')",
 		"INSERT INTO user_argon2keys (id, user_id, key, salt, time, memory, threads, tag_size) VALUES ('00000017-0000-0000-0000-000000000003', '00000014-0000-0000-0000-000000000003', '\\x00', '\\x00', 3, 65536, 4, 32)",
 		// No org, keycloak users, used to test DELETE
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000004', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-1')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('00000014-0000-0000-0000-000000000004', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-1')",
 		"INSERT INTO auth_provider_keycloak (id, user_id, subject) VALUES ('00000018-0000-0000-0000-000000000001', '00000014-0000-0000-0000-000000000004', '00000019-0000-0000-0000-000000000001')",
-		"INSERT INTO users (id, role_id, auth_provider_id, name) VALUES ('00000014-0000-0000-0000-000000000005', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-2')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('00000014-0000-0000-0000-000000000005', '00000005-0000-0000-0000-000000000002', '00000010-0000-0000-0000-000000000002', 'delete-keycloak-user-2')",
 		"INSERT INTO auth_provider_keycloak (id, user_id, subject) VALUES ('00000018-0000-0000-0000-000000000002', '00000014-0000-0000-0000-000000000005', '00000019-0000-0000-0000-000000000002')",
 
 		// Node groups
@@ -359,7 +359,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				return err
 			}
 
-			_, err = tx.Exec(ctx, "INSERT INTO users (id, org_id, name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
+			_, err = tx.Exec(ctx, "INSERT INTO users (id, org_id, display_name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
 			if err != nil {
 				return err
 			}
@@ -910,70 +910,56 @@ func TestGetUser(t *testing.T) {
 		description    string
 		username       string
 		password       string
-		nameOrID       string
+		userID         string
 		expectedStatus int
 	}{
 		{
 			description:    "successful superuser request with ID",
 			username:       "admin",
 			password:       validAdminPassword,
-			nameOrID:       "00000006-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			description:    "successful superuser request with name",
-			username:       "admin",
-			password:       validAdminPassword,
-			nameOrID:       "username1",
+			userID:         "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "successful user request for itself with ID",
 			username:       "username1",
 			password:       validUserPassword,
-			nameOrID:       "00000006-0000-0000-0000-000000000002",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			description:    "successful user request for itself with name",
-			username:       "username1",
-			password:       validUserPassword,
-			nameOrID:       "username1",
+			userID:         "00000006-0000-0000-0000-000000000002",
 			expectedStatus: http.StatusOK,
 		},
 		{
 			description:    "failed user request, bad password",
 			username:       "username1",
 			password:       "badpassword1",
-			nameOrID:       "00000006-0000-0000-0000-000000000001",
+			userID:         "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed user request, no password set",
 			username:       "username4-no-pw",
 			password:       "somepassword",
-			nameOrID:       "username4-no-pw",
+			userID:         "00000006-0000-0000-0000-000000000005",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			description:    "failed lookup of another user with ID",
 			username:       "username2",
 			password:       "password2",
-			nameOrID:       "00000006-0000-0000-0000-000000000001",
+			userID:         "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusNotFound,
 		},
 		{
-			description:    "failed lookup of another user with name",
-			username:       "username2",
-			password:       "password2",
-			nameOrID:       "username1",
-			expectedStatus: http.StatusNotFound,
+			description:    "failed request with invalid UUID",
+			username:       "admin",
+			password:       validAdminPassword,
+			userID:         "not-a-uuid",
+			expectedStatus: http.StatusUnprocessableEntity,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.nameOrID, nil)
+			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.userID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -991,7 +977,7 @@ func TestGetUser(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Fatalf("GET users/%s unexpected status code: %d (%s)", test.nameOrID, resp.StatusCode, string(r))
+				t.Fatalf("GET users/%s unexpected status code: %d (%s)", test.userID, resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -1100,13 +1086,13 @@ func TestPostUsers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			newUser := struct {
-				Name string `json:"name"`
-				Role string `json:"role"`
-				Org  string `json:"org,omitempty"`
+				DisplayName string `json:"display_name"`
+				Role        string `json:"role"`
+				Org         string `json:"org,omitempty"`
 			}{
-				Name: test.addedUser,
-				Org:  test.orgIDorName,
-				Role: test.roleIDorName,
+				DisplayName: test.addedUser,
+				Org:         test.orgIDorName,
+				Role:        test.roleIDorName,
 			}
 
 			b, err := json.Marshal(newUser)
@@ -1164,7 +1150,7 @@ func TestPutUser(t *testing.T) {
 		username            string
 		password            string
 		expectedStatus      int
-		targetUserIDorName  string
+		targetUserID        string
 		updatedOrgIDorName  string
 		updatedRoleIDorName string
 		updatedName         string
@@ -1174,37 +1160,37 @@ func TestPutUser(t *testing.T) {
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserIDorName:  "00000014-0000-0000-0000-000000000001",
+			targetUserID:        "00000014-0000-0000-0000-000000000001",
 			updatedOrgIDorName:  "00000002-0000-0000-0000-000000000001",
 			updatedRoleIDorName: "00000005-0000-0000-0000-000000000002",
 			updatedName:         "put-user-1",
 		},
 		{
-			description:         "successful superuser request with names",
+			description:         "successful superuser request with names for org and role",
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserIDorName:  "put-user-1",
+			targetUserID:        "00000014-0000-0000-0000-000000000001",
 			updatedName:         "put-user-1",
 			updatedOrgIDorName:  "org2",
 			updatedRoleIDorName: "user",
 		},
 		{
-			description:         "successful superuser request with names, null org",
+			description:         "successful superuser request, null org",
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserIDorName:  "put-user-1",
+			targetUserID:        "00000014-0000-0000-0000-000000000001",
 			updatedName:         "put-user-1",
 			updatedOrgIDorName:  "",
 			updatedRoleIDorName: "user",
 		},
 		{
-			description:         "failed non-superuser request with names",
+			description:         "failed non-superuser request",
 			username:            "username1",
 			password:            validUserPassword,
 			expectedStatus:      http.StatusForbidden,
-			targetUserIDorName:  "username1",
+			targetUserID:        "00000006-0000-0000-0000-000000000002",
 			updatedName:         "username1",
 			updatedOrgIDorName:  "org1",
 			updatedRoleIDorName: "user",
@@ -1214,9 +1200,19 @@ func TestPutUser(t *testing.T) {
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusUnprocessableEntity,
-			targetUserIDorName:  "delete-keycloak-user-1",
+			targetUserID:        "00000014-0000-0000-0000-000000000004",
 			updatedName:         "renamed-keycloak-user",
 			updatedOrgIDorName:  "",
+			updatedRoleIDorName: "user",
+		},
+		{
+			description:         "failed request with invalid UUID",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusUnprocessableEntity,
+			targetUserID:        "not-a-uuid",
+			updatedName:         "some-user",
+			updatedOrgIDorName:  "org1",
 			updatedRoleIDorName: "user",
 		},
 	}
@@ -1224,13 +1220,13 @@ func TestPutUser(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			putUser := struct {
-				Org  string `json:"org,omitempty"`
-				Role string `json:"role"`
-				Name string `json:"name"`
+				Org         string `json:"org,omitempty"`
+				Role        string `json:"role"`
+				DisplayName string `json:"display_name"`
 			}{
-				Org:  test.updatedOrgIDorName,
-				Role: test.updatedRoleIDorName,
-				Name: test.updatedName,
+				Org:         test.updatedOrgIDorName,
+				Role:        test.updatedRoleIDorName,
+				DisplayName: test.updatedName,
 			}
 
 			b, err := json.Marshal(putUser)
@@ -1242,7 +1238,7 @@ func TestPutUser(t *testing.T) {
 
 			t.Log(string(b))
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserIDorName, r)
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserID, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1286,82 +1282,83 @@ func TestDeleteUser(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description        string
-		username           string
-		password           string
-		expectedStatus     int
-		targetUserIDorName string
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		targetUserID   string
 	}{
 		{
-			description:        "successful superuser request with IDs",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusNoContent,
-			targetUserIDorName: "00000014-0000-0000-0000-000000000002",
+			description:    "successful superuser request for local user",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			targetUserID:   "00000014-0000-0000-0000-000000000002",
 		},
 		{
-			description:        "successful superuser request with name",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusNoContent,
-			targetUserIDorName: "delete-local-user-2",
+			description:    "successful superuser request for local user 2",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			targetUserID:   "00000014-0000-0000-0000-000000000003",
 		},
 		{
-			description:        "successful superuser request with IDs for keycloak",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusNoContent,
-			targetUserIDorName: "00000014-0000-0000-0000-000000000004",
+			description:    "successful superuser request for keycloak user",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			targetUserID:   "00000014-0000-0000-0000-000000000004",
 		},
 		{
-			description:        "successful superuser request with name for keycloak",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusNoContent,
-			targetUserIDorName: "delete-keycloak-user-2",
+			description:    "successful superuser request for keycloak user 2",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			targetUserID:   "00000014-0000-0000-0000-000000000005",
 		},
 		{
-			description:        "failed superuser request trying to remove itself with ID",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusForbidden,
-			targetUserIDorName: "00000006-0000-0000-0000-000000000001",
+			description:    "failed superuser request trying to remove itself",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusForbidden,
+			targetUserID:   "00000006-0000-0000-0000-000000000001",
 		},
 		{
-			description:        "failed superuser request trying to remove itself with name",
-			username:           "admin",
-			password:           validAdminPassword,
-			expectedStatus:     http.StatusForbidden,
-			targetUserIDorName: "admin",
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusForbidden,
+			targetUserID:   "00000006-0000-0000-0000-000000000001",
 		},
 		{
-			description:        "failed non-superuser request with name",
-			username:           "username1",
-			password:           validUserPassword,
-			expectedStatus:     http.StatusForbidden,
-			targetUserIDorName: "admin",
+			description:    "failed request with invalid UUID",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			targetUserID:   "not-a-uuid",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			ctx := context.Background()
-			// Verify uses exists prior to deletion
-			var testQuery string
-			if isUUID(test.targetUserIDorName) {
-				testQuery = "SELECT name, id FROM users WHERE id = $1"
-			} else {
-				testQuery = "SELECT name, id FROM users WHERE name = $1"
+			testQuery := "SELECT display_name, id FROM users WHERE id = $1"
+
+			// Only verify DB state for valid UUIDs
+			var checkUUID pgtype.UUID
+			validUUID := checkUUID.Scan(test.targetUserID) == nil
+
+			if validUUID {
+				// Verify user exists prior to deletion
+				var displayName string
+				var id pgtype.UUID
+				err := dbPool.QueryRow(ctx, testQuery, test.targetUserID).Scan(&displayName, &id)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
-			var name string
-			var id pgtype.UUID
-			err := dbPool.QueryRow(ctx, testQuery, test.targetUserIDorName).Scan(&name, &id)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserIDorName, nil)
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1389,19 +1386,23 @@ func TestDeleteUser(t *testing.T) {
 
 			t.Logf("%s\n", jsonData)
 
-			// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
-			err = dbPool.QueryRow(ctx, testQuery, test.targetUserIDorName).Scan(&name, &id)
-			if err == nil {
-				if test.expectedStatus == http.StatusNoContent {
-					// The delete seemed successful, why are they still in the db
-					t.Fatalf("user is not deleted as expected, name: '%s', id: '%s'", name, id)
-				}
-			} else {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					t.Fatalf("user deleted pre-check unexpected error: '%s', id: '%s', %s", name, id, err)
-				}
-				if test.expectedStatus != http.StatusNoContent {
-					t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", name, id, err)
+			if validUUID {
+				// Verify user is removed if a http.StatusNoContent was returned, otherwise they are expected to still exist
+				var displayName string
+				var id pgtype.UUID
+				err = dbPool.QueryRow(ctx, testQuery, test.targetUserID).Scan(&displayName, &id)
+				if err == nil {
+					if test.expectedStatus == http.StatusNoContent {
+						// The delete seemed successful, why are they still in the db
+						t.Fatalf("user is not deleted as expected, display_name: '%s', id: '%s'", displayName, id)
+					}
+				} else {
+					if !errors.Is(err, pgx.ErrNoRows) {
+						t.Fatalf("user deleted pre-check unexpected error: '%s', id: '%s', %s", displayName, id, err)
+					}
+					if test.expectedStatus != http.StatusNoContent {
+						t.Fatalf("database returned no rows, but the delete should have been forbidden: '%s', id: '%s', %s", displayName, id, err)
+					}
 				}
 			}
 		})
@@ -1419,64 +1420,81 @@ func TestPutPassword(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description          string
-		username             string
-		password             string
-		expectedStatus       int
-		modifiedUserIDorName string
-		oldPassword          string
-		newPassword          string
-		shouldSucceed        bool
+		description    string
+		username       string
+		password       string
+		expectedStatus int
+		modifiedUserID string
+		modifiedUser   string
+		oldPassword    string
+		newPassword    string
+		shouldSucceed  bool
 	}{
 		{
-			description:          "successful superuser request with IDs",
-			username:             "admin",
-			password:             validAdminPassword,
-			expectedStatus:       http.StatusNoContent,
-			modifiedUserIDorName: "username4-no-pw",
-			oldPassword:          "",
-			newPassword:          "updated-password-1",
-			shouldSucceed:        true,
+			description:    "successful superuser request with IDs",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNoContent,
+			modifiedUserID: "00000006-0000-0000-0000-000000000005",
+			modifiedUser:   "username4-no-pw",
+			oldPassword:    "",
+			newPassword:    "updated-password-1",
+			shouldSucceed:  true,
 		},
 		{
-			description:          "failed request for user missing password",
-			username:             "username4-no-pw",
-			password:             "",
-			expectedStatus:       http.StatusUnauthorized,
-			modifiedUserIDorName: "username5-no-pw",
-			oldPassword:          "",
-			newPassword:          "updated-password-2",
-			shouldSucceed:        false,
+			description:    "failed request for user missing password",
+			username:       "username4-no-pw",
+			password:       "",
+			expectedStatus: http.StatusUnauthorized,
+			modifiedUserID: "00000006-0000-0000-0000-000000000006",
+			modifiedUser:   "username5-no-pw",
+			oldPassword:    "",
+			newPassword:    "updated-password-2",
+			shouldSucceed:  false,
 		},
 		{
-			description:          "successful request for user changing their own password",
-			username:             "username1",
-			password:             validUserPassword,
-			expectedStatus:       http.StatusNoContent,
-			modifiedUserIDorName: "username1",
-			oldPassword:          validUserPassword,
-			newPassword:          "updated-password-3",
-			shouldSucceed:        true,
+			description:    "successful request for user changing their own password",
+			username:       "username1",
+			password:       validUserPassword,
+			expectedStatus: http.StatusNoContent,
+			modifiedUserID: "00000006-0000-0000-0000-000000000002",
+			modifiedUser:   "username1",
+			oldPassword:    validUserPassword,
+			newPassword:    "updated-password-3",
+			shouldSucceed:  true,
 		},
 		{
-			description:          "failed request for user changing their own password with the wrong old password",
-			username:             "username6",
-			password:             "password6",
-			expectedStatus:       http.StatusBadRequest,
-			modifiedUserIDorName: "username6",
-			oldPassword:          "password6-wrong",
-			newPassword:          "updated-password-4",
-			shouldSucceed:        false,
+			description:    "failed request for user changing their own password with the wrong old password",
+			username:       "username6",
+			password:       "password6",
+			expectedStatus: http.StatusBadRequest,
+			modifiedUserID: "00000006-0000-0000-0000-000000000007",
+			modifiedUser:   "username6",
+			oldPassword:    "password6-wrong",
+			newPassword:    "updated-password-4",
+			shouldSucceed:  false,
 		},
 		{
-			description:          "failed request for keycloak user",
-			username:             "admin",
-			password:             validAdminPassword,
-			expectedStatus:       http.StatusUnprocessableEntity,
-			modifiedUserIDorName: "delete-keycloak-user-1",
-			oldPassword:          "",
-			newPassword:          "keycloak-password-1",
-			shouldSucceed:        false,
+			description:    "failed request for keycloak user",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			modifiedUserID: "00000014-0000-0000-0000-000000000004",
+			modifiedUser:   "delete-keycloak-user-1",
+			oldPassword:    "",
+			newPassword:    "keycloak-password-1",
+			shouldSucceed:  false,
+		},
+		{
+			description:    "failed request with invalid UUID",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			modifiedUserID: "not-a-uuid",
+			modifiedUser:   "not-a-uuid",
+			oldPassword:    "",
+			newPassword:    "some-new-password-1",
+			shouldSucceed:  false,
 		},
 	}
 
@@ -1499,7 +1517,7 @@ func TestPutPassword(t *testing.T) {
 
 			t.Log(string(b))
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserIDorName+"/local-password", r)
+			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserID+"/local-password", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1530,7 +1548,7 @@ func TestPutPassword(t *testing.T) {
 			t.Logf("%s\n", jsonData)
 
 			// Verify old password no longer works
-			statusCode, err := testAuth(t, ts, test.modifiedUserIDorName, test.oldPassword)
+			statusCode, err := testAuth(t, ts, test.modifiedUser, test.modifiedUserID, test.oldPassword)
 			if err == nil {
 				t.Fatal(errors.New("old password still works, unexpected"))
 			}
@@ -1539,7 +1557,7 @@ func TestPutPassword(t *testing.T) {
 			}
 
 			// Verify new password works
-			statusCode, err = testAuth(t, ts, test.modifiedUserIDorName, test.newPassword)
+			statusCode, err = testAuth(t, ts, test.modifiedUser, test.modifiedUserID, test.newPassword)
 			if err != nil {
 				if test.shouldSucceed {
 					t.Fatal(err)
@@ -1558,8 +1576,8 @@ func TestPutPassword(t *testing.T) {
 	}
 }
 
-func testAuth(t *testing.T, ts *httptest.Server, username string, password string) (int, error) {
-	req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+username, nil)
+func testAuth(t *testing.T, ts *httptest.Server, username string, userID string, password string) (int, error) {
+	req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+userID, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -8952,7 +8970,7 @@ func TestConsoleCreateUser(t *testing.T) {
 		{
 			description: "successful user creation",
 			formData: url.Values{
-				"name":             {"test-console-user"},
+				"display_name":     {"test-console-user"},
 				"role":             {"user"},
 				"org":              {"org1"},
 				"password":         {"testpassword12345"},
@@ -8963,7 +8981,7 @@ func TestConsoleCreateUser(t *testing.T) {
 		{
 			description: "password mismatch",
 			formData: url.Values{
-				"name":             {"test-mismatch-user"},
+				"display_name":     {"test-mismatch-user"},
 				"role":             {"user"},
 				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"testpassword12345"},
@@ -8974,7 +8992,7 @@ func TestConsoleCreateUser(t *testing.T) {
 		{
 			description: "password too short",
 			formData: url.Values{
-				"name":             {"test-short-pw-user"},
+				"display_name":     {"test-short-pw-user"},
 				"role":             {"user"},
 				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"short"},
@@ -8985,7 +9003,7 @@ func TestConsoleCreateUser(t *testing.T) {
 		{
 			description: "duplicate name",
 			formData: url.Values{
-				"name":             {"admin"},
+				"display_name":     {"admin"},
 				"role":             {"admin"},
 				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"testpassword12345"},
@@ -9069,38 +9087,45 @@ func TestConsoleEditUser(t *testing.T) {
 		path             string
 		formData         url.Values
 		expectRedirect   bool
+		expectedStatus   int
 		expectedErrorMsg string
 	}{
 		{
 			description: "GET edit form for existing user",
 			method:      "GET",
-			path:        "/console/superuser/users/username1/edit",
+			path:        "/console/superuser/users/00000006-0000-0000-0000-000000000002/edit",
 		},
 		{
 			description:      "GET edit form for non-existent user",
 			method:           "GET",
-			path:             "/console/superuser/users/nonexistent-user/edit",
+			path:             "/console/superuser/users/00000000-0000-0000-0000-000000000000/edit",
 			expectedErrorMsg: consoleUserNotFound,
+		},
+		{
+			description:    "GET edit form with invalid UUID returns 400",
+			method:         "GET",
+			path:           "/console/superuser/users/not-a-uuid/edit",
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			description: "POST edit to change user role",
 			method:      "POST",
-			path:        "/console/superuser/users/username6/edit",
+			path:        "/console/superuser/users/00000006-0000-0000-0000-000000000007/edit",
 			formData: url.Values{
-				"name": {"username6"},
-				"role": {"admin"},
-				"org":  {cdntypes.OrgNotSelected},
+				"display_name": {"username6"},
+				"role":         {"admin"},
+				"org":          {cdntypes.OrgNotSelected},
 			},
 			expectRedirect: true,
 		},
 		{
 			description: "POST edit non-existent user",
 			method:      "POST",
-			path:        "/console/superuser/users/nonexistent-user/edit",
+			path:        "/console/superuser/users/00000000-0000-0000-0000-000000000000/edit",
 			formData: url.Values{
-				"name": {"nonexistent-user"},
-				"role": {"user"},
-				"org":  {cdntypes.OrgNotSelected},
+				"display_name": {"nonexistent-user"},
+				"role":         {"user"},
+				"org":          {cdntypes.OrgNotSelected},
 			},
 			expectedErrorMsg: consoleUserNotFound,
 		},
@@ -9134,6 +9159,17 @@ func TestConsoleEditUser(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
+
+			if test.expectedStatus == http.StatusBadRequest {
+				if resp.StatusCode != http.StatusBadRequest {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected 400, got %d (%s)", resp.StatusCode, string(body))
+				}
+				return
+			}
 
 			if test.expectRedirect {
 				if resp.StatusCode != http.StatusSeeOther {
@@ -9181,22 +9217,28 @@ func TestConsoleDeleteUser(t *testing.T) {
 		description      string
 		userToDelete     string
 		expectRedirect   bool
+		expectedStatus   int
 		expectedErrorMsg string
 	}{
 		{
 			description:      "self-delete is prevented",
-			userToDelete:     "admin",
+			userToDelete:     "00000006-0000-0000-0000-000000000001",
 			expectedErrorMsg: consoleNotAllowedDeleteSelf,
 		},
 		{
 			description:      "delete non-existent user shows error",
-			userToDelete:     "nonexistent-user",
+			userToDelete:     "00000000-0000-0000-0000-000000000000",
 			expectedErrorMsg: consoleUserNotFound,
 		},
 		{
 			description:    "successful user deletion",
-			userToDelete:   "username5-no-pw",
+			userToDelete:   "00000006-0000-0000-0000-000000000006",
 			expectRedirect: true,
+		},
+		{
+			description:    "invalid UUID returns 400",
+			userToDelete:   "not-a-uuid",
+			expectedStatus: http.StatusBadRequest,
 		},
 	}
 
@@ -9220,6 +9262,17 @@ func TestConsoleDeleteUser(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
+
+			if test.expectedStatus == http.StatusBadRequest {
+				if resp.StatusCode != http.StatusBadRequest {
+					body, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("expected 400, got %d (%s)", resp.StatusCode, string(body))
+				}
+				return
+			}
 
 			if test.expectRedirect {
 				if resp.StatusCode != http.StatusSeeOther {
@@ -9272,7 +9325,7 @@ func TestConsoleResetPassword(t *testing.T) {
 	}{
 		{
 			description: "successful password reset for local user",
-			userToReset: "username1",
+			userToReset: "00000006-0000-0000-0000-000000000002",
 			formData: url.Values{
 				"password":         {"newpassword12345"},
 				"confirm-password": {"newpassword12345"},
@@ -9281,7 +9334,7 @@ func TestConsoleResetPassword(t *testing.T) {
 		},
 		{
 			description: "password mismatch on reset",
-			userToReset: "username1",
+			userToReset: "00000006-0000-0000-0000-000000000002",
 			formData: url.Values{
 				"password":         {"newpassword12345"},
 				"confirm-password": {"differentpass1234"},
@@ -9290,7 +9343,7 @@ func TestConsoleResetPassword(t *testing.T) {
 		},
 		{
 			description: "password too short on reset",
-			userToReset: "username1",
+			userToReset: "00000006-0000-0000-0000-000000000002",
 			formData: url.Values{
 				"password":         {"short"},
 				"confirm-password": {"short"},
@@ -9299,7 +9352,7 @@ func TestConsoleResetPassword(t *testing.T) {
 		},
 		{
 			description: "reset password for non-existent user",
-			userToReset: "nonexistent-user",
+			userToReset: "00000000-0000-0000-0000-000000000000",
 			formData: url.Values{
 				"password":         {"newpassword12345"},
 				"confirm-password": {"newpassword12345"},
