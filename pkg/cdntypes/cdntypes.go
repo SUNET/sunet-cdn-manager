@@ -352,6 +352,35 @@ func (ds DomainString) String() string {
 // with a real name.
 const OrgNotSelected = "-- not selected --"
 
+// LocalAuthProvider is the auth provider name for users with local
+// (password-based) authentication, as opposed to external providers like
+// Keycloak/OIDC.
+const LocalAuthProvider = "local"
+
+type Role struct {
+	ID        pgtype.UUID `json:"id" doc:"ID of role"`
+	Name      string      `json:"name" example:"user" doc:"name of role"`
+	Superuser bool        `json:"superuser" doc:"whether this role grants superuser access"`
+}
+
+type UserListItem struct {
+	ID           pgtype.UUID `json:"id"`
+	Name         string      `json:"name"`
+	RoleName     string      `json:"role_name"`
+	OrgName      *string     `json:"org_name"`
+	AuthProvider string      `json:"auth_provider"`
+}
+
+// UserEditData is a composite type for the console edit form, enriching the
+// base user fields with resolved names and auth provider info.
+type UserEditData struct {
+	ID           pgtype.UUID
+	Name         string
+	RoleName     string
+	OrgName      *string
+	AuthProvider string // "local" or "keycloak"
+}
+
 type DashboardData struct {
 	ResourceAccess   bool
 	OrgDashboard     bool

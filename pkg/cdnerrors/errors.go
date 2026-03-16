@@ -30,6 +30,9 @@ var (
 	ErrReEncryptionMissingPassword   = errors.New("re-encryption needs at least two configured encryption passwords")
 	ErrReEncryptionFailed            = errors.New("re-encryption failed for at least one token")
 	ErrHasDependents                 = errors.New("resource has dependent resources")
+	ErrNotLocalUser                  = errors.New("operation is only available for local users")
+	ErrOldPasswordRequired           = errors.New("old password is required")
+	ErrSelfDelete                    = errors.New("users cannot delete themselves")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
