@@ -375,6 +375,30 @@ func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 		}
 
 		if ad.Superuser {
+			// If the superuser is also a member of an org and has not
+			// yet interacted with the org switcher, redirect to their
+			// org dashboard so they land on a useful page rather than
+			// the generic "select an organization" prompt. This fires
+			// on every fresh login since logout destroys the session.
+			// We check key presence (not value) to distinguish "never
+			// selected" from "explicitly unselected via OrgNotSelected".
+			_, hasSelectedOrg := session.Values[selectedOrgKey]
+			if ad.OrgName != nil && !hasSelectedOrg {
+				orgConsole, err := url.JoinPath(consolePath, "org", *ad.OrgName)
+				if err != nil {
+					logger.Err(err).Msg("unable to create org console path")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				session.Values[selectedOrgKey] = *ad.OrgName
+				if err := session.Save(r, w); err != nil {
+					logger.Err(err).Msg("unable to save session after setting default org")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
+				return
+			}
 			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sessionSelectedOrg(session), components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
@@ -1817,8 +1841,11 @@ func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) h
 
 		if orgStr == cdntypes.OrgNotSelected {
 			// The special "not selected" option leads to the root console path.
+			// Store empty string rather than deleting the key so that
+			// consoleDashboardHandler can distinguish "explicitly unselected"
+			// from "never selected" (key absent on fresh login).
 			orgURL = consolePath
-			delete(session.Values, selectedOrgKey)
+			session.Values[selectedOrgKey] = ""
 		} else {
 			// Use the same error for validateOrgName() as the user
 			// permission check so we don't give away if an org exists or
