@@ -120,7 +120,7 @@ type NodeGroupFormData struct {
 }
 
 type UserFormFields struct {
-	Name            string `schema:"name" validate:"required,min=1,max=63"`
+	DisplayName     string `schema:"display_name" validate:"required,min=1,max=63"`
 	Role            string `schema:"role" validate:"required"`
 	Org             string `schema:"org"`
 	Password        string `schema:"password"`         // #nosec G117 -- Used for form password input, never used for serialized output
@@ -128,7 +128,7 @@ type UserFormFields struct {
 }
 
 type UserFormErrors struct {
-	Name            string
+	DisplayName     string
 	Role            string
 	Org             string
 	Password        string // #nosec G117 -- Error message for password field, not a secret
@@ -244,13 +244,13 @@ var createSlugToSection = func() map[string]string {
 // buildBreadcrumbs returns the ancestor navigation path for the given console
 // URL. Each item is a link. The current page is not included since it is
 // already shown in the <h1> title.
-func buildBreadcrumbs(u *url.URL, orgName string) []Breadcrumb {
+func buildBreadcrumbs(u *url.URL, orgName string, itemLabel string) []Breadcrumb {
 	urlPath := u.EscapedPath()
 	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
 
 	// Handle superuser paths: /console/superuser/{section}[/{item}[/edit]]
 	if strings.HasPrefix(urlPath, "/console/superuser/") {
-		return buildSuperuserBreadcrumbs(parts)
+		return buildSuperuserBreadcrumbs(parts, itemLabel)
 	}
 
 	// Handle superuser create paths: /console/superuser/create/{slug}
@@ -312,7 +312,7 @@ func buildBreadcrumbs(u *url.URL, orgName string) []Breadcrumb {
 // List pages (e.g. /console/superuser/cache-nodes) get no breadcrumbs since
 // they are already the top-level view. Deeper pages (create, edit, and other
 // actions like maintenance/node-group) get the section list page as root crumb.
-func buildSuperuserBreadcrumbs(parts []string) []Breadcrumb {
+func buildSuperuserBreadcrumbs(parts []string, itemLabel string) []Breadcrumb {
 	// parts: ["console", "superuser", ...]
 	if len(parts) <= 3 {
 		// /console/superuser or /console/superuser/{section} — no breadcrumbs
@@ -342,8 +342,12 @@ func buildSuperuserBreadcrumbs(parts []string) []Breadcrumb {
 		if len(parts) >= 5 {
 			// /console/superuser/{section}/{item}/{action} — link to edit
 			// page since there is no standalone item detail page
-			itemName := parts[3]
-			crumbs = append(crumbs, Breadcrumb{Label: itemName, URL: fmt.Sprintf("%s/%s/%s/edit", superBase, sectionPath, itemName)})
+			itemID := parts[3]
+			label := itemID
+			if itemLabel != "" {
+				label = itemLabel
+			}
+			crumbs = append(crumbs, Breadcrumb{Label: label, URL: fmt.Sprintf("%s/%s/%s/edit", superBase, sectionPath, itemID)})
 		}
 
 		return crumbs
