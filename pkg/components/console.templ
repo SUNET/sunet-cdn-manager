@@ -412,7 +412,9 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 }
 
 templ CreateDomainContent(orgName string, dData DomainData) {
-	<span class="error-text">{ dData.Errors.ServerError }</span>
+	if dData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ dData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -424,7 +426,9 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 }
 
 templ CreateAPITokenContent(orgName string, atData APITokenData) {
-	<span class="error-text">{ atData.Errors.ServerError }</span>
+	if atData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ atData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -995,7 +999,9 @@ templ CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntype
 }
 
 templ CreateCacheNodeContent(formData CacheNodeFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action="/console/superuser/create/cache-node" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1017,7 +1023,9 @@ templ CreateCacheNodeContent(formData CacheNodeFormData) {
 }
 
 templ EditCacheNodeContent(nodeName string, formData CacheNodeFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1123,7 +1131,9 @@ templ L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.
 }
 
 templ CreateL4LBNodeContent(formData L4LBNodeFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action="/console/superuser/create/l4lb-node" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1145,7 +1155,9 @@ templ CreateL4LBNodeContent(formData L4LBNodeFormData) {
 }
 
 templ EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1213,7 +1225,9 @@ templ NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string,
 }
 
 templ CreateNodeGroupContent(formData NodeGroupFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action="/console/superuser/create/node-group" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1230,7 +1244,9 @@ templ CreateNodeGroupContent(formData NodeGroupFormData) {
 }
 
 templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", groupName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1297,7 +1313,9 @@ templ OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMess
 }
 
 templ CreateOrgContent(formData OrgFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action="/console/superuser/create/org" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
@@ -1324,7 +1342,9 @@ templ CreateOrgContent(formData OrgFormData) {
 }
 
 templ EditOrgContent(orgName string, formData OrgFormData) {
-	<span class="error-text">{ formData.Errors.ServerError }</span>
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
