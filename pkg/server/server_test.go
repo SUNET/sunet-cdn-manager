@@ -32,6 +32,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -50,6 +51,9 @@ import (
 const (
 	validAdminPassword = "adminpass123456"
 	validUserPassword  = "userpass1234567"
+
+	// Constraint name from migration 00006_name_not_uuid.sql
+	pgConstraintValidName = "valid_name"
 )
 
 var pgt *postgrestest.Server
@@ -2705,7 +2709,11 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 }
 
 func TestPostOrgClientCredentialsInvalidName(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, testServerInput{})
+	ctx := context.Background()
+	_, kcClientManager, issuerURL, jwkCache, oiConf, jwkCancelFunc := createKeycloakContainer(ctx, t)
+	defer jwkCancelFunc()
+
+	ts, dbPool, err := prepareServer(t, testServerInput{kcClientManager: kcClientManager, jwkCache: jwkCache, jwtIssuer: issuerURL.String(), oiConf: oiConf})
 	if dbPool != nil {
 		defer dbPool.Close()
 	}
@@ -2728,6 +2736,16 @@ func TestPostOrgClientCredentialsInvalidName(t *testing.T) {
 			password:       validAdminPassword,
 			expectedStatus: http.StatusUnprocessableEntity,
 			credName:       "INVALID NAME",
+			orgNameOrID:    "org1",
+		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint.
+			description:    "failed superuser request with UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			credName:       "abcdef01-2345-6789-abcd-ef0123456789",
 			orgNameOrID:    "org1",
 		},
 	}
@@ -3427,6 +3445,15 @@ func TestPostOrganizations(t *testing.T) {
 			addedOrganization: "username1org",
 			expectedStatus:    http.StatusForbidden,
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:       "failed superuser request with UUID name",
+			username:          "admin",
+			password:          validAdminPassword,
+			expectedStatus:    http.StatusUnprocessableEntity,
+			addedOrganization: "abcdef01-2345-6789-abcd-ef0123456789",
+		},
 	}
 
 	for _, test := range tests {
@@ -3983,6 +4010,16 @@ func TestPostServices(t *testing.T) {
 			newService:     "new-admin-org-4-service2",
 			expectedStatus: http.StatusConflict,
 			org:            "org4",
+		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:    "failed superuser request with UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			newService:     "abcdef01-2345-6789-abcd-ef0123456789",
+			org:            "org1",
 		},
 	}
 
@@ -5138,6 +5175,17 @@ func TestPostOriginGroups(t *testing.T) {
 			name:            "INVALID NAME",
 			expectedStatus:  http.StatusUnprocessableEntity,
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:     "failed superuser request with UUID name",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			name:            "abcdef01-2345-6789-abcd-ef0123456789",
+			expectedStatus:  http.StatusUnprocessableEntity,
+		},
 	}
 
 	for _, test := range tests {
@@ -5917,6 +5965,17 @@ func TestPostCacheNodes(t *testing.T) {
 			expectedStatus: http.StatusForbidden,
 			name:           "cache-node-post-user-7",
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:    "failed superuser request with UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			cacheNodeDescr: "uuid-name-test.example.com",
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.50")},
+			name:           "abcdef01-2345-6789-abcd-ef0123456789",
+		},
 	}
 
 	for _, test := range tests {
@@ -6541,6 +6600,17 @@ func TestPostL4LBNodes(t *testing.T) {
 			expectedStatus: http.StatusForbidden,
 			name:           "l4lb-node-post-user-7",
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:    "failed superuser request with UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			l4lbNodeDescr:  "uuid-name-test.example.com",
+			addresses:      []netip.Addr{netip.MustParseAddr("127.0.0.50")},
+			name:           "abcdef01-2345-6789-abcd-ef0123456789",
+		},
 	}
 
 	for _, test := range tests {
@@ -6967,6 +7037,16 @@ func TestPostNodeGroups(t *testing.T) {
 			groupDescription: "some node group",
 			expectedStatus:   http.StatusCreated,
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:      "failed superuser request with UUID name",
+			username:         "admin",
+			password:         validAdminPassword,
+			name:             "abcdef01-2345-6789-abcd-ef0123456789",
+			groupDescription: "uuid name test",
+			expectedStatus:   http.StatusUnprocessableEntity,
+		},
 	}
 
 	for _, test := range tests {
@@ -7087,6 +7167,18 @@ func TestPutCacheNode(t *testing.T) {
 			cacheNode:      "nonexistent-node",
 			name:           "nonexistent-node",
 			nodeDescr:      "Should not work",
+			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.1")},
+		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:    "failed superuser request, UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			cacheNode:      "cache-node1",
+			name:           "abcdef01-2345-6789-abcd-ef0123456789",
+			nodeDescr:      "UUID rename test",
 			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.1")},
 		},
 	}
@@ -7329,6 +7421,18 @@ func TestPutL4LBNode(t *testing.T) {
 			nodeDescr:      "Should not work",
 			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.2")},
 		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:    "failed superuser request, UUID name",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			l4lbNode:       "l4lb-node1",
+			name:           "abcdef01-2345-6789-abcd-ef0123456789",
+			nodeDescr:      "UUID rename test",
+			addresses:      []netip.Addr{netip.MustParseAddr("10.0.0.2")},
+		},
 	}
 
 	for _, test := range tests {
@@ -7562,6 +7666,17 @@ func TestPutNodeGroup(t *testing.T) {
 			nodeGroup:        "nonexistent-group",
 			name:             "nonexistent-group",
 			groupDescription: "Should not work",
+		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:      "failed superuser request, UUID name",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusUnprocessableEntity,
+			nodeGroup:        "node-group-2",
+			name:             "abcdef01-2345-6789-abcd-ef0123456789",
+			groupDescription: "UUID rename test",
 		},
 	}
 
@@ -8244,6 +8359,19 @@ func TestPutOrganization(t *testing.T) {
 			expectedStatus:   http.StatusUnprocessableEntity,
 			org:              "org1",
 			name:             "INVALID NAME",
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+		{
+			// UUID starts with a letter to bypass Huma's DNS label pattern
+			// validation — this exercises the database CHECK constraint
+			description:      "failed superuser request, UUID name",
+			username:         "admin",
+			password:         validAdminPassword,
+			expectedStatus:   http.StatusUnprocessableEntity,
+			org:              "org1",
+			name:             "abcdef01-2345-6789-abcd-ef0123456789",
 			serviceQuota:     10,
 			domainQuota:      20,
 			clientTokenQuota: 30,
@@ -9406,6 +9534,67 @@ func TestConsoleResetPassword(t *testing.T) {
 						t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestNameNotUUIDConstraint(t *testing.T) {
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	dbPool, err := initDatabase(ctx, t, logger, false)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// UUIDs that start with a letter (a-f) pass the is_valid_dns_label()
+	// regex but should be rejected by is_valid_name() which also checks
+	// is_not_uuid(). This tests the database constraint directly for
+	// entities that have no API POST endpoint.
+	tests := []struct {
+		description string
+		query       string
+		uuid        string
+	}{
+		{
+			description: "roles rejects hyphenated UUID name",
+			query:       "INSERT INTO roles (name) VALUES ($1)",
+			uuid:        "abcdef01-2345-6789-abcd-ef0123456789",
+		},
+		{
+			description: "auth_providers rejects hyphenated UUID name",
+			query:       "INSERT INTO auth_providers (name) VALUES ($1)",
+			uuid:        "abcdef01-2345-6789-abcd-ef0123456789",
+		},
+		{
+			description: "roles rejects non-hyphenated UUID name",
+			query:       "INSERT INTO roles (name) VALUES ($1)",
+			uuid:        "abcdef012345678901234567890abcde",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			_, err := dbPool.Exec(context.Background(), test.query, test.uuid)
+			if err == nil {
+				t.Fatal("expected INSERT to fail with check constraint violation, but it succeeded")
+			}
+
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) {
+				t.Fatalf("expected pgconn.PgError, got: %v", err)
+			}
+
+			if pgErr.Code != pgCheckViolation {
+				t.Fatalf("expected check_violation (23514), got: %s", pgErr.Code)
+			}
+
+			if pgErr.ConstraintName != pgConstraintValidName {
+				t.Fatalf("expected constraint %s, got: %s", pgConstraintValidName, pgErr.ConstraintName)
 			}
 		})
 	}
