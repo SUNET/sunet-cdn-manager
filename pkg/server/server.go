@@ -3728,8 +3728,13 @@ func insertCacheNodeTx(ctx context.Context, tx pgx.Tx, name string, description 
 	err := tx.QueryRow(ctx, "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-			return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
+			}
 		}
 		return pgtype.UUID{}, fmt.Errorf("INSERT cache node failed: %w", err)
 	}
@@ -3884,8 +3889,13 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	err := tx.QueryRow(ctx, "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-			return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case pgUniqueViolation:
+				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
+			}
 		}
 		return pgtype.UUID{}, fmt.Errorf("INSERT l4lb node failed: %w", err)
 	}
@@ -4774,15 +4784,18 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		logger.Err(err).Msg("insertOrgClientCredential transaction failed")
 		if clientRegistered {
 			logger.Info().Msgf("operation failed after client was successfully registered, cleanup orphaned client: %s", clientID)
-			err = kcClientManager.deleteClientCred(clientID, registrationAccessToken)
-			if err != nil {
-				logger.Err(err).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
+			cleanupErr := kcClientManager.deleteClientCred(clientID, registrationAccessToken)
+			if cleanupErr != nil {
+				logger.Err(cleanupErr).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
 			}
 		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgUniqueViolation {
+			switch pgErr.Code {
+			case pgUniqueViolation:
 				return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrCheckViolation
 			}
 		}
 		return cdntypes.NewOrgClientCredential{}, fmt.Errorf("insertOrgClientCredential transaction failed: %w", err)
@@ -5867,8 +5880,11 @@ func insertOriginGroupTx(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID, 
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgUniqueViolation {
+			switch pgErr.Code {
+			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
 			}
 		}
 		return pgtype.UUID{}, fmt.Errorf("unable to insert origin group %s into service_origin_groups: %w", name, err)
@@ -6012,8 +6028,11 @@ func insertNodeGroupTx(ctx context.Context, tx pgx.Tx, name string, description 
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgUniqueViolation {
+			switch pgErr.Code {
+			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
 			}
 		}
 		return pgtype.UUID{}, fmt.Errorf("unable to insert node group %s into node_groups: %w", name, err)
@@ -6192,8 +6211,11 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 		logger.Err(err).Msg("insertService transaction failed")
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgUniqueViolation {
+			switch pgErr.Code {
+			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+			case pgCheckViolation:
+				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
 			}
 		}
 		return pgtype.UUID{}, fmt.Errorf("insertService transaction failed: %w", err)
@@ -8190,6 +8212,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict("client credential already exists")
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("missing required params")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid client credential data")
 					}
 					logger.Err(err).Msg("unable to add client credential")
 					return nil, err
@@ -8626,6 +8650,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error403Forbidden("not allowed to create this service")
 					case errors.Is(err, cdnerrors.ErrServiceQuotaHit):
 						return nil, huma.Error409Conflict("service quota hit, not allowed to create more services")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid service data")
 					}
 					logger.Err(err).Msg("unable to add service")
 					return nil, err
@@ -8868,6 +8894,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict("origin group already exists")
 					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this origin group")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid origin group data")
 					}
 					logger.Err(err).Msg("unable to add origin group")
 					return nil, err
@@ -9083,6 +9111,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict(addrErr.Error())
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("cache node already exists")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid cache node data")
 					default:
 						logger.Err(err).Msg("unable to add cache node")
 						return nil, err
@@ -9207,6 +9237,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict(addrErr.Error())
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("l4lb node already exists")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid l4lb node data")
 					default:
 						logger.Err(err).Msg("unable to add l4lb node")
 						return nil, err
@@ -9323,6 +9355,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict("node group already exists")
 					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this node group")
+					case errors.Is(err, cdnerrors.ErrCheckViolation):
+						return nil, huma.Error422UnprocessableEntity("invalid node group data")
 					}
 					logger.Err(err).Msg("unable to add node group")
 					return nil, err
@@ -9363,6 +9397,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, huma.Error409Conflict(addrErr.Error())
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					return nil, huma.Error409Conflict("cache node already exists")
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					return nil, huma.Error422UnprocessableEntity("invalid cache node data")
 				default:
 					return nil, fmt.Errorf("unable to update cache node: %w", err)
 				}
@@ -9424,6 +9460,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, huma.Error409Conflict(addrErr.Error())
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					return nil, huma.Error409Conflict("l4lb node already exists")
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					return nil, huma.Error422UnprocessableEntity("invalid l4lb node data")
 				default:
 					return nil, fmt.Errorf("unable to update l4lb node: %w", err)
 				}
@@ -9478,6 +9516,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, huma.Error404NotFound(nodeGroupNotFound)
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					return nil, huma.Error409Conflict("node group already exists")
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					return nil, huma.Error422UnprocessableEntity("invalid node group data")
 				default:
 					return nil, fmt.Errorf("unable to update node group: %w", err)
 				}
@@ -13106,8 +13146,13 @@ func updateCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cac
 			name, description, cacheNodeIdent.id).Scan(&maintenance)
 		if err != nil {
 			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-				return cdnerrors.ErrAlreadyExists
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case pgUniqueViolation:
+					return cdnerrors.ErrAlreadyExists
+				case pgCheckViolation:
+					return cdnerrors.ErrCheckViolation
+				}
 			}
 			return fmt.Errorf("updateCacheNode: UPDATE failed: %w", err)
 		}
@@ -13174,8 +13219,13 @@ func updateL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lb
 			name, description, l4lbNodeIdent.id).Scan(&maintenance)
 		if err != nil {
 			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-				return cdnerrors.ErrAlreadyExists
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case pgUniqueViolation:
+					return cdnerrors.ErrAlreadyExists
+				case pgCheckViolation:
+					return cdnerrors.ErrCheckViolation
+				}
 			}
 			return fmt.Errorf("updateL4LBNode: UPDATE failed: %w", err)
 		}
@@ -13241,8 +13291,13 @@ func updateNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nod
 			name, description, nodeGroupIdent.id)
 		if err != nil {
 			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-				return cdnerrors.ErrAlreadyExists
+			if errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case pgUniqueViolation:
+					return cdnerrors.ErrAlreadyExists
+				case pgCheckViolation:
+					return cdnerrors.ErrCheckViolation
+				}
 			}
 			return fmt.Errorf("updateNodeGroup: UPDATE failed: %w", err)
 		}
