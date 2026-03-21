@@ -168,8 +168,7 @@ const (
 	userRole = "user"
 	nodeRole = "node"
 
-	// Some default auth providers
-	localAuthProvider    = cdntypes.LocalAuthProvider
+	// Auth provider for Keycloak users
 	keycloakAuthProvider = "keycloak"
 
 	// Limit console form posting to 1 MiB
@@ -3179,9 +3178,10 @@ func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2M
 		FROM users
 		JOIN user_argon2keys ON users.id = user_argon2keys.user_id
 		JOIN roles ON users.role_id = roles.id
+		JOIN auth_providers ap ON users.auth_provider_id = ap.id
 		LEFT JOIN orgs ON users.org_id = orgs.id
-		WHERE users.display_name=$1`,
-		username,
+		WHERE users.display_name=$1 AND ap.name=$2`,
+		username, cdntypes.LocalAuthProvider,
 	).Scan(
 		&userID,
 		&orgID,
@@ -3548,7 +3548,7 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 			return cdnerrors.ErrForbidden
 		}
 
-		if authProviderName != localAuthProvider {
+		if authProviderName != cdntypes.LocalAuthProvider {
 			return cdnerrors.ErrNotLocalUser
 		}
 
@@ -3943,7 +3943,7 @@ func createUser(ctx context.Context, dbc *dbConn, displayName string, role strin
 			return fmt.Errorf("unable to parse role for user INSERT: %w", err)
 		}
 
-		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, localAuthProvider)
+		authProviderID, err := authProviderNameToIDTx(dbCtx, tx, cdntypes.LocalAuthProvider)
 		if err != nil {
 			return fmt.Errorf("unable to resolve authProvider name to ID: %w", err)
 		}
@@ -4116,7 +4116,7 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 			if err != nil {
 				return fmt.Errorf("updateUser: unable to look up auth provider: %w", err)
 			}
-			if authProviderName != localAuthProvider {
+			if authProviderName != cdntypes.LocalAuthProvider {
 				return cdnerrors.ErrNotLocalUser
 			}
 		}
@@ -9854,12 +9854,12 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
 
-	authProviderNames := []string{localAuthProvider, keycloakAuthProvider}
+	authProviderNames := []string{cdntypes.LocalAuthProvider, keycloakAuthProvider}
 
 	u := InitUser{
 		name:         "admin",
 		role:         "admin",
-		authProvider: localAuthProvider,
+		authProvider: cdntypes.LocalAuthProvider,
 	}
 
 	var gorillaSessionEncKey []byte
@@ -12696,7 +12696,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 			}
 
 			// Non-local users cannot be renamed — ignore submitted name
-			if userData.AuthProvider != localAuthProvider {
+			if userData.AuthProvider != cdntypes.LocalAuthProvider {
 				formFields.DisplayName = userData.DisplayName
 			}
 
@@ -12844,7 +12844,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 			return
 		}
 
-		if userData.AuthProvider != localAuthProvider {
+		if userData.AuthProvider != cdntypes.LocalAuthProvider {
 			renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consolePasswordLocalOnly))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
