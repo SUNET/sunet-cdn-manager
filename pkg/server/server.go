@@ -1521,7 +1521,7 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 
 			domainData := components.DomainData{
 				DomainFormFields: components.DomainFormFields{
-					Name: formData.Name,
+					FQDN: formData.FQDN,
 				},
 			}
 
@@ -1529,11 +1529,11 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 			if err != nil {
 				validationErrors := err.(validator.ValidationErrors)
 				for _, fieldError := range validationErrors {
-					if fieldError.StructField() == "Name" {
+					if fieldError.StructField() == "FQDN" {
 						if fieldError.Tag() == "fqdn" {
-							domainData.Errors.Name = validationNotFQDN
+							domainData.Errors.FQDN = validationNotFQDN
 						} else {
-							domainData.Errors.Name = fieldError.Error()
+							domainData.Errors.FQDN = fieldError.Error()
 						}
 					}
 				}
@@ -1547,10 +1547,10 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				return
 			}
 
-			_, err = insertDomain(ctx, logger, dbc, formData.Name, &orgIdent.name, ad)
+			_, err = insertDomain(ctx, logger, dbc, formData.FQDN, &orgIdent.name, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
-					domainData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
+					domainData.Errors.FQDN = cdnerrors.ErrAlreadyExists.Error()
 				} else {
 					logger.Err(err).Msg("unable to insert domain")
 					domainData.Errors.ServerError = "unable to insert domain"
@@ -1564,7 +1564,7 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Domain '%s' added!", formData.Name), flashMessageKeys.domains)
+			session.AddFlash(fmt.Sprintf("Domain '%s' added!", formData.FQDN), flashMessageKeys.domains)
 			err = session.Save(r, w)
 			if err != nil {
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
@@ -2086,7 +2086,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 		ctx,
 		`SELECT
 			(SELECT
-				array_agg(domains.name ORDER BY domains.name)
+				array_agg(domains.fqdn ORDER BY domains.fqdn)
 				FROM domains
 				JOIN service_domains ON service_domains.domain_id = domains.id
 				WHERE domains.verified = true AND service_version_id = service_versions.id
@@ -2512,7 +2512,7 @@ type createServiceForm struct {
 type createDomainForm struct {
 	// Domain name length validation needs to be kept in sync with the CHECK
 	// constraints in the domains table, see the migrations module.
-	Name string `schema:"name" validate:"min=1,max=253,fqdn"`
+	FQDN string `schema:"fqdn" validate:"min=1,max=253,fqdn"`
 }
 
 type createAPITokenForm struct {
@@ -4268,12 +4268,12 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 
 		var rows pgx.Rows
 		if lookupOrg.Valid {
-			rows, err = tx.Query(ctx, "SELECT id, name, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY name", lookupOrg)
+			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY fqdn", lookupOrg)
 			if err != nil {
 				return fmt.Errorf("unable to query for domains for specific org: %w", err)
 			}
 		} else {
-			rows, err = tx.Query(ctx, "SELECT id, name, verified, verification_token FROM domains ORDER BY name")
+			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains ORDER BY fqdn")
 			if err != nil {
 				return fmt.Errorf("unable to query for all domains: %w", err)
 			}
@@ -4293,7 +4293,7 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 	return domains, nil
 }
 
-func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainNameOrID string) (pgtype.UUID, error) {
+func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainFQDNOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
 		return pgtype.UUID{}, cdnerrors.ErrNotFound
 	}
@@ -4303,7 +4303,7 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 
 	var domainID pgtype.UUID
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		domainIdent, err := newDomainIdentifier(dbCtx, tx, domainNameOrID)
+		domainIdent, err := newDomainIdentifier(dbCtx, tx, domainFQDNOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -5605,13 +5605,13 @@ func newDomainIdentifier(ctx context.Context, tx pgx.Tx, input string) (domainId
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM domains WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return domainIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (domain names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM domains WHERE name = $1 FOR SHARE", input).Scan(&id, &name, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE fqdn = $1 FOR SHARE", input).Scan(&id, &name, &orgID)
 		if err != nil {
 			return domainIdentifier{}, err
 		}
@@ -6040,12 +6040,12 @@ func insertNodeGroupTx(ctx context.Context, tx pgx.Tx, name string, description 
 	return nodeGroupID, nil
 }
 
-func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
+func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
 
-	// Cleanup any trailing "." in domain name
-	name = strings.TrimRight(name, ".")
+	// Cleanup any trailing "." in domain FQDN
+	fqdn = strings.TrimRight(fqdn, ".")
 
 	var orgIdent orgIdentifier
 	var err error
@@ -6099,7 +6099,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name
 			return fmt.Errorf("failed generating verification token: %w", err)
 		}
 
-		err = tx.QueryRow(dbCtx, "INSERT INTO domains (name, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", name, verificationToken, orgIdent.id).Scan(&domainID)
+		err = tx.QueryRow(dbCtx, "INSERT INTO domains (fqdn, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", fqdn, verificationToken, orgIdent.id).Scan(&domainID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT domain: %w", err)
 		}
@@ -6119,7 +6119,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name
 
 	d := cdntypes.Domain{
 		ID:                domainID,
-		Name:              name,
+		FQDN:              fqdn,
 		Verified:          false,
 		VerificationToken: verificationToken,
 	}
@@ -6361,7 +6361,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				GROUP BY service_id
 			) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
 		       JOIN (
-			       SELECT service_version_id, array_agg(domains.name ORDER BY domains.name) AS domains
+			       SELECT service_version_id, array_agg(domains.fqdn ORDER BY domains.fqdn) AS domains
 			       FROM service_domains
 			       JOIN domains ON service_domains.domain_id = domains.id
 			       WHERE domains.verified = true
@@ -6866,7 +6866,7 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 				WHERE service_id = services.id
 			) AS service_ip_addresses,
 			(SELECT
-				array_agg(domains.name ORDER BY domains.name)
+				array_agg(domains.fqdn ORDER BY domains.fqdn)
 				FROM domains
 				JOIN service_domains ON service_domains.domain_id = domains.id
 				WHERE domains.verified = true AND service_version_id = service_versions.id
@@ -6987,7 +6987,7 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 		var domainID pgtype.UUID
 		err = tx.QueryRow(
 			ctx,
-			"SELECT id FROM domains WHERE name=$1 AND org_id=$2 AND verified=$3",
+			"SELECT id FROM domains WHERE fqdn=$1 AND org_id=$2 AND verified=$3",
 			domain,
 			orgIdent.id,
 			true,
@@ -8329,7 +8329,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 		})
 
 		huma.Delete(api, "/v1/domains/{domain}", func(ctx context.Context, input *struct {
-			Domain string `path:"domain" example:"1" doc:"Domain ID or name" minLength:"1" maxLength:"253"`
+			Domain string `path:"domain" example:"1" doc:"Domain ID or FQDN" minLength:"1" maxLength:"253"`
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
@@ -8366,7 +8366,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Org  string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body struct {
-					Name string `json:"name" example:"example.com" doc:"Domain name" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
+					FQDN string `json:"fqdn" example:"example.com" doc:"Domain FQDN" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
 				}
 			},
 			) (*orgDomainOutput, error) {
@@ -8375,7 +8375,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				// The regex used above is not really a good
 				// filter for valid domain names, do some extra
 				// validation
-				_, ok := dns.IsDomainName(input.Body.Name)
+				_, ok := dns.IsDomainName(input.Body.FQDN)
 				if !ok {
 					return nil, huma.Error422UnprocessableEntity("the DNS name is not valid")
 				}
@@ -8385,7 +8385,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from domains POST handler")
 				}
 
-				domain, err := insertDomain(ctx, logger, dbc, input.Body.Name, &input.Org, ad)
+				domain, err := insertDomain(ctx, logger, dbc, input.Body.FQDN, &input.Org, ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrForbidden):
@@ -10026,18 +10026,18 @@ func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool
 
 type domainVerifyData struct {
 	ID                pgtype.UUID
-	Name              string
+	FQDN              string
 	VerificationToken string
 }
 
 func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logger, resolverAddress string, domainData domainVerifyData, udpClient *dns.Client, tcpClient *dns.Client) error {
-	logger.Info().Str("name", domainData.Name).Msg("found unverified domain name")
+	logger.Info().Str("fqdn", domainData.FQDN).Msg("found unverified domain name")
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domainData.Name), dns.TypeTXT)
+	m.SetQuestion(dns.Fqdn(domainData.FQDN), dns.TypeTXT)
 	m.SetEdns0(4096, false)
 	in, rtt, err := udpClient.Exchange(m, resolverAddress)
 	if err != nil {
-		logger.Err(err).Dur("rtt", rtt).Str("name", domainData.Name).Msg("error looking up unverified domain via UDP")
+		logger.Err(err).Dur("rtt", rtt).Str("fqdn", domainData.FQDN).Msg("error looking up unverified domain via UDP")
 		return err
 	}
 
@@ -10045,13 +10045,13 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 		logger.Error().Dur("rtt", rtt).Msg("udp query was truncated, retrying over TCP")
 		in, rtt, err = tcpClient.Exchange(m, resolverAddress)
 		if err != nil {
-			logger.Err(err).Dur("rtt", rtt).Str("name", domainData.Name).Msg("error looking up unverified domain via TCP")
+			logger.Err(err).Dur("rtt", rtt).Str("fqdn", domainData.FQDN).Msg("error looking up unverified domain via TCP")
 			return err
 		}
 	}
 
 	if in.Rcode != dns.RcodeSuccess {
-		logger.Error().Str("name", domainData.Name).Str("rcode", dns.RcodeToString[in.Rcode]).Msg("unsuccessful query rcode")
+		logger.Error().Str("fqdn", domainData.FQDN).Str("rcode", dns.RcodeToString[in.Rcode]).Msg("unsuccessful query rcode")
 		return fmt.Errorf("unsuccessful query code")
 	}
 
@@ -10062,7 +10062,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 			if val, ok := dns.TypeToString[answer.Header().Rrtype]; ok {
 				rrType = val
 			}
-			logger.Error().Str("name", domainData.Name).Str("rr_type", rrType).Msg("unable to parse entry in TXT answer section as TXT record")
+			logger.Error().Str("fqdn", domainData.FQDN).Str("rr_type", rrType).Msg("unable to parse entry in TXT answer section as TXT record")
 			// Keep looking at any additional answers since our record might still be in there
 			continue
 		}
@@ -10094,10 +10094,10 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 			if parts[1] == domainData.VerificationToken {
 				_, err := dbPool.Exec(ctx, "UPDATE domains SET verified=true WHERE id=$1", domainData.ID)
 				if err != nil {
-					logger.Err(err).Str("id", domainData.ID.String()).Str("name", domainData.Name).Msg("unable to update verified status for domain")
+					logger.Err(err).Str("id", domainData.ID.String()).Str("fqdn", domainData.FQDN).Msg("unable to update verified status for domain")
 					return fmt.Errorf("unable to update database: %w", err)
 				}
-				logger.Info().Str("id", domainData.ID.String()).Str("name", domainData.Name).Msg("successfully verified domain")
+				logger.Info().Str("id", domainData.ID.String()).Str("fqdn", domainData.FQDN).Msg("successfully verified domain")
 				// We are done
 				return nil
 			}
@@ -10116,7 +10116,7 @@ func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logg
 	for {
 		select {
 		case <-time.Tick(verifyInterval):
-			rows, err := dbPool.Query(ctx, "SELECT id, name, verification_token FROM domains WHERE verified=false")
+			rows, err := dbPool.Query(ctx, "SELECT id, fqdn, verification_token FROM domains WHERE verified=false")
 			if err != nil {
 				logger.Err(err).Msg("lookup of unverified domains failed")
 				continue

@@ -25,7 +25,7 @@ var CSSFS embed.FS
 var JsFS embed.FS
 
 type DomainFormFields struct {
-	Name string
+	FQDN string
 }
 
 type DomainData struct {
