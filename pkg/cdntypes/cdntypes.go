@@ -357,6 +357,10 @@ const OrgNotSelected = "-- not selected --"
 // Keycloak/OIDC.
 const LocalAuthProvider = "local"
 
+// KeycloakAuthProvider is the auth provider name for users authenticated
+// via Keycloak/OIDC.
+const KeycloakAuthProvider = "keycloak"
+
 type Role struct {
 	ID        pgtype.UUID `json:"id" doc:"ID of role"`
 	Name      string      `json:"name" example:"user" doc:"name of role"`
