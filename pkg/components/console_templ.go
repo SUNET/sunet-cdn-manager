@@ -948,7 +948,7 @@ func DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag s
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var40 string
-				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
+				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(domain.FQDN)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 215, Col: 23}
 				}
@@ -976,7 +976,7 @@ func DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag s
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var41 string
-				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
+				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(domain.FQDN)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 221, Col: 23}
 				}
@@ -1020,7 +1020,7 @@ func DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag s
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var45 string
-				templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))))
+				templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.FQDN))))
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 225, Col: 102}
 				}
@@ -1033,7 +1033,7 @@ func DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag s
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var46 string
-				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name))
+				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", domain.FQDN))
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 227, Col: 86}
 				}
@@ -1625,12 +1625,12 @@ func CreateDomainContent(orgName string, dData DomainData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"name\">Name <input type=\"text\" id=\"name\" name=\"name\" placeholder=\"Enter domain name...\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"fqdn\">FQDN <input type=\"text\" id=\"fqdn\" name=\"fqdn\" placeholder=\"Enter domain name...\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var77 string
-		templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Name)
+		templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.JoinStringErrs(dData.FQDN)
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 421, Col: 97}
 		}
@@ -1643,7 +1643,7 @@ func CreateDomainContent(orgName string, dData DomainData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var78 string
-		templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Errors.Name)
+		templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(dData.Errors.FQDN)
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 423, Col: 46}
 		}
@@ -2830,7 +2830,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var133 string
-					templ_7745c5c3_Var133, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
+					templ_7745c5c3_Var133, templ_7745c5c3_Err = templ.JoinStringErrs(domain.FQDN)
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 730, Col: 21}
 					}
@@ -2841,14 +2841,14 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 					var precheck bool
 					if submittedData != nil {
 						for _, submittedDomain := range submittedData.Domains {
-							if string(submittedDomain) == domain.Name {
+							if string(submittedDomain) == domain.FQDN {
 								precheck = true
 								break
 							}
 						}
 					}
 					for _, cloneDomain := range cloneData.Domains {
-						if string(cloneDomain) == domain.Name {
+						if string(cloneDomain) == domain.FQDN {
 							precheck = true
 							break
 						}
@@ -2871,7 +2871,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnty
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var135 string
-					templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.JoinStringErrs(domain.Name)
+					templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.JoinStringErrs(domain.FQDN)
 					if templ_7745c5c3_Err != nil {
 						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 748, Col: 101}
 					}

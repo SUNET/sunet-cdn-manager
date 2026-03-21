@@ -212,19 +212,19 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 			<tbody>
 				for _, domain := range domains {
 					<tr>
-						<td>{ domain.Name }</td>
+						<td>{ domain.FQDN }</td>
 						if domain.Verified {
 							<td><span aria-hidden="true">✅ </span>Yes</td>
 						} else {
 							<td><span aria-hidden="true">⏳ </span>In progress</td>
 						}
-						<td>{ domain.Name }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
+						<td>{ domain.FQDN }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
 						<td>
 							<button
 								type="button"
-								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.Name))) }
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.FQDN))) }
 								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.Name) }
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.FQDN) }
 								hx-disabled-elt="this"
 							>
 								Delete
@@ -416,11 +416,11 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 		<span class="error-text" role="alert" aria-live="polite">{ dData.Errors.ServerError }</span>
 	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
-		<label for="name">
-			Name
-			<input type="text" id="name" name="name" placeholder="Enter domain name..." value={ dData.Name } required/>
+		<label for="fqdn">
+			FQDN
+			<input type="text" id="fqdn" name="fqdn" placeholder="Enter domain name..." value={ dData.FQDN } required/>
 		</label>
-		<span class="error-text">{ dData.Errors.Name }</span>
+		<span class="error-text">{ dData.Errors.FQDN }</span>
 		<button type="submit">Add domain</button>
 	</form>
 }
@@ -727,25 +727,25 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 					for i, domain := range domains {
 						if domain.Verified {
 							<label for={ fmt.Sprintf("domains.%d", i) }>
-								{ domain.Name }
+								{ domain.FQDN }
 								{{
 									var precheck bool
 									if submittedData != nil {
 										for _, submittedDomain := range submittedData.Domains {
-											if string(submittedDomain) == domain.Name {
+											if string(submittedDomain) == domain.FQDN {
 												precheck = true
 												break
 											}
 										}
 									}
 									for _, cloneDomain := range cloneData.Domains {
-										if string(cloneDomain) == domain.Name {
+										if string(cloneDomain) == domain.FQDN {
 											precheck = true
 											break
 										}
 									}
 								}}
-								<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.Name } checked?={ precheck }/>
+								<input type="checkbox" id={ fmt.Sprintf("domains.%d", i) } name="domains" value={ domain.FQDN } checked?={ precheck }/>
 							</label>
 						}
 					}
