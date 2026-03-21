@@ -417,7 +417,7 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 	}
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="fqdn">
-			FQDN
+			Domain name
 			<input type="text" id="fqdn" name="fqdn" placeholder="Enter domain name..." value={ dData.FQDN } required/>
 		</label>
 		<span class="error-text">{ dData.Errors.FQDN }</span>

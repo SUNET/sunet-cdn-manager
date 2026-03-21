@@ -1625,7 +1625,7 @@ func CreateDomainContent(orgName string, dData DomainData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"fqdn\">FQDN <input type=\"text\" id=\"fqdn\" name=\"fqdn\" placeholder=\"Enter domain name...\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 141, "\" hx-disabled-elt=\"find button[type='submit']\"><label for=\"fqdn\">Domain name <input type=\"text\" id=\"fqdn\" name=\"fqdn\" placeholder=\"Enter domain name...\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
