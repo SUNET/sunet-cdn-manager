@@ -168,9 +168,6 @@ const (
 	userRole = "user"
 	nodeRole = "node"
 
-	// Auth provider for Keycloak users
-	keycloakAuthProvider = "keycloak"
-
 	// Limit console form posting to 1 MiB
 	formMaxSize = 1024 * 1024
 )
@@ -2933,7 +2930,7 @@ func addKeycloakUser(ctx context.Context, dbc *dbConn, subject, name string) (pg
 	var userID, keycloakProviderID pgtype.UUID
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, "INSERT INTO users (display_name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, keycloakAuthProvider).Scan(&userID)
+		err := tx.QueryRow(ctx, "INSERT INTO users (display_name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, cdntypes.KeycloakAuthProvider).Scan(&userID)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -9854,7 +9851,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
 
-	authProviderNames := []string{cdntypes.LocalAuthProvider, keycloakAuthProvider}
+	authProviderNames := []string{cdntypes.LocalAuthProvider, cdntypes.KeycloakAuthProvider}
 
 	u := InitUser{
 		name:         "admin",
