@@ -149,14 +149,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000003', 'node')",
 
 		// Domains
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', 'example.se', true, 'token1')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000002', '00000002-0000-0000-0000-000000000001', 'example.com', true, 'token2')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000003', '00000002-0000-0000-0000-000000000001', 'example.nu', false, 'token2')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000004', '00000002-0000-0000-0000-000000000001', 'example-delete-1.se', true, 'token-del-1')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000005', '00000002-0000-0000-0000-000000000001', 'example-delete-2.se', true, 'token2-del-2')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000006', '00000002-0000-0000-0000-000000000001', 'example-delete-3.se', false, 'token2-del-3')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000007', '00000002-0000-0000-0000-000000000001', 'example-delete-4.se', false, 'token2-del-4')",
-		"INSERT INTO domains (id, org_id, name, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000008', '00000002-0000-0000-0000-000000000001', 'example-delete-5.se', false, 'token2-del-5')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000001', '00000002-0000-0000-0000-000000000001', 'example.se', true, 'token1')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000002', '00000002-0000-0000-0000-000000000001', 'example.com', true, 'token2')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000003', '00000002-0000-0000-0000-000000000001', 'example.nu', false, 'token2')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000004', '00000002-0000-0000-0000-000000000001', 'example-delete-1.se', true, 'token-del-1')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000005', '00000002-0000-0000-0000-000000000001', 'example-delete-2.se', true, 'token2-del-2')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000006', '00000002-0000-0000-0000-000000000001', 'example-delete-3.se', false, 'token2-del-3')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000007', '00000002-0000-0000-0000-000000000001', 'example-delete-4.se', false, 'token2-del-4')",
+		"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ('00000015-0000-0000-0000-000000000008', '00000002-0000-0000-0000-000000000001', 'example-delete-5.se', false, 'token2-del-5')",
 
 		// Service domain mappings (only valid if the domains-entry is verified=true)
 		// org1: www.example.se
@@ -4233,9 +4233,9 @@ func TestPostDomains(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			newDomain := struct {
-				Name string `json:"name"`
+				FQDN string `json:"fqdn"`
 			}{
-				Name: test.newDomain,
+				FQDN: test.newDomain,
 			}
 
 			b, err := json.Marshal(newDomain)

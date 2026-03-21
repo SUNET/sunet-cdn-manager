@@ -244,7 +244,7 @@ func camelCaseToSnakeCase(s string) string {
 
 type Domain struct {
 	ID                pgtype.UUID `json:"id"`
-	Name              string      `json:"name"`
+	FQDN              string      `json:"fqdn"`
 	Verified          bool        `json:"verified"`
 	VerificationToken string      `json:"verification_token"`
 }
@@ -325,7 +325,7 @@ type ServiceVersionWithConfig struct {
 	Active        bool           `json:"active" example:"true" doc:"If the version is active"`
 	VCL           string         `json:"vcl"`
 	TLS           bool           `json:"tls" example:"true" doc:"If at least one origin has TLS enabled which means we require certificates"`
-	Domains       []DomainString `json:"domains" doc:"Names that the service is listening on"`
+	Domains       []DomainString `json:"domains" doc:"FQDNs that the service is listening on"`
 	HAProxyConfig string         `json:"haproxy_config"`
 }
 
