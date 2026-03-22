@@ -6499,17 +6499,9 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 
 	// Include what service networks have been added to the system so we
 	// can create firewall rules on the cache nodes.
-	rows, err = dbc.dbPool.Query(
-		ctx,
-		`SELECT network FROM ip_networks ORDER BY network`,
-	)
+	cnc.IPNetworks, err = selectIPNetworks(ctx, dbc.dbPool)
 	if err != nil {
-		return cdntypes.CacheNodeConfig{}, fmt.Errorf("unable to query for networks for cache node config: %w", err)
-	}
-
-	cnc.IPNetworks, err = pgx.CollectRows(rows, pgx.RowTo[netip.Prefix])
-	if err != nil {
-		return cdntypes.CacheNodeConfig{}, fmt.Errorf("pgx.CollectRows of IP networks for cache node config failed: %w", err)
+		return cdntypes.CacheNodeConfig{}, fmt.Errorf("selectCacheNodeConfig: %w", err)
 	}
 
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
@@ -6535,6 +6527,23 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	}
 
 	return cnc, nil
+}
+
+func selectIPNetworks(ctx context.Context, dbPool *pgxpool.Pool) ([]netip.Prefix, error) {
+	rows, err := dbPool.Query(
+		ctx,
+		`SELECT network FROM ip_networks ORDER BY network`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("selectIPNetworks: unable to query for networks: %w", err)
+	}
+
+	ipNetworks, err := pgx.CollectRows(rows, pgx.RowTo[netip.Prefix])
+	if err != nil {
+		return nil, fmt.Errorf("selectIPNetworks: pgx.CollectRows of IP networks failed: %w", err)
+	}
+
+	return ipNetworks, nil
 }
 
 // selectL4LBMembersForCacheNode uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
@@ -6706,6 +6715,13 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 	lnc := cdntypes.L4LBNodeConfig{
 		L4LBNode:   l4lbNode,
 		CacheNodes: cacheNodes,
+	}
+
+	// Include what service networks have been added to the system so we
+	// can create bird export filters on the l4lb nodes.
+	lnc.IPNetworks, err = selectIPNetworks(ctx, dbc.dbPool)
+	if err != nil {
+		return cdntypes.L4LBNodeConfig{}, fmt.Errorf("selectL4LBNodeConfig: %w", err)
 	}
 
 	for _, sii := range serviceIPInfos {

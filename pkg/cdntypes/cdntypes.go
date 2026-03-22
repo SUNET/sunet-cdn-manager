@@ -279,6 +279,7 @@ type L4LBNodeListItem struct {
 
 type L4LBNodeConfig struct {
 	L4LBNode   L4LBNode              `json:"l4lb_node"`
+	IPNetworks []netip.Prefix        `json:"ip_networks"`
 	Services   []ServiceConnectivity `json:"service_ip_info"`
 	CacheNodes []CacheNode           `json:"cache_nodes"`
 }
@@ -300,9 +301,9 @@ type ServiceConnectivity struct {
 // because pgtype.UUID does not implement encoding.TextMarshaler as expected by
 // encoding/json.
 type CacheNodeConfig struct {
-	CacheNode  CacheNode
-	IPNetworks []netip.Prefix
-	L4LBNodes  []L4LBNode
+	CacheNode  CacheNode                  `json:"cache_node"`
+	IPNetworks []netip.Prefix             `json:"ip_networks"`
+	L4LBNodes  []L4LBNode                 `json:"l4lb_nodes"`
 	Orgs       map[string]OrgWithServices `json:"orgs"`
 }
 
