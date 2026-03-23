@@ -66,7 +66,7 @@ func TestUpMigrations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		err := Up(logger, pgConfig)
+		err := Up(context.Background(), logger, pgConfig)
 		if err != nil {
 			t.Fatal(err)
 		}

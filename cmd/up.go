@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/spf13/cobra"
@@ -22,7 +24,7 @@ var upCmd = &cobra.Command{
 			return err
 		}
 
-		err = migrations.Up(cdnLogger, pgConfig)
+		err = migrations.Up(context.Background(), cdnLogger, pgConfig)
 		if err != nil {
 			return err
 		}

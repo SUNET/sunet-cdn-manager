@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"time"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/managerutils"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -29,16 +31,30 @@ func (gl gooseLogger) Printf(format string, v ...any) {
 //go:embed files/*.sql
 var embedMigrations embed.FS
 
-func Up(logger zerolog.Logger, pgConfig *pgxpool.Config) error {
+func Up(ctx context.Context, logger zerolog.Logger, pgConfig *pgxpool.Config) error {
 	gl := gooseLogger{logger: logger}
 	goose.SetLogger(gl)
 	goose.SetBaseFS(embedMigrations)
 
-	dbPool, err := pgxpool.NewWithConfig(context.Background(), pgConfig)
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
 		return fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
+
+	logger.Info().Msg("checking DB connection for migrations")
+	err = managerutils.RetryWithBackoff(
+		ctx,
+		logger,
+		time.Second*1,
+		time.Second*30,
+		10,
+		"ping DB for migration",
+		dbPool.Ping,
+	)
+	if err != nil {
+		return fmt.Errorf("pinging database connection for migrations failed: %w", err)
+	}
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("unable to goose.SetDialect()")

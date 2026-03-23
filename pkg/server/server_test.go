@@ -28,6 +28,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
+	"github.com/SUNET/sunet-cdn-manager/pkg/managerutils"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/coreos/go-oidc/v3/oidc"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -499,7 +500,7 @@ func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encr
 		return nil, fmt.Errorf("unable to create database pool: %w", err)
 	}
 
-	err = migrations.Up(logger, pgConfig)
+	err = migrations.Up(ctx, logger, pgConfig)
 	if err != nil {
 		dbPool.Close()
 		return nil, err
@@ -7930,7 +7931,7 @@ func TestRetryWithBackoff(t *testing.T) {
 			if test.cancel {
 				cancel()
 			}
-			err := retryWithBackoff(ctx, logger, test.sleepBase, test.sleepCap, test.attempts, test.description, test.operation)
+			err := managerutils.RetryWithBackoff(ctx, logger, test.sleepBase, test.sleepCap, test.attempts, test.description, test.operation)
 			if !errors.Is(err, test.err) {
 				t.Fatalf("wanted err to be: %#v, got: %#v", test.err, err)
 			}

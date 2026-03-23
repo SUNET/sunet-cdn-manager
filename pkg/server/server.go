@@ -18,7 +18,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	mrand "math/rand/v2"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -38,6 +37,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
+	"github.com/SUNET/sunet-cdn-manager/pkg/managerutils"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/a-h/templ"
 	"github.com/caddyserver/certmagic"
@@ -9843,19 +9843,33 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 		return InitUser{}, fmt.Errorf("password too short, must be at least %d characters", minPasswordLen)
 	}
 
-	err := migrations.Up(logger, pgConfig)
+	initCtx, initCancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer initCancel()
+
+	err := migrations.Up(initCtx, logger, pgConfig)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to run migrations: %w", err)
 	}
-
-	initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer initCancel()
 
 	dbPool, err := pgxpool.NewWithConfig(initCtx, pgConfig)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to create database pool: %w", err)
 	}
 	defer dbPool.Close()
+
+	logger.Info().Msg("checking DB connection for init")
+	err = managerutils.RetryWithBackoff(
+		initCtx,
+		logger,
+		time.Second*1,
+		time.Second*30,
+		10,
+		"ping DB for init",
+		dbPool.Ping,
+	)
+	if err != nil {
+		return InitUser{}, fmt.Errorf("pinging database connection for init failed: %w", err)
+	}
 
 	// We get away with a local version of the argon2 mutex here because
 	// Init() is only called when first initializing the database, so there
@@ -10267,52 +10281,6 @@ func (dbc *dbConn) detachedContextWithDuration(parent context.Context, timeout t
 	return context.WithTimeout(context.WithoutCancel(parent), timeout) // #nosec G118 -- caller is responsible for cancelling the context
 }
 
-func retryWithBackoff(ctx context.Context, logger zerolog.Logger, sleepBase time.Duration, sleepCap time.Duration, attempts int, description string, operation func(context.Context) error) error {
-	var err error
-
-	if sleepBase <= 0 {
-		return fmt.Errorf("sleepBase must be larger than 0")
-	}
-
-	if sleepCap < sleepBase {
-		return fmt.Errorf("sleepCap must be equal to or larger than sleepBase")
-	}
-
-	if attempts <= 0 {
-		return fmt.Errorf("attempts must be larger than 0")
-	}
-
-	for attempt := range attempts {
-		err = operation(ctx)
-		if err == nil {
-			if attempt > 0 {
-				logger.Info().Int("attempt", attempt+1).Msgf("retryWithBackoff: operation '%s' succeeded after retries", description)
-			}
-			break
-		}
-
-		if attempt < attempts-1 {
-			// Exponential backoff
-			sleepDuration := min(sleepCap, sleepBase*(1<<attempt))
-			// Add jitter
-			sleepDuration = sleepDuration/2 + time.Duration(mrand.Int64N(int64(sleepDuration/2))) // #nosec G404 -- no need for cryptographically secure randomness for backoff timer
-			logger.Err(err).Msgf("retryWithBackoff: operation '%s' failed, sleeping for %s", description, sleepDuration)
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("retryWithBackoff: context cancelled while waiting for '%s': %w", description, ctx.Err())
-			case <-time.After(sleepDuration):
-			}
-		} else {
-			logger.Err(err).Msgf("retryWithBackoff: hit retry limit, giving up on '%s'", description)
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("retryWithBackoff: '%s' failed after %d attempts: %w", description, attempts, err)
-	}
-
-	return nil
-}
-
 func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
 	if debug {
 		logger = logger.Level(zerolog.DebugLevel)
@@ -10349,7 +10317,7 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	defer dbPool.Close()
 
 	logger.Info().Msg("checking DB connection")
-	err = retryWithBackoff(
+	err = managerutils.RetryWithBackoff(
 		runCtx,
 		logger,
 		time.Second*1,
@@ -10391,7 +10359,7 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	providerCtx := oidc.ClientContext(runCtx, client)
 	logger.Info().Msg("setting up OIDC provider")
 	var provider *oidc.Provider
-	err = retryWithBackoff(
+	err = managerutils.RetryWithBackoff(
 		providerCtx,
 		logger,
 		time.Second*1,
