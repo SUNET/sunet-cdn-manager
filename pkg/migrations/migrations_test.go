@@ -66,12 +66,11 @@ func TestUpMigrations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		err := Up(logger, pgConfig)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err != nil {
-			t.Fatalf("%s: up call failed: %s", test.description, err)
-		}
+		t.Run(test.description, func(t *testing.T) {
+			err := Up(context.Background(), logger, pgConfig)
+			if err != nil {
+				t.Fatalf("up call failed: %s", err)
+			}
+		})
 	}
 }

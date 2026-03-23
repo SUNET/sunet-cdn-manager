@@ -11,7 +11,7 @@ var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Migrate to latest version",
 	Long:  `Migrate SQL DB to latest version`,
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		conf, err := config.GetConfig(localViper)
 		if err != nil {
 			return err
@@ -22,7 +22,7 @@ var upCmd = &cobra.Command{
 			return err
 		}
 
-		err = migrations.Up(cdnLogger, pgConfig)
+		err = migrations.Up(cmd.Context(), cdnLogger, pgConfig)
 		if err != nil {
 			return err
 		}
