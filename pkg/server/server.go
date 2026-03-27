@@ -10127,11 +10127,9 @@ func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logg
 	udpClient := &dns.Client{}
 	tcpClient := &dns.Client{Net: "tcp"}
 
-	tickCh := time.Tick(verifyInterval)
-
 	for {
 		select {
-		case <-tickCh:
+		case <-time.After(verifyInterval):
 			rows, err := dbPool.Query(ctx, "SELECT id, fqdn, verification_token FROM domains WHERE verified=false")
 			if err != nil {
 				logger.Err(err).Msg("lookup of unverified domains failed")
