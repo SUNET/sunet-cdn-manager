@@ -2,10 +2,8 @@ package cdntypes
 
 import (
 	"net/netip"
-	"reflect"
-	"strings"
+	"slices"
 	"time"
-	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -103,7 +101,7 @@ type ServiceVersionVCL struct {
 // A combined type of all related data for a service version
 type ServiceVersionConfig struct {
 	ServiceVersion
-	VclSteps
+	VCLTemplate        string         `json:"vcl_template" doc:"The VCL template content"`
 	ServiceIPAddresses []netip.Addr   `json:"service_ip_addresses" doc:"The IP (v4 and v6) addresses allocated to the service" validate:"min=2"`
 	Domains            []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
 	OriginGroups       []OriginGroup  `json:"origin_groups" doc:"The available origin groups" validate:"min=1"`
@@ -111,17 +109,17 @@ type ServiceVersionConfig struct {
 }
 
 type ServiceVersionCloneData struct {
-	VclSteps
-	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	VCLTemplate string         `json:"vcl_template" doc:"The VCL template content"`
+	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 // What data is expected when handling a request to add a service version
 type InputServiceVersion struct {
 	ServiceVersion
-	VclSteps
-	Domains []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	VCLTemplate string         `json:"vcl_template" doc:"The VCL template content" validate:"min=1,max=1048576"`
+	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 type CreateServiceVersionOrigin struct {
@@ -133,9 +131,9 @@ type CreateServiceVersionOrigin struct {
 }
 
 type CreateServiceVersionForm struct {
-	VclSteps
-	Domains []DomainString               `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
+	VCLTemplate string                       `schema:"vcl_template" validate:"min=1,max=1048576"`
+	Domains     []DomainString               `schema:"domains" validate:"dive,min=1,max=253"`
+	Origins     []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
 }
 
 type OriginGroup struct {
@@ -166,81 +164,109 @@ type Origin struct {
 	VerifyTLS     bool        `json:"verify_tls"`
 }
 
-// The "Client" and "Backend" steps from
-// https://varnish-cache.org/docs/trunk/reference/vcl-step.html
-// Fields are pointers to strings since they can all potentially be NULL in the database.
-type VclSteps struct {
-	VclRecv            *string `json:"vcl_recv,omitempty" doc:"The vcl_recv content" schema:"vcl_recv" validate:"omitnil,min=1,max=2048"`
-	VclPipe            *string `json:"vcl_pipe,omitempty" doc:"The vcl_pipe content" schema:"vcl_pipe" validate:"omitnil,min=1,max=2048"`
-	VclPass            *string `json:"vcl_pass,omitempty" doc:"The vcl_pass content" schema:"vcl_pass" validate:"omitnil,min=1,max=2048"`
-	VclHash            *string `json:"vcl_hash,omitempty" doc:"The vcl_hash content" schema:"vcl_hash" validate:"omitnil,min=1,max=2048"`
-	VclPurge           *string `json:"vcl_purge,omitempty" doc:"The vcl_purge content" schema:"vcl_purge" validate:"omitnil,min=1,max=2048"`
-	VclMiss            *string `json:"vcl_miss,omitempty" doc:"The vcl_miss content" schema:"vcl_miss" validate:"omitnil,min=1,max=2048"`
-	VclHit             *string `json:"vcl_hit,omitempty" doc:"The vcl_hit content" schema:"vcl_hit" validate:"omitnil,min=1,max=2048"`
-	VclDeliver         *string `json:"vcl_deliver,omitempty" doc:"The vcl_deliver content" schema:"vcl_deliver" validate:"omitnil,min=1,max=2048"`
-	VclSynth           *string `json:"vcl_synth,omitempty" doc:"The vcl_synth content" schema:"vcl_synth" validate:"omitnil,min=1,max=2048"`
-	VclBackendFetch    *string `json:"vcl_backend_fetch,omitempty" doc:"The vcl_backend_fetch content" schema:"vcl_backend_fetch" validate:"omitnil,min=1,max=2048"`
-	VclBackendResponse *string `json:"vcl_backend_response,omitempty" doc:"The vcl_backend_response content" schema:"vcl_backend_response" validate:"omitnil,min=1,max=2048"`
-	VclBackendError    *string `json:"vcl_backend_error,omitempty" doc:"The vcl_backend_error content" schema:"vcl_backend_error" validate:"omitnil,min=1,max=2048"`
+const (
+	// VCLMacroPrefix is the prefix used for VCL macro comments that mark
+	// system-generated content injection points.
+	VCLMacroPrefix = "#SUNET-CDN-MANAGER "
+
+	// VCLTemplateMaxSize is the maximum size of a VCL template in bytes (1MB).
+	VCLTemplateMaxSize = 1048576
+)
+
+// VCL macro name constants.
+const (
+	VCLMacroPreamble        = "preamble"
+	VCLMacroRecv            = "vcl_recv"
+	VCLMacroPipe            = "vcl_pipe"
+	VCLMacroPass            = "vcl_pass"
+	VCLMacroHash            = "vcl_hash"
+	VCLMacroPurge           = "vcl_purge"
+	VCLMacroMiss            = "vcl_miss"
+	VCLMacroHit             = "vcl_hit"
+	VCLMacroDeliver         = "vcl_deliver"
+	VCLMacroSynth           = "vcl_synth"
+	VCLMacroBackendFetch    = "vcl_backend_fetch"
+	VCLMacroBackendResponse = "vcl_backend_response"
+	VCLMacroBackendError    = "vcl_backend_error"
+)
+
+// vclRequiredMacros lists all macro names that must appear exactly once in a
+// VCL template. The "preamble" macro marks where the system-generated VCL
+// version, imports, and backend definitions are injected. The remaining
+// macros each correspond to a Varnish subroutine.
+var vclRequiredMacros = []string{
+	VCLMacroPreamble,
+	VCLMacroRecv,
+	VCLMacroPipe,
+	VCLMacroPass,
+	VCLMacroHash,
+	VCLMacroPurge,
+	VCLMacroMiss,
+	VCLMacroHit,
+	VCLMacroDeliver,
+	VCLMacroSynth,
+	VCLMacroBackendFetch,
+	VCLMacroBackendResponse,
+	VCLMacroBackendError,
 }
 
-func NewVclStepKeys() VclStepKeys {
-	vclSK := VclStepKeys{
-		FieldToKey: map[string]string{},
-	}
-	for _, field := range reflect.VisibleFields(reflect.TypeFor[VclSteps]()) {
-		vclSK.FieldOrder = append(vclSK.FieldOrder, field.Name)
-		vclSK.FieldToKey[field.Name] = camelCaseToSnakeCase(field.Name)
-	}
-
-	return vclSK
+// VCLRequiredMacros returns a copy of the required macro names list.
+func VCLRequiredMacros() []string {
+	return slices.Clone(vclRequiredMacros)
 }
 
-// VclStepsToMap is a helper function to convert the VclSteps struct to a map
-// for dynamic lookups at runtime, also returns order of keys to keep this in
-// sync with the struct.
-func VclStepsToMap(vclSteps VclSteps) (map[string]string, []string) {
-	vclSK := NewVclStepKeys()
+// DefaultVCLTemplate is the minimal valid VCL template containing all required
+// macros. It is used as the starting point for new service versions.
+const DefaultVCLTemplate = `#SUNET-CDN-MANAGER preamble
 
-	vclKeyToConf := map[string]string{}
-	keyOrder := []string{}
-
-	// Loop over all VCL step fields, and if they are non-nil and not empty string add them to map
-	val := reflect.ValueOf(&vclSteps)
-	structVal := val.Elem()
-	for _, field := range reflect.VisibleFields(structVal.Type()) {
-		if _, ok := vclSK.FieldToKey[field.Name]; ok {
-			fieldVal := structVal.FieldByIndex(field.Index)
-			if fieldVal.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.String {
-				if !fieldVal.IsNil() && fieldVal.Elem().String() != "" {
-					vclKeyToConf[vclSK.FieldToKey[field.Name]] = fieldVal.Elem().String()
-					keyOrder = append(keyOrder, vclSK.FieldToKey[field.Name])
-				}
-			}
-		}
-	}
-
-	return vclKeyToConf, keyOrder
+sub vcl_recv {
+  #SUNET-CDN-MANAGER vcl_recv
 }
 
-// Used to turn e.g. "VclRecv" or "VCLRecv" into "vcl_recv"
-func camelCaseToSnakeCase(s string) string {
-	// Handle capitalized VCL
-	s = strings.ReplaceAll(s, "VCL", "Vcl")
-	var b strings.Builder
-	for i, c := range s {
-		if unicode.IsUpper(c) {
-			if i > 0 {
-				b.WriteString("_")
-			}
-			b.WriteRune(unicode.ToLower(c))
-		} else {
-			b.WriteRune(c)
-		}
-	}
-
-	return b.String()
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
 }
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`
 
 type Domain struct {
 	ID                pgtype.UUID `json:"id"`
@@ -328,11 +354,6 @@ type ServiceVersionWithConfig struct {
 	TLS           bool           `json:"tls" example:"true" doc:"If at least one origin has TLS enabled which means we require certificates"`
 	Domains       []DomainString `json:"domains" doc:"FQDNs that the service is listening on"`
 	HAProxyConfig string         `json:"haproxy_config"`
-}
-
-type VclStepKeys struct {
-	FieldOrder []string
-	FieldToKey map[string]string
 }
 
 type DomainString string

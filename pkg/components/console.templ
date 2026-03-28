@@ -491,7 +491,7 @@ templ CreateServiceContent(orgName string, err error) {
 	</form>
 }
 
-templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig, vclKeyToConf map[string]string, vclKeyOrder []string) {
+templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig) {
 	<article>
 		<header>
 			<strong>Version details</strong>
@@ -568,17 +568,12 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 			</ul>
 		}
 	</article>
-	if len(vclKeyToConf) != 0 {
+	if sv.VCLTemplate != "" {
 		<article>
-			<header>
-				<strong>VCL configuration</strong>
-			</header>
-			for _, k := range vclKeyOrder {
-				<details>
-					<summary><span class="vcl-label">{ k }</span></summary>
-					<pre><code>{ vclKeyToConf[k] }</code></pre>
-				</details>
-			}
+			<details>
+				<summary><strong>VCL template</strong></summary>
+				<pre class="vcl-preview"><code>{ sv.VCLTemplate }</code></pre>
+			</details>
 		</article>
 	}
 }
@@ -701,7 +696,7 @@ templ deleteOriginButton(index string, disabled bool) {
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdntypes.VclStepKeys, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, orgName string, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	if err != nil {
 		<article id="error-message" aria-label="Error" role="alert">
 			switch  {
@@ -806,30 +801,28 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 		}}
 		@addOriginButton(orgName, serviceName, nextOriginIndexStr, false)
 		{{
-			var vclStepsMap map[string]string
+			displayValue := vclTemplateValue
 			if submittedData != nil {
-				vclStepsMap, _ = cdntypes.VclStepsToMap(submittedData.VclSteps)
-			} else {
-				vclStepsMap, _ = cdntypes.VclStepsToMap(cloneData.VclSteps)
+				displayValue = submittedData.VCLTemplate
 			}
 		}}
 		<article>
 			<fieldset>
-				<legend>VCL steps</legend>
+				<legend>VCL template</legend>
 				<small id="vcl-hint" class="vcl-hint">Tab inserts spaces. Press Escape to enable Tab navigation out of the editor.</small>
-				for _, vclStep := range vclSK.FieldOrder {
-					<div>
-						<label for={ vclSK.FieldToKey[vclStep] }>
-							{ vclSK.FieldToKey[vclStep] }
-							<textarea
-								id={ vclSK.FieldToKey[vclStep] }
-								name={ vclSK.FieldToKey[vclStep] }
-								placeholder="Enter your VCL here..."
-								class="vcl-editor"
-								rows="6"
-								spellcheck="false"
-								aria-describedby="vcl-hint"
-								_="on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'
+				<div>
+					<label for="vcl_template">
+						vcl_template
+						<textarea
+							id="vcl_template"
+							name="vcl_template"
+							placeholder="Enter your VCL template here..."
+							class="vcl-editor"
+							rows="24"
+							maxlength="1048576"
+							spellcheck="false"
+							aria-describedby="vcl-hint"
+							_="on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'
 								halt the event
 								get my.selectionStart
 								set start to it
@@ -848,10 +841,9 @@ templ CreateServiceVersionContent(serviceName string, orgName string, vclSK cdnt
 								set my style.height to my.scrollHeight + 'px'
 							on load
 								set my style.height to my.scrollHeight + 'px'"
-							>{ vclStepsMap[vclSK.FieldToKey[vclStep]] }</textarea>
-						</label>
-					</div>
-				}
+						>{ displayValue }</textarea>
+					</label>
+				</div>
 			</fieldset>
 		</article>
 		<button type="submit">Add service version</button>

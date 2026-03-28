@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,7 +30,6 @@ import (
 	"syscall"
 	"text/template"
 	"time"
-	"unicode"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
@@ -168,8 +166,10 @@ const (
 	userRole = "user"
 	nodeRole = "node"
 
-	// Limit console form posting to 1 MiB
-	formMaxSize = 1024 * 1024
+	// Limit console form posting to 4 MiB (must accommodate a 1 MiB
+	// VCL template with URL-encoding expansion up to ~3x plus other
+	// form fields)
+	formMaxSize = 4 * 1024 * 1024
 )
 
 var (
@@ -232,10 +232,27 @@ func validateInputOrigins(ctx context.Context, tx pgx.Tx, inputOrigins []cdntype
 func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplates configTemplates, iSvc cdntypes.InputServiceVersion, serviceIPAddrs []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
-		return fmt.Errorf("unable to validate input svc struct: %w", err)
+		if validationErrors, ok := err.(validator.ValidationErrors); ok {
+			for _, fieldError := range validationErrors {
+				switch fieldError.StructField() {
+				case "VCLTemplate":
+					switch fieldError.Tag() {
+					case "min":
+						return cdnerrors.NewValidationError("vcl_template must not be empty")
+					case "max":
+						return cdnerrors.NewValidationError("vcl_template exceeds maximum size")
+					}
+				case "Domains":
+					return cdnerrors.NewValidationError("at least one domain is required")
+				case "Origins":
+					return cdnerrors.NewValidationError("at least one origin is required")
+				}
+			}
+		}
+		return cdnerrors.ErrUnprocessable
 	}
 
-	vcl, err := generateCompleteVcl(confTemplates.vcl, serviceIPAddrs, originGroups, origins, iSvc.Domains, iSvc.VclSteps)
+	vcl, err := generateCompleteVcl(confTemplates, serviceIPAddrs, originGroups, origins, iSvc.Domains, iSvc.VCLTemplate)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -260,6 +277,50 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unknown validation error: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func validateVCLMacros(vclTemplate string) error {
+	if len(vclTemplate) == 0 {
+		return errors.New("VCL template must not be empty")
+	}
+
+	if len(vclTemplate) > cdntypes.VCLTemplateMaxSize {
+		return fmt.Errorf("VCL template exceeds maximum size of %d bytes", cdntypes.VCLTemplateMaxSize)
+	}
+
+	requiredSet := map[string]bool{}
+	for _, name := range cdntypes.VCLRequiredMacros() {
+		requiredSet[name] = true
+	}
+
+	found := map[string]int{}
+	for line := range strings.SplitSeq(vclTemplate, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, cdntypes.VCLMacroPrefix) {
+			continue
+		}
+		macroName := strings.TrimPrefix(trimmed, cdntypes.VCLMacroPrefix)
+		macroName = strings.TrimSpace(macroName)
+		if macroName == "" {
+			return fmt.Errorf("invalid macro: %s has no macro name", cdntypes.VCLMacroPrefix)
+		}
+		if !requiredSet[macroName] {
+			return fmt.Errorf("unknown macro: %s%s", cdntypes.VCLMacroPrefix, macroName)
+		}
+		found[macroName]++
+	}
+
+	for _, name := range cdntypes.VCLRequiredMacros() {
+		count := found[name]
+		if count == 0 {
+			return fmt.Errorf("missing required macro: %s%s", cdntypes.VCLMacroPrefix, name)
+		}
+		if count > 1 {
+			return fmt.Errorf("duplicate macro: %s%s", cdntypes.VCLMacroPrefix, name)
+		}
 	}
 
 	return nil
@@ -2029,34 +2090,13 @@ func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 			return
 		}
 
-		vclKeyToConf, keyOrder := cdntypes.VclStepsToMap(svc.VclSteps)
-
-		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc, vclKeyToConf, keyOrder))
+		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceVersionContent(serviceName, svc))
 		if err != nil {
 			logger.Err(err).Msg("unable to render service version page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 	}
-}
-
-// Used to turn e.g. "VclRecv" or "VCLRecv" into "vcl_recv"
-func camelCaseToSnakeCase(s string) string {
-	// Handle capitalized VCL
-	s = strings.ReplaceAll(s, "VCL", "Vcl")
-	var b strings.Builder
-	for i, c := range s {
-		if unicode.IsUpper(c) {
-			if i > 0 {
-				b.WriteString("_")
-			}
-			b.WriteRune(unicode.ToLower(c))
-		} else {
-			b.WriteRune(c)
-		}
-	}
-
-	return b.String()
 }
 
 func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgName string, serviceName string, cloneVersion int64) (cdntypes.ServiceVersionCloneData, error) {
@@ -2092,18 +2132,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 				FROM service_origins
 				WHERE service_version_id = service_versions.id
 			) AS origins,
-			service_vcls.vcl_recv,
-			service_vcls.vcl_pipe,
-			service_vcls.vcl_pass,
-			service_vcls.vcl_hash,
-			service_vcls.vcl_purge,
-			service_vcls.vcl_miss,
-			service_vcls.vcl_hit,
-			service_vcls.vcl_deliver,
-			service_vcls.vcl_synth,
-			service_vcls.vcl_backend_fetch,
-			service_vcls.vcl_backend_response,
-			service_vcls.vcl_backend_error
+			service_vcls.vcl_template
 		FROM
 			services
 			JOIN service_versions ON services.id = service_versions.service_id
@@ -2156,8 +2185,6 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 
 		ad := adRef.(cdntypes.AuthData)
 
-		vclSK := cdntypes.NewVclStepKeys()
-
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up orgName failed")
@@ -2196,6 +2223,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 
 		switch r.Method {
 		case http.MethodGet:
+			vclTemplateValue := cdntypes.DefaultVCLTemplate
 			var cloneData cdntypes.ServiceVersionCloneData
 			cloneVersionStr := r.URL.Query().Get("clone-version")
 			if cloneVersionStr != "" {
@@ -2218,9 +2246,12 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
+				if cloneData.VCLTemplate != "" {
+					vclTemplateValue = cloneData.VCLTemplate
+				}
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, nil, cloneData, nil, ""))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, domains, originGroups, nil, vclTemplateValue, cloneData, nil, ""))
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2241,33 +2272,11 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 				return
 			}
 
-			// Deal with the fact that submitting an empty
-			// text field from an HTML form will cause
-			// schemaDecoder to set a *string field to a pointer to
-			// an empty string instead of leaving the pointer nil.
-			// We do not allow empty strings for VCL columns in the
-			// database (they should be NULL) so reset any VCL
-			// string pointer fields back to nil if they are
-			// pointing to empty strings.
-			// https://github.com/gorilla/schema/issues/161
-			val := reflect.ValueOf(&formData)
-			structVal := val.Elem()
-			for _, field := range reflect.VisibleFields(structVal.Type()) {
-				if _, ok := vclSK.FieldToKey[field.Name]; ok {
-					fieldVal := structVal.FieldByIndex(field.Index)
-					if fieldVal.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.String {
-						if !fieldVal.IsNil() && fieldVal.Elem().String() == "" {
-							fieldVal.Set(reflect.Zero(field.Type))
-						}
-					}
-				}
-			}
-
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, domains, originGroups, &formData, "", cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2286,7 +2295,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 					VerifyTLS:   formOrigin.OriginVerifyTLS,
 				})
 			}
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, inputOrigins, false, formData.VclSteps)
+			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, inputOrigins, false, formData.VCLTemplate)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -2295,7 +2304,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 					if errors.As(err, &ve) {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, vclSK, domains, originGroups, &formData, cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, domains, originGroups, &formData, "", cdntypes.ServiceVersionCloneData{}, err, errDetails))
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -6332,18 +6341,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		       service_versions.id AS service_version_id,
 		       service_versions.version,
 		       service_versions.active,
-		       service_vcls.vcl_recv,
-		       service_vcls.vcl_pipe,
-		       service_vcls.vcl_pass,
-		       service_vcls.vcl_hash,
-		       service_vcls.vcl_purge,
-		       service_vcls.vcl_miss,
-		       service_vcls.vcl_hit,
-		       service_vcls.vcl_deliver,
-		       service_vcls.vcl_synth,
-		       service_vcls.vcl_backend_fetch,
-		       service_vcls.vcl_backend_response,
-		       service_vcls.vcl_backend_error,
+		       service_vcls.vcl_template,
 		       agg_service_ip_addresses.service_ip_addresses,
 		       agg_domains.domains,
 		       agg_origins.origins,
@@ -6390,7 +6388,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	var serviceUIDRange pgtype.Range[pgtype.Int8]
 	var serviceVersion int64
 	var serviceVersionActive bool
-	var vclRecv, vclPipe, vclPass, vclHash, vclPurge, vclMiss, vclHit, vclDeliver, vclSynth, vclBackendFetch, vclBackendResponse, vclBackendError *string
+	var vclTemplate string
 	var domains []cdntypes.DomainString
 	var originGroups []cdntypes.OriginGroup
 	var origins []cdntypes.Origin
@@ -6403,18 +6401,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 			&serviceVersionID,
 			&serviceVersion,
 			&serviceVersionActive,
-			&vclRecv,
-			&vclPipe,
-			&vclPass,
-			&vclHash,
-			&vclPurge,
-			&vclMiss,
-			&vclHit,
-			&vclDeliver,
-			&vclSynth,
-			&vclBackendFetch,
-			&vclBackendResponse,
-			&vclBackendError,
+			&vclTemplate,
 			&serviceIPAddresses,
 			&domains,
 			&origins,
@@ -6444,25 +6431,12 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 			}
 
 			vcl, err := generateCompleteVcl(
-				confTemplates.vcl,
+				confTemplates,
 				serviceIPAddresses,
 				originGroups,
 				origins,
 				domains,
-				cdntypes.VclSteps{
-					VclRecv:            vclRecv,
-					VclPipe:            vclPipe,
-					VclPass:            vclPass,
-					VclHash:            vclHash,
-					VclPurge:           vclPurge,
-					VclMiss:            vclMiss,
-					VclHit:             vclHit,
-					VclDeliver:         vclDeliver,
-					VclSynth:           vclSynth,
-					VclBackendFetch:    vclBackendFetch,
-					VclBackendResponse: vclBackendResponse,
-					VclBackendError:    vclBackendError,
-				})
+				vclTemplate)
 			if err != nil {
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
@@ -6862,18 +6836,7 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 			service_versions.id,
 			service_versions.version,
 			service_versions.active,
-			service_vcls.vcl_recv,
-			service_vcls.vcl_pipe,
-			service_vcls.vcl_pass,
-			service_vcls.vcl_hash,
-			service_vcls.vcl_purge,
-			service_vcls.vcl_miss,
-			service_vcls.vcl_hit,
-			service_vcls.vcl_deliver,
-			service_vcls.vcl_synth,
-			service_vcls.vcl_backend_fetch,
-			service_vcls.vcl_backend_response,
-			service_vcls.vcl_backend_error,
+			service_vcls.vcl_template,
 			(SELECT
 				array_agg(address ORDER BY address)
 				FROM service_ip_addresses
@@ -6962,7 +6925,7 @@ func deactivatePreviousServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceI
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, origins []cdntypes.Origin, active bool, vclTemplate string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -7048,48 +7011,9 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 	var serviceVclID pgtype.UUID
 	err = tx.QueryRow(
 		ctx,
-		`INSERT INTO service_vcls (
-		service_version_id,
-		vcl_recv,
-		vcl_pipe,
-		vcl_pass,
-		vcl_hash,
-		vcl_purge,
-		vcl_miss,
-		vcl_hit,
-		vcl_deliver,
-		vcl_synth,
-		vcl_backend_fetch,
-		vcl_backend_response,
-		vcl_backend_error
-	) VALUES (
-		$1,
-		$2,
-		$3,
-		$4,
-		$5,
-		$6,
-		$7,
-		$8,
-		$9,
-		$10,
-		$11,
-		$12,
-		$13
-	) RETURNING id`,
+		`INSERT INTO service_vcls (service_version_id, vcl_template) VALUES ($1, $2) RETURNING id`,
 		serviceVersionID,
-		vcls.VclRecv,
-		vcls.VclPipe,
-		vcls.VclPass,
-		vcls.VclHash,
-		vcls.VclPurge,
-		vcls.VclMiss,
-		vcls.VclHit,
-		vcls.VclDeliver,
-		vcls.VclSynth,
-		vcls.VclBackendFetch,
-		vcls.VclBackendResponse,
-		vcls.VclBackendError,
+		vclTemplate,
 	).Scan(&serviceVclID)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service vcl: %w", err)
@@ -7108,7 +7032,7 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 	return res, nil
 }
 
-func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, inputOrigins []cdntypes.InputOrigin, active bool, vcls cdntypes.VclSteps) (serviceVersionInsertResult, error) {
+func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, inputOrigins []cdntypes.InputOrigin, active bool, vclTemplate string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -7179,9 +7103,9 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		err = vclValidator.validateServiceVersionConfig(
 			confTemplates,
 			cdntypes.InputServiceVersion{
-				VclSteps: vcls,
-				Origins:  origins,
-				Domains:  domains,
+				VCLTemplate: vclTemplate,
+				Origins:     origins,
+				Domains:     domains,
 			},
 			serviceIPAddrs,
 			originGroups,
@@ -7191,7 +7115,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			return fmt.Errorf("VCL validation failed: %w", err)
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, origins, active, vcls)
+		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, origins, active, vclTemplate)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -7270,9 +7194,15 @@ func activateServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceIdent servi
 	return activatedServiceVersionID, nil
 }
 
-type varnishVCLInput struct {
+type vclPreambleInput struct {
 	VCLVersion             string
 	Modules                []string
+	DefaultOriginGroupName string
+	OriginGroups           []enrichedOriginGroup
+	ServiceIPv4            netip.Addr
+}
+
+type vclMacroInput struct {
 	DefaultOriginGroupName string
 	OriginGroups           []enrichedOriginGroup
 	Domains                []cdntypes.DomainString
@@ -7280,8 +7210,6 @@ type varnishVCLInput struct {
 	DefaultForHTTP         bool
 	HTTPSEnabled           bool
 	HTTPEnabled            bool
-	ServiceIPv4            netip.Addr
-	VCLSteps               cdntypes.VclSteps
 }
 
 // Make it easier to generate varnish configuration
@@ -7291,7 +7219,11 @@ type enrichedOriginGroup struct {
 	HTTPS bool
 }
 
-func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclSteps cdntypes.VclSteps) (string, error) {
+func generateCompleteVcl(confTemplates configTemplates, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclTemplate string) (string, error) {
+	if err := validateVCLMacros(vclTemplate); err != nil {
+		return "", cdnerrors.NewValidationError(err.Error())
+	}
+
 	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
 	if err != nil {
 		return "", errors.New("no IPv4 address allocated to service")
@@ -7370,7 +7302,8 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 		return "", fmt.Errorf("unable to find default origin group name, this is unexpected")
 	}
 
-	vvc := varnishVCLInput{
+	// Render preamble
+	preambleInput := vclPreambleInput{
 		VCLVersion: "4.1",
 		Modules: []string{
 			"std",
@@ -7378,23 +7311,75 @@ func generateCompleteVcl(tmpl *template.Template, serviceIPAddresses []netip.Add
 		},
 		OriginGroups:           referencedOriginGroups,
 		DefaultOriginGroupName: defaultOriginGroup,
-		Domains:                domains,
 		ServiceIPv4:            serviceIPv4Address,
+	}
+
+	var preambleBuf strings.Builder
+	err = confTemplates.vclPreamble.Execute(&preambleBuf, preambleInput)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute preamble template: %w", err)
+	}
+
+	macroInput := vclMacroInput{
+		DefaultOriginGroupName: defaultOriginGroup,
+		OriginGroups:           referencedOriginGroups,
+		Domains:                domains,
 		DefaultForHTTPS:        defaultForHTTPS,
 		DefaultForHTTP:         defaultForHTTP,
 		HTTPSEnabled:           haProxyHTTPS,
 		HTTPEnabled:            haProxyHTTP,
-		VCLSteps:               vclSteps,
 	}
 
-	var b strings.Builder
-
-	err = tmpl.Execute(&b, vvc)
+	// Render vcl_recv macro content
+	var recvBuf strings.Builder
+	err = confTemplates.vclMacroRecv.Execute(&recvBuf, macroInput)
 	if err != nil {
-		return "", fmt.Errorf("generateCompleteVcl: unable to execute template: %w", err)
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_recv macro template: %w", err)
 	}
 
-	return b.String(), nil
+	// Render vcl_backend_response macro content
+	var backendRespBuf strings.Builder
+	err = confTemplates.vclMacroBackendResp.Execute(&backendRespBuf, macroInput)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_response macro template: %w", err)
+	}
+
+	// Build macro name -> rendered content mapping. All required macros
+	// are present in the map; those without system-generated content
+	// expand to empty delimiter blocks. When adding system-generated
+	// content for a new macro, add its template to configTemplates and
+	// set the corresponding entry here.
+	macroContent := map[string]string{}
+	for _, name := range cdntypes.VCLRequiredMacros() {
+		macroContent[name] = ""
+	}
+	macroContent[cdntypes.VCLMacroPreamble] = preambleBuf.String()
+	macroContent[cdntypes.VCLMacroRecv] = recvBuf.String()
+	macroContent[cdntypes.VCLMacroBackendResponse] = backendRespBuf.String()
+
+	// Replace macro lines in the user template with delimiter-wrapped content.
+	// Use line-based replacement to avoid matching macro text inside user
+	// comments or strings — only lines where the trimmed content is exactly
+	// a macro directive are replaced.
+	var resultBuf strings.Builder
+	for line := range strings.SplitSeq(vclTemplate, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, cdntypes.VCLMacroPrefix) {
+			macroName := strings.TrimSpace(strings.TrimPrefix(trimmed, cdntypes.VCLMacroPrefix))
+			if content, ok := macroContent[macroName]; ok {
+				if content != "" {
+					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n%s\n  # end SUNET-CDN-MANAGER %s\n", macroName, content, macroName)
+				} else {
+					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n  # end SUNET-CDN-MANAGER %s\n", macroName, macroName)
+				}
+				continue
+			}
+		}
+		resultBuf.WriteString(line)
+		resultBuf.WriteByte('\n')
+	}
+
+	return strings.TrimRight(resultBuf.String(), "\n"), nil
 }
 
 type haproxyConfInput struct {
@@ -8720,11 +8705,11 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
 				Body    struct {
-					cdntypes.VclSteps
-					Org     string                  `json:"org" example:"org1" doc:"Name or ID of organization" minLength:"1" maxLength:"63"`
-					Domains []cdntypes.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
-					Origins []cdntypes.InputOrigin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
-					Active  bool                    `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					VCLTemplate string                  `json:"vcl_template" doc:"Complete VCL template with macro injection points" minLength:"1" maxLength:"1048576"`
+					Org         string                  `json:"org" example:"org1" doc:"Name or ID of organization" minLength:"1" maxLength:"63"`
+					Domains     []cdntypes.DomainString `json:"domains" doc:"List of domains handled by the service" minItems:"1" maxItems:"10"`
+					Origins     []cdntypes.InputOrigin  `json:"origins" doc:"List of origin hosts for this service" minItems:"1" maxItems:"10"`
+					Active      bool                    `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -8735,7 +8720,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VclSteps)
+				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.Origins, input.Body.Active, input.Body.VCLTemplate)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -8827,7 +8812,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(confTemplates.vcl, svc.ServiceIPAddresses, svc.OriginGroups, svc.Origins, svc.Domains, svc.VclSteps)
+			vcl, err := generateCompleteVcl(confTemplates, svc.ServiceIPAddresses, svc.OriginGroups, svc.Origins, svc.Domains, svc.VCLTemplate)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
@@ -10160,8 +10145,10 @@ func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logg
 }
 
 type configTemplates struct {
-	vcl     *template.Template
-	haproxy *template.Template
+	vclPreamble         *template.Template
+	vclMacroRecv        *template.Template
+	vclMacroBackendResp *template.Template
+	haproxy             *template.Template
 }
 
 func setupJwkCache(ctx context.Context, logger zerolog.Logger, client *http.Client, oiConf openidConfig) (*jwk.Cache, error) {
@@ -10382,9 +10369,19 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 
 	confTemplates := configTemplates{}
 
-	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
+	confTemplates.vclPreamble, err = template.ParseFS(templateFS, "templates/vcl-preamble.vcl")
 	if err != nil {
-		return fmt.Errorf("unable to create varnish template: %w", err)
+		return fmt.Errorf("unable to create VCL preamble template: %w", err)
+	}
+
+	confTemplates.vclMacroRecv, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_recv.vcl")
+	if err != nil {
+		return fmt.Errorf("unable to create VCL macro vcl_recv template: %w", err)
+	}
+
+	confTemplates.vclMacroBackendResp, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_response.vcl")
+	if err != nil {
+		return fmt.Errorf("unable to create VCL macro vcl_backend_response template: %w", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
