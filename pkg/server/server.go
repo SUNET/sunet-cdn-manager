@@ -13449,8 +13449,8 @@ func unsetL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, 
 
 func parseAddressesFromText(text string) ([]netip.Addr, error) {
 	addresses := []netip.Addr{}
-	lines := strings.Split(text, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(text, "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

@@ -3,6 +3,7 @@ package cdnerrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Errors that can be shared across the other packages
@@ -108,14 +109,14 @@ func joinParts(parts []string) string {
 	case 2:
 		return parts[0] + " and " + parts[1]
 	default:
-		result := ""
+		var result strings.Builder
 		for i, p := range parts {
 			if i == len(parts)-1 {
-				result += "and " + p
+				result.WriteString("and " + p)
 			} else {
-				result += p + ", "
+				result.WriteString(p + ", ")
 			}
 		}
-		return result
+		return result.String()
 	}
 }
