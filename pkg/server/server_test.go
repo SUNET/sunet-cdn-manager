@@ -393,23 +393,23 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 
 		vcls := []struct {
 			id               string
-			vclRecvFile      string
+			vclTemplateFile  string
 			serviceVersionID string
 		}{
 			{
 				id:               "00000007-0000-0000-0000-000000000001",
 				serviceVersionID: "00000004-0000-0000-0000-000000000001",
-				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
+				vclTemplateFile:  "testdata/vcl/template1.vcl",
 			},
 			{
 				id:               "00000007-0000-0000-0000-000000000002",
 				serviceVersionID: "00000004-0000-0000-0000-000000000002",
-				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
+				vclTemplateFile:  "testdata/vcl/template1.vcl",
 			},
 			{
 				id:               "00000007-0000-0000-0000-000000000003",
 				serviceVersionID: "00000004-0000-0000-0000-000000000003",
-				vclRecvFile:      "testdata/vcl/vcl_recv/content1.vcl",
+				vclTemplateFile:  "testdata/vcl/template1.vcl",
 			},
 		}
 
@@ -425,15 +425,15 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				return err
 			}
 
-			var vclRecvContentBytes []byte
-			if vcl.vclRecvFile != "" {
-				vclRecvContentBytes, err = os.ReadFile(vcl.vclRecvFile)
+			var vclTemplateContentBytes []byte
+			if vcl.vclTemplateFile != "" {
+				vclTemplateContentBytes, err = os.ReadFile(vcl.vclTemplateFile)
 				if err != nil {
 					return err
 				}
 			}
 
-			_, err = tx.Exec(ctx, "INSERT INTO service_vcls (id, service_version_id, vcl_recv) VALUES($1, $2, $3)", vclID, serviceVersionID, vclRecvContentBytes)
+			_, err = tx.Exec(ctx, "INSERT INTO service_vcls (id, service_version_id, vcl_template) VALUES($1, $2, $3)", vclID, serviceVersionID, vclTemplateContentBytes)
 			if err != nil {
 				return err
 			}
@@ -541,12 +541,28 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	confTemplates := configTemplates{}
 
-	confTemplates.vcl, err = template.ParseFS(templateFS, "templates/sunet-cdn.vcl")
+	confTemplates.vclPreamble, err = template.ParseFS(templateFS, "templates/vcl-preamble.vcl")
 	if err != nil {
 		if dbPoolCreated {
 			tsi.dbPool.Close()
 		}
-		t.Fatalf("unable to create varnish template: %v", err)
+		t.Fatalf("unable to create VCL preamble template: %v", err)
+	}
+
+	confTemplates.vclMacroRecv, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_recv.vcl")
+	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
+		t.Fatalf("unable to create VCL macro vcl_recv template: %v", err)
+	}
+
+	confTemplates.vclMacroBackendResp, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_response.vcl")
+	if err != nil {
+		if dbPoolCreated {
+			tsi.dbPool.Close()
+		}
+		t.Fatalf("unable to create VCL macro vcl_backend_response template: %v", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
@@ -4448,7 +4464,7 @@ func TestPostServiceVersion(t *testing.T) {
 		domains         []string
 		origins         []cdntypes.InputOrigin
 		active          bool
-		vclRecvFile     string
+		vclTemplateFile string
 	}{
 		{
 			description:     "successful superuser request with ID",
@@ -4472,9 +4488,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusCreated,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusCreated,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "successful superuser request with ID",
@@ -4497,9 +4513,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusCreated,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusCreated,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with ID, domain not known",
@@ -4522,9 +4538,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with ID, domain exist but not verified",
@@ -4547,9 +4563,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with ID, broken vcl_recv",
@@ -4572,9 +4588,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/broken1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/broken_template1.vcl",
 		},
 		{
 			description:     "successful superuser request with name",
@@ -4597,9 +4613,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusCreated,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusCreated,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with name (name does not exist)",
@@ -4622,9 +4638,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with too many domains",
@@ -4647,9 +4663,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request, too long Host in origin list",
@@ -4672,9 +4688,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request, too long domain in domains list",
@@ -4697,9 +4713,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with invalid service name (too long)",
@@ -4722,9 +4738,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed superuser request with invalid uuid (too short)",
@@ -4747,9 +4763,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusUnprocessableEntity,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "successful user request",
@@ -4772,9 +4788,9 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusCreated,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusCreated,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
 			description:     "failed user request not assigned to org",
@@ -4797,20 +4813,20 @@ func TestPostServiceVersion(t *testing.T) {
 					TLS:         false,
 				},
 			},
-			expectedStatus: http.StatusForbidden,
-			active:         true,
-			vclRecvFile:    "testdata/vcl/vcl_recv/content1.vcl",
+			expectedStatus:  http.StatusForbidden,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			newServiceVersion := struct {
-				Org     string                 `json:"org"`
-				Active  bool                   `json:"active"`
-				Domains []string               `json:"domains"`
-				Origins []cdntypes.InputOrigin `json:"origins"`
-				VclRecv string                 `json:"vcl_recv"`
+				Org         string                 `json:"org"`
+				Active      bool                   `json:"active"`
+				Domains     []string               `json:"domains"`
+				Origins     []cdntypes.InputOrigin `json:"origins"`
+				VCLTemplate string                 `json:"vcl_template"`
 			}{
 				Org:     test.orgNameOrID,
 				Active:  test.active,
@@ -4818,13 +4834,13 @@ func TestPostServiceVersion(t *testing.T) {
 				Origins: test.origins,
 			}
 
-			var vclRecvContentBytes []byte
-			if test.vclRecvFile != "" {
-				vclRecvContentBytes, err = os.ReadFile(test.vclRecvFile)
+			var vclTemplateContentBytes []byte
+			if test.vclTemplateFile != "" {
+				vclTemplateContentBytes, err = os.ReadFile(test.vclTemplateFile)
 				if err != nil {
 					t.Fatal(err)
 				}
-				newServiceVersion.VclRecv = string(vclRecvContentBytes)
+				newServiceVersion.VCLTemplate = string(vclTemplateContentBytes)
 			}
 
 			b, err := json.Marshal(newServiceVersion)
@@ -5822,64 +5838,6 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
-		})
-	}
-}
-
-func TestCamelCaseToSnakeCase(t *testing.T) {
-	tests := []struct {
-		description string
-		input       string
-		expected    string
-	}{
-		{
-			description: "basic unexported",
-			input:       "vclRecv",
-			expected:    "vcl_recv",
-		},
-		{
-			description: "basic exported",
-			input:       "VclRecv",
-			expected:    "vcl_recv",
-		},
-		{
-			description: "all caps exported",
-			input:       "VCLRecv",
-			expected:    "vcl_recv",
-		},
-		{
-			description: "all caps exported twice",
-			input:       "VCLVCLRecv",
-			expected:    "vcl_vcl_recv",
-		},
-		{
-			description: "unexported backwards",
-			input:       "recvVcl",
-			expected:    "recv_vcl",
-		},
-		{
-			description: "unexported backwards, all caps",
-			input:       "recvVCL",
-			expected:    "recv_vcl",
-		},
-		{
-			description: "exported backwards",
-			input:       "RecvVcl",
-			expected:    "recv_vcl",
-		},
-		{
-			description: "exported backwards, all caps",
-			input:       "RecvVCL",
-			expected:    "recv_vcl",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			result := camelCaseToSnakeCase(test.input)
-			if result != test.expected {
-				t.Fatalf("input '%s' resulted in '%s', expected: '%s'", test.input, result, test.expected)
-			}
 		})
 	}
 }
@@ -9511,6 +9469,268 @@ func TestNameNotUUIDConstraint(t *testing.T) {
 
 			if pgErr.ConstraintName != pgConstraintValidName {
 				t.Fatalf("expected constraint %s, got: %s", pgConstraintValidName, pgErr.ConstraintName)
+			}
+		})
+	}
+}
+
+func TestValidateVCLMacros(t *testing.T) {
+	tests := []struct {
+		description string
+		template    string
+		expectErr   bool
+		errContains string
+	}{
+		{
+			description: "valid default template",
+			template:    cdntypes.DefaultVCLTemplate,
+			expectErr:   false,
+		},
+		{
+			description: "missing preamble macro",
+			template: `sub vcl_recv {
+  #SUNET-CDN-MANAGER vcl_recv
+}
+
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
+}
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`,
+			expectErr:   true,
+			errContains: "missing required macro: #SUNET-CDN-MANAGER preamble",
+		},
+		{
+			description: "missing vcl_recv macro",
+			template: `#SUNET-CDN-MANAGER preamble
+
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
+}
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`,
+			expectErr:   true,
+			errContains: "missing required macro: #SUNET-CDN-MANAGER vcl_recv",
+		},
+		{
+			description: "duplicate vcl_recv macro",
+			template: `#SUNET-CDN-MANAGER preamble
+
+sub vcl_recv {
+  #SUNET-CDN-MANAGER vcl_recv
+  #SUNET-CDN-MANAGER vcl_recv
+}
+
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
+}
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`,
+			expectErr:   true,
+			errContains: "duplicate macro: #SUNET-CDN-MANAGER vcl_recv",
+		},
+		{
+			description: "unknown macro",
+			template:    cdntypes.DefaultVCLTemplate + "\n#SUNET-CDN-MANAGER vcl_unknown\n",
+			expectErr:   true,
+			errContains: "unknown macro: #SUNET-CDN-MANAGER vcl_unknown",
+		},
+		{
+			description: "empty template",
+			template:    "",
+			expectErr:   true,
+			errContains: "VCL template must not be empty",
+		},
+		{
+			description: "valid template with user code around macros",
+			template: `#SUNET-CDN-MANAGER preamble
+
+sub vcl_recv {
+  #SUNET-CDN-MANAGER vcl_recv
+  if (req.url ~ "^/admin") {
+    return(pass);
+  }
+}
+
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
+}
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`,
+			expectErr: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			err := validateVCLMacros(test.template)
+			if test.expectErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				if test.errContains != "" && !strings.Contains(err.Error(), test.errContains) {
+					t.Fatalf("expected error containing %q, got: %s", test.errContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %s", err)
+				}
 			}
 		})
 	}

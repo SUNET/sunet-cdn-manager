@@ -188,6 +188,11 @@ tbody tr:hover td {
 	resize: none;
 }
 
+.vcl-preview {
+	max-height: 60vh;
+	overflow-y: auto;
+}
+
 /* Breadcrumb navigation */
 .breadcrumb ol {
 	display: flex;
