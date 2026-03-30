@@ -229,7 +229,7 @@ func validateInputOrigins(ctx context.Context, tx pgx.Tx, inputOrigins []cdntype
 	return origins, nil
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplates configTemplates, iSvc cdntypes.InputServiceVersion, serviceIPAddrs []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) error {
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplates configTemplates, iSvc cdntypes.InputServiceVersion, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
 		if validationErrors, ok := err.(validator.ValidationErrors); ok {
@@ -252,7 +252,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 		return cdnerrors.ErrUnprocessable
 	}
 
-	vcl, err := generateCompleteVcl(confTemplates, serviceIPAddrs, originGroups, origins, iSvc.Domains, iSvc.VCLTemplate)
+	vcl, err := generateCompleteVcl(confTemplates, originGroups, origins, iSvc.Domains, iSvc.VCLTemplate)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -6280,16 +6280,6 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 	return serviceID, nil
 }
 
-func getFirstV4Addr(addrs []netip.Addr) (netip.Addr, error) {
-	for _, addr := range addrs {
-		if addr.Is4() {
-			return addr, nil
-		}
-	}
-
-	return netip.Addr{}, errors.New("getFirstV4Addr: no IPv4 present")
-}
-
 // selectCacheNodeTx uses INNER JOIN: intentionally excludes nodes without addresses — only addressable nodes can appear in configs.
 func selectCacheNodeTx(ctx context.Context, tx pgx.Tx, cacheNodeID pgtype.UUID) (cdntypes.CacheNode, error) {
 	rows, err := tx.Query(
@@ -6432,7 +6422,6 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 
 			vcl, err := generateCompleteVcl(
 				confTemplates,
-				serviceIPAddresses,
 				originGroups,
 				origins,
 				domains,
@@ -7067,22 +7056,6 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			}
 		}
 
-		// If someone is submitting data to create a new service version it
-		// will not contain what addresses have been allocated to the
-		// service, so we need to enrich the submitted data with this
-		// information in order to be able to construct a complete VCL for
-		// validation.
-		var serviceIPAddrs []netip.Addr
-		err = tx.QueryRow(
-			dbCtx,
-			"SELECT array_agg(address ORDER BY address) AS service_ip_addresses FROM service_ip_addresses WHERE service_id = $1",
-			serviceIdent.id,
-		).Scan(&serviceIPAddrs)
-		if err != nil {
-			logger.Err(err).Msg("looking up service IPs failed")
-			return cdnerrors.ErrUnprocessable
-		}
-
 		// We also need to validate/convert input origin groups
 		origins, err := validateInputOrigins(dbCtx, tx, inputOrigins, serviceIdent.id)
 		if err != nil {
@@ -7107,7 +7080,6 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 				Origins:     origins,
 				Domains:     domains,
 			},
-			serviceIPAddrs,
 			originGroups,
 			origins,
 		)
@@ -7199,7 +7171,6 @@ type vclPreambleInput struct {
 	Modules                []string
 	DefaultOriginGroupName string
 	OriginGroups           []enrichedOriginGroup
-	ServiceIPv4            netip.Addr
 }
 
 type vclMacroInput struct {
@@ -7219,14 +7190,9 @@ type enrichedOriginGroup struct {
 	HTTPS bool
 }
 
-func generateCompleteVcl(confTemplates configTemplates, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclTemplate string) (string, error) {
+func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclTemplate string) (string, error) {
 	if err := validateVCLMacros(vclTemplate); err != nil {
 		return "", cdnerrors.NewValidationError(err.Error())
-	}
-
-	serviceIPv4Address, err := getFirstV4Addr(serviceIPAddresses)
-	if err != nil {
-		return "", errors.New("no IPv4 address allocated to service")
 	}
 
 	// If we blindly add all existing origin groups to the varnish
@@ -7311,11 +7277,10 @@ func generateCompleteVcl(confTemplates configTemplates, serviceIPAddresses []net
 		},
 		OriginGroups:           referencedOriginGroups,
 		DefaultOriginGroupName: defaultOriginGroup,
-		ServiceIPv4:            serviceIPv4Address,
 	}
 
 	var preambleBuf strings.Builder
-	err = confTemplates.vclPreamble.Execute(&preambleBuf, preambleInput)
+	err := confTemplates.vclPreamble.Execute(&preambleBuf, preambleInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute preamble template: %w", err)
 	}
@@ -8812,7 +8777,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(confTemplates, svc.ServiceIPAddresses, svc.OriginGroups, svc.Origins, svc.Domains, svc.VCLTemplate)
+			vcl, err := generateCompleteVcl(confTemplates, svc.OriginGroups, svc.Origins, svc.Domains, svc.VCLTemplate)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
