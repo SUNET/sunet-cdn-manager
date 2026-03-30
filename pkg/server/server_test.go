@@ -54,6 +54,10 @@ const (
 
 	// Constraint name from migration 00006_name_not_uuid.sql
 	pgConstraintValidName = "valid_name"
+
+	// User that connects to the database
+	dbUser     = "cdn"
+	dbPassword = "cdn-password"
 )
 
 var pgt *postgrestest.Server
@@ -66,6 +70,31 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	defer pgt.Cleanup()
+
+	// Make sure our "cdn" user is present in the database server, this
+	// matches the "cdn" schema we create in each test-specific database.
+	pgurl := pgt.DefaultDatabase()
+
+	pgConfig, err := pgxpool.ParseConfig(pgurl)
+	if err != nil {
+		panic(err)
+	}
+
+	// Make sure tests do not hang even if they only have access to a single db connection
+	pgConfig.MaxConns = 1
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		panic(fmt.Errorf("unable to create database pool: %w", err))
+	}
+
+	_, err = dbPool.Exec(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", dbUser, dbPassword))
+	if err != nil {
+		panic(fmt.Errorf("unable to create common 'cdn' user: %w", err))
+	}
+
+	// Each test opens its own connection
+	dbPool.Close()
 
 	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
@@ -478,7 +507,9 @@ type testServerInput struct {
 	dbPool              *pgxpool.Pool
 }
 
-func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encryptedSessionKey bool) (*pgxpool.Pool, error) {
+func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
+	t.Helper()
+
 	pgurl, err := pgt.CreateDatabase(ctx)
 	if err != nil {
 		return nil, err
@@ -498,11 +529,62 @@ func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encr
 	if err != nil {
 		return nil, fmt.Errorf("unable to create database pool: %w", err)
 	}
+	defer dbPool.Close()
+
+	// Mimic initial setup done by init-cdn-db.sh on our real database
+	// servers. But instead of creating a "cdn" database we use use the randomized
+	// database that was given to us by pgt.CreateDatabase(). Since the
+	// psql test server is shared between tests it would not work if each
+	// test tried to create its own "cdn" database.
+	//
+	// Because search_path (SHOW search_path;) starts with "$user" by
+	// default this means any tables will be created in that user-specific
+	// SCHEMA by default instead of falling back to "public". This follows
+	// the "secure schema usage pattern" summarized as "Constrain ordinary
+	// users to user-private schemas" from
+	// https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATTERNS
+	//
+	// "In PostgreSQL 15 and later, the default configuration supports this usage
+	// pattern. In prior versions, or when using a database that has been upgraded
+	// from a prior version, you will need to remove the public CREATE privilege
+	// from the public schema"
+	bootstrapSQLs := []string{
+		fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE \"%s\" TO %s", pgConfig.ConnConfig.Database, dbUser),
+		fmt.Sprintf("CREATE SCHEMA %s AUTHORIZATION %s", dbUser, dbUser),
+	}
+
+	for _, bootstrapSQL := range bootstrapSQLs {
+		_, err := dbPool.Exec(ctx, bootstrapSQL)
+		if err != nil {
+			return nil, fmt.Errorf("unable to bootstrap cdn database: %w", err)
+		}
+	}
+
+	// Switch over to the cdn user so the default search_path automatically
+	// inserts things in the "cdn" ($user) schema.
+	pgConfig.ConnConfig.User = dbUser
+	pgConfig.ConnConfig.Password = dbPassword
+
+	return pgConfig, nil
+}
+
+func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encryptedSessionKey bool) (*pgxpool.Pool, error) {
+	pgConfig, err := getTestDatabaseConfig(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+
+	t.Log(pgConfig.ConnString())
 
 	err = migrations.Up(ctx, logger, pgConfig)
 	if err != nil {
-		dbPool.Close()
 		return nil, err
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		dbPool.Close()
+		return nil, fmt.Errorf("unable to create database pool for cdn user: %w", err)
 	}
 
 	err = populateTestData(dbPool, encryptedSessionKey)
@@ -670,12 +752,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 func TestServerInit(t *testing.T) {
 	ctx := context.Background()
-	pgurl, err := pgt.CreateDatabase(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pgConfig, err := pgxpool.ParseConfig(pgurl)
+	pgConfig, err := getTestDatabaseConfig(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
