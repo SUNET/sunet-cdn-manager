@@ -7,3 +7,5 @@ local-dev/keycloak/generated
 local-dev/satosa/generated
 local-dev/generated
 /dist/
+node_modules/
+pkg/components/js/build/codemirror/editor.bundle.js

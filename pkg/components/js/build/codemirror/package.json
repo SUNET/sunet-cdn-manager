@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "rollup -c && terser editor.bundle.js --compress --mangle --output ../../dist/codemirror/editor.bundle.min.js && echo 'minified editor.bundle.js -> ../../dist/codemirror/editor.bundle.min.js'"
+  },
+  "dependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "codemirror": "^6.0.2",
+    "rollup": "^4.60.1",
+    "terser": "^5.46.1"
+  }
+}

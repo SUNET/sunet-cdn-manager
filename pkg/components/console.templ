@@ -712,7 +712,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 			}
 		</article>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']">
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']" hx-boost="false">
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -809,45 +809,26 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 		<article>
 			<fieldset>
 				<legend>VCL template</legend>
-				<small id="vcl-hint" class="vcl-hint">Tab inserts spaces. Press Escape to enable Tab navigation out of the editor.</small>
+				<small id="vcl-hint" class="vcl-hint">Loading enhanced editor...</small>
 				<div>
-					<label for="vcl_template">
-						vcl_template
-						<textarea
-							id="vcl_template"
-							name="vcl_template"
-							placeholder="Enter your VCL template here..."
-							class="vcl-editor"
-							rows="24"
-							maxlength="1048576"
-							spellcheck="false"
-							aria-describedby="vcl-hint"
-							_="on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'
-								halt the event
-								get my.selectionStart
-								set start to it
-								get my.selectionEnd
-								set end to it
-								set my.value to my.value.substring(0, start) + '  ' + my.value.substring(end)
-								set my.selectionStart to start + 2
-								set my.selectionEnd to start + 2
-							end
-							on keydown[key is 'Escape']
-								set my.dataset.nav to 'true'
-							on focus
-								remove @data-nav from me
-							on input
-								set my style.height to 'auto'
-								set my style.height to my.scrollHeight + 'px'
-							on load
-								set my style.height to my.scrollHeight + 'px'"
-						>{ displayValue }</textarea>
-					</label>
+					<label id="vcl-template-label" for="vcl_template">vcl_template</label>
+					<textarea
+						id="vcl_template"
+						name="vcl_template"
+						placeholder="Enter your VCL template here..."
+						class="vcl-editor"
+						rows="24"
+						maxlength="1048576"
+						spellcheck="false"
+						aria-describedby="vcl-hint"
+					>{ displayValue }</textarea>
+					<div id="editor"></div>
 				</div>
 			</fieldset>
 		</article>
 		<button type="submit">Add service version</button>
 	</form>
+	<script defer src="/js/dist/codemirror/editor.bundle.min.js" onerror="document.getElementById('vcl-hint').textContent = 'Enhanced editor failed to load. Basic editing is still available.'"></script>
 }
 
 templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
