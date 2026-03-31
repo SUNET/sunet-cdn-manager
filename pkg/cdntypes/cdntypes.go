@@ -265,8 +265,7 @@ sub vcl_backend_response {
 
 sub vcl_backend_error {
   #SUNET-CDN-MANAGER vcl_backend_error
-}
-`
+}`
 
 type Domain struct {
 	ID                pgtype.UUID `json:"id"`

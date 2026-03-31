@@ -51,7 +51,7 @@ UPDATE service_vcls SET vcl_template =
     'sub vcl_backend_error {' || E'\n' ||
     '  #SUNET-CDN-MANAGER vcl_backend_error' || E'\n' ||
     COALESCE(vcl_backend_error || E'\n', '') ||
-    '}' || E'\n';
+    '}';
 
 ALTER TABLE service_vcls ALTER COLUMN vcl_template SET NOT NULL;
 ALTER TABLE service_vcls ADD CONSTRAINT vcl_template_size CHECK(octet_length(vcl_template) >= 1 AND octet_length(vcl_template) <= 1048576);
