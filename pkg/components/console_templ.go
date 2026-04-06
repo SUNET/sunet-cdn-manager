@@ -2777,7 +2777,7 @@ func CreateServiceVersionContent(serviceName string, orgName string, domains []c
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, "\" hx-disabled-elt=\"find button[type='submit']\"><article><fieldset><legend>Domains</legend> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, "\" hx-disabled-elt=\"find button[type='submit']\" hx-boost=\"false\"><article><fieldset><legend>Domains</legend> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2918,20 +2918,20 @@ func CreateServiceVersionContent(serviceName string, orgName string, domains []c
 		if submittedData != nil {
 			displayValue = submittedData.VCLTemplate
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, "<article><fieldset><legend>VCL template</legend> <small id=\"vcl-hint\" class=\"vcl-hint\">Tab inserts spaces. Press Escape to enable Tab navigation out of the editor.</small><div><label for=\"vcl_template\">vcl_template <textarea id=\"vcl_template\" name=\"vcl_template\" placeholder=\"Enter your VCL template here...\" class=\"vcl-editor\" rows=\"24\" maxlength=\"1048576\" spellcheck=\"false\" aria-describedby=\"vcl-hint\" _=\"on keydown[key is 'Tab' and not shiftKey] if my.dataset.nav is not 'true'\n\t\t\t\t\t\t\t\thalt the event\n\t\t\t\t\t\t\t\tget my.selectionStart\n\t\t\t\t\t\t\t\tset start to it\n\t\t\t\t\t\t\t\tget my.selectionEnd\n\t\t\t\t\t\t\t\tset end to it\n\t\t\t\t\t\t\t\tset my.value to my.value.substring(0, start) + '  ' + my.value.substring(end)\n\t\t\t\t\t\t\t\tset my.selectionStart to start + 2\n\t\t\t\t\t\t\t\tset my.selectionEnd to start + 2\n\t\t\t\t\t\t\tend\n\t\t\t\t\t\t\ton keydown[key is 'Escape']\n\t\t\t\t\t\t\t\tset my.dataset.nav to 'true'\n\t\t\t\t\t\t\ton focus\n\t\t\t\t\t\t\t\tremove @data-nav from me\n\t\t\t\t\t\t\ton input\n\t\t\t\t\t\t\t\tset my style.height to 'auto'\n\t\t\t\t\t\t\t\tset my style.height to my.scrollHeight + 'px'\n\t\t\t\t\t\t\ton load\n\t\t\t\t\t\t\t\tset my style.height to my.scrollHeight + 'px'\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, "<article><fieldset><legend>VCL template</legend> <small id=\"vcl-hint\" class=\"vcl-hint\">Loading enhanced editor...</small><div><label id=\"vcl-template-label\" for=\"vcl_template\">vcl_template</label> <textarea id=\"vcl_template\" name=\"vcl_template\" placeholder=\"Enter your VCL template here...\" class=\"vcl-editor\" rows=\"24\" maxlength=\"1048576\" spellcheck=\"false\" aria-describedby=\"vcl-hint\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var135 string
 		templ_7745c5c3_Var135, templ_7745c5c3_Err = templ.JoinStringErrs(displayValue)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 844, Col: 21}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 824, Col: 20}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var135))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, "</textarea></label></div></fieldset></article><button type=\"submit\">Add service version</button></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, "</textarea><div id=\"editor\"></div></div></fieldset></article><button type=\"submit\">Add service version</button></form><script defer src=\"/js/dist/codemirror/editor.bundle.min.js\" onerror=\"document.getElementById('vcl-hint').textContent = 'Enhanced editor failed to load. Basic editing is still available.'\"></script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2967,7 +2967,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var137 string
 		templ_7745c5c3_Var137, templ_7745c5c3_Err = templ.JoinStringErrs(serviceName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 854, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 835, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var137))
 		if templ_7745c5c3_Err != nil {
@@ -2980,7 +2980,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var138 string
 		templ_7745c5c3_Var138, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.FormatInt(version, 10))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 854, Col: 88}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 835, Col: 88}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var138))
 		if templ_7745c5c3_Err != nil {
@@ -2993,7 +2993,7 @@ func ActivateServiceVersionContent(orgName string, serviceName string, version i
 		var templ_7745c5c3_Var139 templ.SafeURL
 		templ_7745c5c3_Var139, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 855, Col: 126}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 836, Col: 126}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var139))
 		if templ_7745c5c3_Err != nil {
@@ -3053,7 +3053,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 		var templ_7745c5c3_Var141 templ.SafeURL
 		templ_7745c5c3_Var141, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/auth/oidc/keycloak"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 883, Col: 47}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 864, Col: 47}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var141))
 		if templ_7745c5c3_Err != nil {
@@ -3076,7 +3076,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 		var templ_7745c5c3_Var142 templ.SafeURL
 		templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/auth/login"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 889, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 870, Col: 58}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var142))
 		if templ_7745c5c3_Err != nil {
@@ -3094,7 +3094,7 @@ func LoginPage(returnTo string, loginFailed bool) templ.Component {
 			var templ_7745c5c3_Var143 string
 			templ_7745c5c3_Var143, templ_7745c5c3_Err = templ.JoinStringErrs(returnTo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 891, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 872, Col: 61}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var143))
 			if templ_7745c5c3_Err != nil {
@@ -3146,7 +3146,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 			var templ_7745c5c3_Var145 string
 			templ_7745c5c3_Var145, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 912, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 893, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var145))
 			if templ_7745c5c3_Err != nil {
@@ -3175,7 +3175,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var146 string
 				templ_7745c5c3_Var146, templ_7745c5c3_Err = templ.JoinStringErrs(node.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 934, Col: 21}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 915, Col: 21}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var146))
 				if templ_7745c5c3_Err != nil {
@@ -3188,7 +3188,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var147 string
 				templ_7745c5c3_Var147, templ_7745c5c3_Err = templ.JoinStringErrs(node.Description)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 935, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 916, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var147))
 				if templ_7745c5c3_Err != nil {
@@ -3206,7 +3206,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 					var templ_7745c5c3_Var148 string
 					templ_7745c5c3_Var148, templ_7745c5c3_Err = templ.JoinStringErrs(addr.String())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 938, Col: 34}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 919, Col: 34}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var148))
 					if templ_7745c5c3_Err != nil {
@@ -3234,7 +3234,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var149 string
 				templ_7745c5c3_Var149, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/maintenance", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 945, Col: 107}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 926, Col: 107}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var149))
 				if templ_7745c5c3_Err != nil {
@@ -3247,7 +3247,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var150 string
 				templ_7745c5c3_Var150, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 947, Col: 80}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 928, Col: 80}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var150))
 				if templ_7745c5c3_Err != nil {
@@ -3260,7 +3260,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var151 string
 				templ_7745c5c3_Var151, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Toggle maintenance for '%s'", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 948, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 929, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var151))
 				if templ_7745c5c3_Err != nil {
@@ -3273,7 +3273,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var152 string
 				templ_7745c5c3_Var152, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/node-group", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 958, Col: 106}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 939, Col: 106}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var152))
 				if templ_7745c5c3_Err != nil {
@@ -3286,7 +3286,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var153 string
 				templ_7745c5c3_Var153, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("on focus set my @data-prev to my value on change set v to my value if v is '' set v to 'none' end if confirm(`Change node group for '%s' to '${v}'?`) trigger confirmed on me else set my value to my @data-prev", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 962, Col: 246}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 943, Col: 246}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var153))
 				if templ_7745c5c3_Err != nil {
@@ -3299,7 +3299,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var154 string
 				templ_7745c5c3_Var154, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Select node group for '%s'", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 963, Col: 73}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 944, Col: 73}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var154))
 				if templ_7745c5c3_Err != nil {
@@ -3327,7 +3327,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 					var templ_7745c5c3_Var155 string
 					templ_7745c5c3_Var155, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 967, Col: 32}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 948, Col: 32}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var155))
 					if templ_7745c5c3_Err != nil {
@@ -3350,7 +3350,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 					var templ_7745c5c3_Var156 string
 					templ_7745c5c3_Var156, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 967, Col: 118}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 948, Col: 118}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var156))
 					if templ_7745c5c3_Err != nil {
@@ -3368,7 +3368,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var157 templ.SafeURL
 				templ_7745c5c3_Var157, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", node.Name)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 972, Col: 92}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 953, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var157))
 				if templ_7745c5c3_Err != nil {
@@ -3381,7 +3381,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var158 string
 				templ_7745c5c3_Var158, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 975, Col: 98}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 956, Col: 98}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var158))
 				if templ_7745c5c3_Err != nil {
@@ -3394,7 +3394,7 @@ func CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntypes
 				var templ_7745c5c3_Var159 string
 				templ_7745c5c3_Var159, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 977, Col: 84}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 958, Col: 84}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var159))
 				if templ_7745c5c3_Err != nil {
@@ -3443,7 +3443,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 			var templ_7745c5c3_Var161 string
 			templ_7745c5c3_Var161, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 995, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 976, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var161))
 			if templ_7745c5c3_Err != nil {
@@ -3461,7 +3461,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var162 string
 		templ_7745c5c3_Var162, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1000, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 981, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var162))
 		if templ_7745c5c3_Err != nil {
@@ -3474,7 +3474,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var163 string
 		templ_7745c5c3_Var163, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1002, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 983, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var163))
 		if templ_7745c5c3_Err != nil {
@@ -3487,7 +3487,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var164 string
 		templ_7745c5c3_Var164, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1005, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 986, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var164))
 		if templ_7745c5c3_Err != nil {
@@ -3500,7 +3500,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var165 string
 		templ_7745c5c3_Var165, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1007, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 988, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var165))
 		if templ_7745c5c3_Err != nil {
@@ -3513,7 +3513,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var166 string
 		templ_7745c5c3_Var166, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1010, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 991, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var166))
 		if templ_7745c5c3_Err != nil {
@@ -3526,7 +3526,7 @@ func CreateCacheNodeContent(formData CacheNodeFormData) templ.Component {
 		var templ_7745c5c3_Var167 string
 		templ_7745c5c3_Var167, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1012, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 993, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var167))
 		if templ_7745c5c3_Err != nil {
@@ -3569,7 +3569,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 			var templ_7745c5c3_Var169 string
 			templ_7745c5c3_Var169, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1019, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1000, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var169))
 			if templ_7745c5c3_Err != nil {
@@ -3587,7 +3587,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var170 templ.SafeURL
 		templ_7745c5c3_Var170, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", nodeName)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1021, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1002, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var170))
 		if templ_7745c5c3_Err != nil {
@@ -3600,7 +3600,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var171 string
 		templ_7745c5c3_Var171, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1024, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1005, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var171))
 		if templ_7745c5c3_Err != nil {
@@ -3613,7 +3613,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var172 string
 		templ_7745c5c3_Var172, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1026, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1007, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var172))
 		if templ_7745c5c3_Err != nil {
@@ -3626,7 +3626,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var173 string
 		templ_7745c5c3_Var173, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1029, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1010, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var173))
 		if templ_7745c5c3_Err != nil {
@@ -3639,7 +3639,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var174 string
 		templ_7745c5c3_Var174, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1031, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1012, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var174))
 		if templ_7745c5c3_Err != nil {
@@ -3652,7 +3652,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var175 string
 		templ_7745c5c3_Var175, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1034, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1015, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var175))
 		if templ_7745c5c3_Err != nil {
@@ -3665,7 +3665,7 @@ func EditCacheNodeContent(nodeName string, formData CacheNodeFormData) templ.Com
 		var templ_7745c5c3_Var176 string
 		templ_7745c5c3_Var176, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1036, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1017, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var176))
 		if templ_7745c5c3_Err != nil {
@@ -3712,7 +3712,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 			var templ_7745c5c3_Var178 string
 			templ_7745c5c3_Var178, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1044, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1025, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var178))
 			if templ_7745c5c3_Err != nil {
@@ -3741,7 +3741,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var179 string
 				templ_7745c5c3_Var179, templ_7745c5c3_Err = templ.JoinStringErrs(node.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1066, Col: 21}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1047, Col: 21}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var179))
 				if templ_7745c5c3_Err != nil {
@@ -3754,7 +3754,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var180 string
 				templ_7745c5c3_Var180, templ_7745c5c3_Err = templ.JoinStringErrs(node.Description)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1067, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1048, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var180))
 				if templ_7745c5c3_Err != nil {
@@ -3772,7 +3772,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 					var templ_7745c5c3_Var181 string
 					templ_7745c5c3_Var181, templ_7745c5c3_Err = templ.JoinStringErrs(addr.String())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1070, Col: 34}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1051, Col: 34}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var181))
 					if templ_7745c5c3_Err != nil {
@@ -3800,7 +3800,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var182 string
 				templ_7745c5c3_Var182, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/maintenance", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1077, Col: 106}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1058, Col: 106}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var182))
 				if templ_7745c5c3_Err != nil {
@@ -3813,7 +3813,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var183 string
 				templ_7745c5c3_Var183, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1079, Col: 80}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1060, Col: 80}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var183))
 				if templ_7745c5c3_Err != nil {
@@ -3826,7 +3826,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var184 string
 				templ_7745c5c3_Var184, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Toggle maintenance for '%s'", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1080, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1061, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var184))
 				if templ_7745c5c3_Err != nil {
@@ -3839,7 +3839,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var185 string
 				templ_7745c5c3_Var185, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/node-group", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1090, Col: 105}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1071, Col: 105}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var185))
 				if templ_7745c5c3_Err != nil {
@@ -3852,7 +3852,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var186 string
 				templ_7745c5c3_Var186, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("on focus set my @data-prev to my value on change set v to my value if v is '' set v to 'none' end if confirm(`Change node group for '%s' to '${v}'?`) trigger confirmed on me else set my value to my @data-prev", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1094, Col: 246}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1075, Col: 246}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var186))
 				if templ_7745c5c3_Err != nil {
@@ -3865,7 +3865,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var187 string
 				templ_7745c5c3_Var187, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Select node group for '%s'", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1095, Col: 73}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1076, Col: 73}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var187))
 				if templ_7745c5c3_Err != nil {
@@ -3893,7 +3893,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 					var templ_7745c5c3_Var188 string
 					templ_7745c5c3_Var188, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1099, Col: 32}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1080, Col: 32}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var188))
 					if templ_7745c5c3_Err != nil {
@@ -3916,7 +3916,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 					var templ_7745c5c3_Var189 string
 					templ_7745c5c3_Var189, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1099, Col: 118}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1080, Col: 118}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var189))
 					if templ_7745c5c3_Err != nil {
@@ -3934,7 +3934,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var190 templ.SafeURL
 				templ_7745c5c3_Var190, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", node.Name)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1104, Col: 91}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1085, Col: 91}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var190))
 				if templ_7745c5c3_Err != nil {
@@ -3947,7 +3947,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var191 string
 				templ_7745c5c3_Var191, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s", node.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1107, Col: 97}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1088, Col: 97}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var191))
 				if templ_7745c5c3_Err != nil {
@@ -3960,7 +3960,7 @@ func L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.N
 				var templ_7745c5c3_Var192 string
 				templ_7745c5c3_Var192, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", node.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1109, Col: 84}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1090, Col: 84}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var192))
 				if templ_7745c5c3_Err != nil {
@@ -4009,7 +4009,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 			var templ_7745c5c3_Var194 string
 			templ_7745c5c3_Var194, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1127, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1108, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var194))
 			if templ_7745c5c3_Err != nil {
@@ -4027,7 +4027,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var195 string
 		templ_7745c5c3_Var195, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1132, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1113, Col: 103}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var195))
 		if templ_7745c5c3_Err != nil {
@@ -4040,7 +4040,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var196 string
 		templ_7745c5c3_Var196, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1134, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1115, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var196))
 		if templ_7745c5c3_Err != nil {
@@ -4053,7 +4053,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var197 string
 		templ_7745c5c3_Var197, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1137, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1118, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var197))
 		if templ_7745c5c3_Err != nil {
@@ -4066,7 +4066,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var198 string
 		templ_7745c5c3_Var198, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1139, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1120, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var198))
 		if templ_7745c5c3_Err != nil {
@@ -4079,7 +4079,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var199 string
 		templ_7745c5c3_Var199, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1142, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1123, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var199))
 		if templ_7745c5c3_Err != nil {
@@ -4092,7 +4092,7 @@ func CreateL4LBNodeContent(formData L4LBNodeFormData) templ.Component {
 		var templ_7745c5c3_Var200 string
 		templ_7745c5c3_Var200, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1144, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1125, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var200))
 		if templ_7745c5c3_Err != nil {
@@ -4135,7 +4135,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 			var templ_7745c5c3_Var202 string
 			templ_7745c5c3_Var202, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1151, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1132, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var202))
 			if templ_7745c5c3_Err != nil {
@@ -4153,7 +4153,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var203 templ.SafeURL
 		templ_7745c5c3_Var203, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", nodeName)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1153, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1134, Col: 103}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var203))
 		if templ_7745c5c3_Err != nil {
@@ -4166,7 +4166,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var204 string
 		templ_7745c5c3_Var204, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1156, Col: 103}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1137, Col: 103}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var204))
 		if templ_7745c5c3_Err != nil {
@@ -4179,7 +4179,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var205 string
 		templ_7745c5c3_Var205, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1158, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1139, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var205))
 		if templ_7745c5c3_Err != nil {
@@ -4192,7 +4192,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var206 string
 		templ_7745c5c3_Var206, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1161, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1142, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var206))
 		if templ_7745c5c3_Err != nil {
@@ -4205,7 +4205,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var207 string
 		templ_7745c5c3_Var207, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1163, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1144, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var207))
 		if templ_7745c5c3_Err != nil {
@@ -4218,7 +4218,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var208 string
 		templ_7745c5c3_Var208, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1166, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1147, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var208))
 		if templ_7745c5c3_Err != nil {
@@ -4231,7 +4231,7 @@ func EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) templ.Compo
 		var templ_7745c5c3_Var209 string
 		templ_7745c5c3_Var209, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Addresses)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1168, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1149, Col: 54}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var209))
 		if templ_7745c5c3_Err != nil {
@@ -4278,7 +4278,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 			var templ_7745c5c3_Var211 string
 			templ_7745c5c3_Var211, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1176, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1157, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var211))
 			if templ_7745c5c3_Err != nil {
@@ -4307,7 +4307,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 				var templ_7745c5c3_Var212 string
 				templ_7745c5c3_Var212, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1195, Col: 19}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1176, Col: 19}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var212))
 				if templ_7745c5c3_Err != nil {
@@ -4320,7 +4320,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 				var templ_7745c5c3_Var213 string
 				templ_7745c5c3_Var213, templ_7745c5c3_Err = templ.JoinStringErrs(ng.Description)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1196, Col: 26}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1177, Col: 26}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var213))
 				if templ_7745c5c3_Err != nil {
@@ -4333,7 +4333,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 				var templ_7745c5c3_Var214 templ.SafeURL
 				templ_7745c5c3_Var214, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", ng.Name)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1198, Col: 90}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1179, Col: 90}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var214))
 				if templ_7745c5c3_Err != nil {
@@ -4346,7 +4346,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 				var templ_7745c5c3_Var215 string
 				templ_7745c5c3_Var215, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s", ng.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1201, Col: 96}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1182, Col: 96}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var215))
 				if templ_7745c5c3_Err != nil {
@@ -4359,7 +4359,7 @@ func NodeGroupsContent(nodeGroups []cdntypes.NodeGroup, flashMessages []string, 
 				var templ_7745c5c3_Var216 string
 				templ_7745c5c3_Var216, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", ng.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1203, Col: 82}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1184, Col: 82}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var216))
 				if templ_7745c5c3_Err != nil {
@@ -4408,7 +4408,7 @@ func CreateNodeGroupContent(formData NodeGroupFormData) templ.Component {
 			var templ_7745c5c3_Var218 string
 			templ_7745c5c3_Var218, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1221, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1202, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var218))
 			if templ_7745c5c3_Err != nil {
@@ -4426,7 +4426,7 @@ func CreateNodeGroupContent(formData NodeGroupFormData) templ.Component {
 		var templ_7745c5c3_Var219 string
 		templ_7745c5c3_Var219, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1226, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1207, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var219))
 		if templ_7745c5c3_Err != nil {
@@ -4439,7 +4439,7 @@ func CreateNodeGroupContent(formData NodeGroupFormData) templ.Component {
 		var templ_7745c5c3_Var220 string
 		templ_7745c5c3_Var220, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1228, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1209, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var220))
 		if templ_7745c5c3_Err != nil {
@@ -4452,7 +4452,7 @@ func CreateNodeGroupContent(formData NodeGroupFormData) templ.Component {
 		var templ_7745c5c3_Var221 string
 		templ_7745c5c3_Var221, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1231, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1212, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var221))
 		if templ_7745c5c3_Err != nil {
@@ -4465,7 +4465,7 @@ func CreateNodeGroupContent(formData NodeGroupFormData) templ.Component {
 		var templ_7745c5c3_Var222 string
 		templ_7745c5c3_Var222, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1233, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1214, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var222))
 		if templ_7745c5c3_Err != nil {
@@ -4508,7 +4508,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 			var templ_7745c5c3_Var224 string
 			templ_7745c5c3_Var224, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1240, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1221, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var224))
 			if templ_7745c5c3_Err != nil {
@@ -4526,7 +4526,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 		var templ_7745c5c3_Var225 templ.SafeURL
 		templ_7745c5c3_Var225, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", groupName)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1242, Col: 105}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1223, Col: 105}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var225))
 		if templ_7745c5c3_Err != nil {
@@ -4539,7 +4539,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 		var templ_7745c5c3_Var226 string
 		templ_7745c5c3_Var226, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1245, Col: 104}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1226, Col: 104}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var226))
 		if templ_7745c5c3_Err != nil {
@@ -4552,7 +4552,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 		var templ_7745c5c3_Var227 string
 		templ_7745c5c3_Var227, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1247, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1228, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var227))
 		if templ_7745c5c3_Err != nil {
@@ -4565,7 +4565,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 		var templ_7745c5c3_Var228 string
 		templ_7745c5c3_Var228, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1250, Col: 121}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1231, Col: 121}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var228))
 		if templ_7745c5c3_Err != nil {
@@ -4578,7 +4578,7 @@ func EditNodeGroupContent(groupName string, formData NodeGroupFormData) templ.Co
 		var templ_7745c5c3_Var229 string
 		templ_7745c5c3_Var229, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Description)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1252, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1233, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var229))
 		if templ_7745c5c3_Err != nil {
@@ -4625,7 +4625,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 			var templ_7745c5c3_Var231 string
 			templ_7745c5c3_Var231, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1260, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1241, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var231))
 			if templ_7745c5c3_Err != nil {
@@ -4654,7 +4654,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var232 string
 				templ_7745c5c3_Var232, templ_7745c5c3_Err = templ.JoinStringErrs(org.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1281, Col: 20}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1262, Col: 20}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var232))
 				if templ_7745c5c3_Err != nil {
@@ -4667,7 +4667,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var233 string
 				templ_7745c5c3_Var233, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d/%d", org.ServiceCount, org.ServiceQuota))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1282, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1263, Col: 68}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var233))
 				if templ_7745c5c3_Err != nil {
@@ -4680,7 +4680,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var234 string
 				templ_7745c5c3_Var234, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d/%d", org.DomainCount, org.DomainQuota))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1283, Col: 66}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1264, Col: 66}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var234))
 				if templ_7745c5c3_Err != nil {
@@ -4693,7 +4693,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var235 string
 				templ_7745c5c3_Var235, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d/%d", org.ClientTokenCount, org.ClientTokenQuota))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1284, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1265, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var235))
 				if templ_7745c5c3_Err != nil {
@@ -4706,7 +4706,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var236 templ.SafeURL
 				templ_7745c5c3_Var236, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", org.Name)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1286, Col: 84}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1267, Col: 84}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var236))
 				if templ_7745c5c3_Err != nil {
@@ -4719,7 +4719,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var237 string
 				templ_7745c5c3_Var237, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/orgs/%s", org.Name))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1289, Col: 90}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1270, Col: 90}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var237))
 				if templ_7745c5c3_Err != nil {
@@ -4732,7 +4732,7 @@ func OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMessa
 				var templ_7745c5c3_Var238 string
 				templ_7745c5c3_Var238, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete '%s'?", org.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1291, Col: 83}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1272, Col: 83}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var238))
 				if templ_7745c5c3_Err != nil {
@@ -4781,7 +4781,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 			var templ_7745c5c3_Var240 string
 			templ_7745c5c3_Var240, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1309, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1290, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var240))
 			if templ_7745c5c3_Err != nil {
@@ -4799,7 +4799,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var241 string
 		templ_7745c5c3_Var241, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1314, Col: 106}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1295, Col: 106}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var241))
 		if templ_7745c5c3_Err != nil {
@@ -4812,7 +4812,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var242 string
 		templ_7745c5c3_Var242, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1316, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1297, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var242))
 		if templ_7745c5c3_Err != nil {
@@ -4825,7 +4825,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var243 string
 		templ_7745c5c3_Var243, templ_7745c5c3_Err = templ.JoinStringErrs(formData.ServiceQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1319, Col: 117}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1300, Col: 117}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var243))
 		if templ_7745c5c3_Err != nil {
@@ -4838,7 +4838,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var244 string
 		templ_7745c5c3_Var244, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServiceQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1321, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1302, Col: 57}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var244))
 		if templ_7745c5c3_Err != nil {
@@ -4851,7 +4851,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var245 string
 		templ_7745c5c3_Var245, templ_7745c5c3_Err = templ.JoinStringErrs(formData.DomainQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1324, Col: 114}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1305, Col: 114}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var245))
 		if templ_7745c5c3_Err != nil {
@@ -4864,7 +4864,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var246 string
 		templ_7745c5c3_Var246, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.DomainQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1326, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1307, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var246))
 		if templ_7745c5c3_Err != nil {
@@ -4877,7 +4877,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var247 string
 		templ_7745c5c3_Var247, templ_7745c5c3_Err = templ.JoinStringErrs(formData.ClientTokenQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1329, Col: 132}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1310, Col: 132}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var247))
 		if templ_7745c5c3_Err != nil {
@@ -4890,7 +4890,7 @@ func CreateOrgContent(formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var248 string
 		templ_7745c5c3_Var248, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ClientTokenQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1331, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1312, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var248))
 		if templ_7745c5c3_Err != nil {
@@ -4933,7 +4933,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 			var templ_7745c5c3_Var250 string
 			templ_7745c5c3_Var250, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1338, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1319, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var250))
 			if templ_7745c5c3_Err != nil {
@@ -4951,7 +4951,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var251 templ.SafeURL
 		templ_7745c5c3_Var251, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", orgName)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1340, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1321, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var251))
 		if templ_7745c5c3_Err != nil {
@@ -4964,7 +4964,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var252 string
 		templ_7745c5c3_Var252, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1343, Col: 106}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1324, Col: 106}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var252))
 		if templ_7745c5c3_Err != nil {
@@ -4977,7 +4977,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var253 string
 		templ_7745c5c3_Var253, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1345, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1326, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var253))
 		if templ_7745c5c3_Err != nil {
@@ -4990,7 +4990,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var254 string
 		templ_7745c5c3_Var254, templ_7745c5c3_Err = templ.JoinStringErrs(formData.ServiceQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1348, Col: 101}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1329, Col: 101}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var254))
 		if templ_7745c5c3_Err != nil {
@@ -5003,7 +5003,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var255 string
 		templ_7745c5c3_Var255, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServiceQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1350, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1331, Col: 57}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var255))
 		if templ_7745c5c3_Err != nil {
@@ -5016,7 +5016,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var256 string
 		templ_7745c5c3_Var256, templ_7745c5c3_Err = templ.JoinStringErrs(formData.DomainQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1353, Col: 98}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1334, Col: 98}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var256))
 		if templ_7745c5c3_Err != nil {
@@ -5029,7 +5029,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var257 string
 		templ_7745c5c3_Var257, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.DomainQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1355, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1336, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var257))
 		if templ_7745c5c3_Err != nil {
@@ -5042,7 +5042,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var258 string
 		templ_7745c5c3_Var258, templ_7745c5c3_Err = templ.JoinStringErrs(formData.ClientTokenQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1358, Col: 115}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1339, Col: 115}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var258))
 		if templ_7745c5c3_Err != nil {
@@ -5055,7 +5055,7 @@ func EditOrgContent(orgName string, formData OrgFormData) templ.Component {
 		var templ_7745c5c3_Var259 string
 		templ_7745c5c3_Var259, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ClientTokenQuota)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1360, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1341, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var259))
 		if templ_7745c5c3_Err != nil {
@@ -5097,7 +5097,7 @@ func ConsoleErrorContent(errorMessage string) templ.Component {
 		var templ_7745c5c3_Var261 string
 		templ_7745c5c3_Var261, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1367, Col: 73}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1348, Col: 73}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var261))
 		if templ_7745c5c3_Err != nil {
@@ -5144,7 +5144,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 			var templ_7745c5c3_Var263 string
 			templ_7745c5c3_Var263, templ_7745c5c3_Err = templ.JoinStringErrs(errorMessage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1374, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1355, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var263))
 			if templ_7745c5c3_Err != nil {
@@ -5173,7 +5173,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var264 string
 				templ_7745c5c3_Var264, templ_7745c5c3_Err = templ.JoinStringErrs(user.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1395, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1376, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var264))
 				if templ_7745c5c3_Err != nil {
@@ -5186,7 +5186,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var265 string
 				templ_7745c5c3_Var265, templ_7745c5c3_Err = templ.JoinStringErrs(user.RoleName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1396, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1377, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var265))
 				if templ_7745c5c3_Err != nil {
@@ -5200,7 +5200,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 					var templ_7745c5c3_Var266 string
 					templ_7745c5c3_Var266, templ_7745c5c3_Err = templ.JoinStringErrs(*user.OrgName)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1399, Col: 23}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1380, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var266))
 					if templ_7745c5c3_Err != nil {
@@ -5219,7 +5219,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var267 string
 				templ_7745c5c3_Var267, templ_7745c5c3_Err = templ.JoinStringErrs(user.AuthProvider)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1404, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1385, Col: 29}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var267))
 				if templ_7745c5c3_Err != nil {
@@ -5232,7 +5232,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var268 templ.SafeURL
 				templ_7745c5c3_Var268, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", user.ID.String())))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1406, Col: 93}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1387, Col: 93}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var268))
 				if templ_7745c5c3_Err != nil {
@@ -5245,7 +5245,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var269 string
 				templ_7745c5c3_Var269, templ_7745c5c3_Err = templ.JoinStringErrs(string(templ.URL(fmt.Sprintf("/console/superuser/users/%s", user.ID.String()))))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1409, Col: 99}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1390, Col: 99}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var269))
 				if templ_7745c5c3_Err != nil {
@@ -5258,7 +5258,7 @@ func UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorMe
 				var templ_7745c5c3_Var270 string
 				templ_7745c5c3_Var270, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Are you sure you want to delete user '%s'?", user.DisplayName))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1411, Col: 96}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1392, Col: 96}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var270))
 				if templ_7745c5c3_Err != nil {
@@ -5307,7 +5307,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 			var templ_7745c5c3_Var272 string
 			templ_7745c5c3_Var272, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1429, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1410, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var272))
 			if templ_7745c5c3_Err != nil {
@@ -5325,7 +5325,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var273 string
 		templ_7745c5c3_Var273, templ_7745c5c3_Err = templ.JoinStringErrs(formData.DisplayName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1434, Col: 124}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1415, Col: 124}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var273))
 		if templ_7745c5c3_Err != nil {
@@ -5338,7 +5338,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var274 string
 		templ_7745c5c3_Var274, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.DisplayName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1436, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1417, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var274))
 		if templ_7745c5c3_Err != nil {
@@ -5356,7 +5356,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 			var templ_7745c5c3_Var275 string
 			templ_7745c5c3_Var275, templ_7745c5c3_Err = templ.JoinStringErrs(role.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1441, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1422, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var275))
 			if templ_7745c5c3_Err != nil {
@@ -5379,7 +5379,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 			var templ_7745c5c3_Var276 string
 			templ_7745c5c3_Var276, templ_7745c5c3_Err = templ.JoinStringErrs(role.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1441, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1422, Col: 85}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var276))
 			if templ_7745c5c3_Err != nil {
@@ -5397,7 +5397,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var277 string
 		templ_7745c5c3_Var277, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Role)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1445, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1426, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var277))
 		if templ_7745c5c3_Err != nil {
@@ -5410,7 +5410,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var278 string
 		templ_7745c5c3_Var278, templ_7745c5c3_Err = templ.JoinStringErrs(cdntypes.OrgNotSelected)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1449, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1430, Col: 43}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var278))
 		if templ_7745c5c3_Err != nil {
@@ -5433,7 +5433,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var279 string
 		templ_7745c5c3_Var279, templ_7745c5c3_Err = templ.JoinStringErrs(cdntypes.OrgNotSelected)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1449, Col: 147}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1430, Col: 147}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var279))
 		if templ_7745c5c3_Err != nil {
@@ -5451,7 +5451,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 			var templ_7745c5c3_Var280 string
 			templ_7745c5c3_Var280, templ_7745c5c3_Err = templ.JoinStringErrs(org.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1451, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1432, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var280))
 			if templ_7745c5c3_Err != nil {
@@ -5474,7 +5474,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 			var templ_7745c5c3_Var281 string
 			templ_7745c5c3_Var281, templ_7745c5c3_Err = templ.JoinStringErrs(org.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1451, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1432, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var281))
 			if templ_7745c5c3_Err != nil {
@@ -5492,7 +5492,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var282 string
 		templ_7745c5c3_Var282, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Org)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1455, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1436, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var282))
 		if templ_7745c5c3_Err != nil {
@@ -5505,7 +5505,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var283 string
 		templ_7745c5c3_Var283, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Password)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1460, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1441, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var283))
 		if templ_7745c5c3_Err != nil {
@@ -5518,7 +5518,7 @@ func CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnt
 		var templ_7745c5c3_Var284 string
 		templ_7745c5c3_Var284, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ConfirmPassword)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1465, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1446, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var284))
 		if templ_7745c5c3_Err != nil {
@@ -5561,7 +5561,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var286 string
 			templ_7745c5c3_Var286, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.ServerError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1472, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1453, Col: 88}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var286))
 			if templ_7745c5c3_Err != nil {
@@ -5579,7 +5579,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var287 templ.SafeURL
 		templ_7745c5c3_Var287, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", userID)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1474, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1455, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var287))
 		if templ_7745c5c3_Err != nil {
@@ -5597,7 +5597,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var288 string
 			templ_7745c5c3_Var288, templ_7745c5c3_Err = templ.JoinStringErrs(formData.DisplayName)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1478, Col: 89}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1459, Col: 89}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var288))
 			if templ_7745c5c3_Err != nil {
@@ -5615,7 +5615,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var289 string
 			templ_7745c5c3_Var289, templ_7745c5c3_Err = templ.JoinStringErrs(formData.DisplayName)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1480, Col: 125}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1461, Col: 125}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var289))
 			if templ_7745c5c3_Err != nil {
@@ -5633,7 +5633,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var290 string
 		templ_7745c5c3_Var290, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.DisplayName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1483, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1464, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var290))
 		if templ_7745c5c3_Err != nil {
@@ -5651,7 +5651,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var291 string
 			templ_7745c5c3_Var291, templ_7745c5c3_Err = templ.JoinStringErrs(role.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1488, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1469, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var291))
 			if templ_7745c5c3_Err != nil {
@@ -5674,7 +5674,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var292 string
 			templ_7745c5c3_Var292, templ_7745c5c3_Err = templ.JoinStringErrs(role.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1488, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1469, Col: 85}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var292))
 			if templ_7745c5c3_Err != nil {
@@ -5692,7 +5692,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var293 string
 		templ_7745c5c3_Var293, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Role)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1492, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1473, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var293))
 		if templ_7745c5c3_Err != nil {
@@ -5705,7 +5705,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var294 string
 		templ_7745c5c3_Var294, templ_7745c5c3_Err = templ.JoinStringErrs(cdntypes.OrgNotSelected)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1496, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1477, Col: 43}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var294))
 		if templ_7745c5c3_Err != nil {
@@ -5728,7 +5728,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var295 string
 		templ_7745c5c3_Var295, templ_7745c5c3_Err = templ.JoinStringErrs(cdntypes.OrgNotSelected)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1496, Col: 147}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1477, Col: 147}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var295))
 		if templ_7745c5c3_Err != nil {
@@ -5746,7 +5746,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var296 string
 			templ_7745c5c3_Var296, templ_7745c5c3_Err = templ.JoinStringErrs(org.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1498, Col: 29}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1479, Col: 29}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var296))
 			if templ_7745c5c3_Err != nil {
@@ -5769,7 +5769,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var297 string
 			templ_7745c5c3_Var297, templ_7745c5c3_Err = templ.JoinStringErrs(org.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1498, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1479, Col: 81}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var297))
 			if templ_7745c5c3_Err != nil {
@@ -5787,7 +5787,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var298 string
 		templ_7745c5c3_Var298, templ_7745c5c3_Err = templ.JoinStringErrs(formData.Errors.Org)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1502, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1483, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var298))
 		if templ_7745c5c3_Err != nil {
@@ -5800,7 +5800,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 		var templ_7745c5c3_Var299 string
 		templ_7745c5c3_Var299, templ_7745c5c3_Err = templ.JoinStringErrs(authProvider)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1505, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1486, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var299))
 		if templ_7745c5c3_Err != nil {
@@ -5823,7 +5823,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 				var templ_7745c5c3_Var300 string
 				templ_7745c5c3_Var300, templ_7745c5c3_Err = templ.JoinStringErrs(passwordResetData.Errors.ServerError)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1513, Col: 98}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1494, Col: 98}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var300))
 				if templ_7745c5c3_Err != nil {
@@ -5841,7 +5841,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var301 templ.SafeURL
 			templ_7745c5c3_Var301, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userID)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1515, Col: 107}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1496, Col: 107}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var301))
 			if templ_7745c5c3_Err != nil {
@@ -5854,7 +5854,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var302 string
 			templ_7745c5c3_Var302, templ_7745c5c3_Err = templ.JoinStringErrs(passwordResetData.Errors.Password)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1520, Col: 63}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1501, Col: 63}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var302))
 			if templ_7745c5c3_Err != nil {
@@ -5867,7 +5867,7 @@ func EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdntyp
 			var templ_7745c5c3_Var303 string
 			templ_7745c5c3_Var303, templ_7745c5c3_Err = templ.JoinStringErrs(passwordResetData.Errors.ConfirmPassword)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1525, Col: 70}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 1506, Col: 70}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var303))
 			if templ_7745c5c3_Err != nil {
