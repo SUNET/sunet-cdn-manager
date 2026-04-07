@@ -7333,9 +7333,9 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 			macroName := strings.TrimSpace(strings.TrimPrefix(trimmed, cdntypes.VCLMacroPrefix))
 			if content, ok := macroContent[macroName]; ok {
 				if content != "" {
-					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n%s\n  # end SUNET-CDN-MANAGER %s\n", macroName, content, macroName)
+					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n%s\n# end SUNET-CDN-MANAGER %s\n", macroName, content, macroName)
 				} else {
-					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n  # end SUNET-CDN-MANAGER %s\n", macroName, macroName)
+					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n# end SUNET-CDN-MANAGER %s\n", macroName, macroName)
 				}
 				continue
 			}
