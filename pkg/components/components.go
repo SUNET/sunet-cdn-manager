@@ -119,6 +119,20 @@ type NodeGroupFormData struct {
 	Errors NodeGroupFormErrors
 }
 
+type IPNetworkFormFields struct {
+	Network string
+}
+
+type IPNetworkFormErrors struct {
+	Network     string
+	ServerError string
+}
+
+type IPNetworkFormData struct {
+	IPNetworkFormFields
+	Errors IPNetworkFormErrors
+}
+
 type UserFormFields struct {
 	DisplayName     string `schema:"display_name" validate:"required,min=1,max=63"`
 	Role            string `schema:"role" validate:"required"`
@@ -227,6 +241,7 @@ var sections = map[string]section{
 	"cache-nodes": {Label: "Cache nodes", CreateSlug: "cache-node"},
 	"l4lb-nodes":  {Label: "L4LB nodes", CreateSlug: "l4lb-node"},
 	"node-groups": {Label: "Node groups", CreateSlug: "node-group"},
+	"ip-networks": {Label: "IP networks", CreateSlug: "ip-network"},
 	"orgs":        {Label: "Organizations", CreateSlug: "org"},
 	"users":       {Label: "Users", CreateSlug: "user"},
 }
