@@ -7339,8 +7339,8 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	var resultBuf strings.Builder
 	for line := range strings.SplitSeq(vclTemplate, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, cdntypes.VCLMacroPrefix) {
-			macroName := strings.TrimSpace(strings.TrimPrefix(trimmed, cdntypes.VCLMacroPrefix))
+		if after, ok := strings.CutPrefix(trimmed, cdntypes.VCLMacroPrefix); ok {
+			macroName := strings.TrimSpace(after)
 			if content, ok := macroContent[macroName]; ok {
 				if content != "" {
 					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n%s\n# end SUNET-CDN-MANAGER %s\n", macroName, content, macroName)
