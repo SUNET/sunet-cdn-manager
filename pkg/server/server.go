@@ -85,6 +85,7 @@ var flashMessageKeys = struct {
 	cacheNodes string
 	l4lbNodes  string
 	nodeGroups string
+	ipNetworks string
 	orgs       string
 	users      string
 }{
@@ -94,6 +95,7 @@ var flashMessageKeys = struct {
 	cacheNodes: "_flash_cache_nodes",
 	l4lbNodes:  "_flash_l4lb_nodes",
 	nodeGroups: "_flash_node_groups",
+	ipNetworks: "_flash_ip_networks",
 	orgs:       "_flash_orgs",
 	users:      "_flash_users",
 }
@@ -114,6 +116,7 @@ const (
 	consoleSuperuserL4LBNodes        = "/console/superuser/l4lb-nodes"
 	consoleSuperuserNodeGroups       = "/console/superuser/node-groups"
 	consoleSuperuserOrgs             = "/console/superuser/orgs"
+	consoleSuperuserIPNetworks       = "/console/superuser/ip-networks"
 	consoleSuperuserUsers            = "/console/superuser/users"
 	apiV1OrgPath                     = "/v1/orgs/{org}"
 	orgNotFound                      = "organization not found"
@@ -122,6 +125,7 @@ const (
 	cacheNodeNotFound                = "cache node not found"
 	l4lbNodeNotFound                 = "l4lb node not found"
 	nodeGroupNotFound                = "node group not found"
+	ipNetworkNotFound                = "ip network not found"
 	consoleAlreadyExists             = "already exists"
 	validationNotDNSLabel            = "not a valid DNS label"
 	validationNotFQDN                = "not a valid FQDN"
@@ -137,6 +141,8 @@ const (
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
 	consoleOrgNotFound               = "Organization not found"
 	consoleNodeGroupNotFound         = "Node group not found"
+	consoleIPNetworksTitle           = "IP networks"
+	consoleIPNetworkNotFound         = "IP network not found"
 	consoleUsersTitle                = "Users"
 	consoleEditUserTitleFmt          = "Edit user: %s"
 	consoleUserNotFound              = "The specified user was not found."
@@ -2541,6 +2547,10 @@ type createNodeForm struct {
 type createNodeGroupForm struct {
 	Name        string `schema:"name" validate:"min=1,max=63,dns_rfc1035_label"`
 	Description string `schema:"description" validate:"min=1,max=100"`
+}
+
+type createIPNetworkForm struct {
+	Network string `schema:"network" validate:"required"`
 }
 
 type createOrgForm struct {
@@ -7448,7 +7458,7 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	return b.String(), nil
 }
 
-func selectNetworks(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, family int) ([]ipNetwork, error) {
+func selectNetworks(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, family int) ([]ipNetworkWithAllocated, error) {
 	if !ad.Superuser {
 		return nil, cdnerrors.ErrForbidden
 	}
@@ -7457,7 +7467,11 @@ func selectNetworks(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, fami
 	var err error
 
 	if family == 0 {
-		rows, err = dbc.dbPool.Query(ctx, "SELECT id, network FROM ip_networks ORDER BY network")
+		rows, err = dbc.dbPool.Query(ctx, `
+			SELECT n.id, n.network, COALESCE(a.cnt, 0) AS allocated
+			FROM ip_networks n
+			LEFT JOIN (SELECT network_id, COUNT(*) AS cnt FROM service_ip_addresses GROUP BY network_id) a ON a.network_id = n.id
+			ORDER BY n.network`)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for all networks: %w", err)
 		}
@@ -7465,13 +7479,18 @@ func selectNetworks(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, fami
 		if _, ok := validNetworkFamilies[family]; !ok {
 			return nil, errors.New("invalid network family")
 		}
-		rows, err = dbc.dbPool.Query(ctx, "SELECT id, network FROM ip_networks WHERE family(network) = $1 ORDER BY network", family)
+		rows, err = dbc.dbPool.Query(ctx, `
+			SELECT n.id, n.network, COALESCE(a.cnt, 0) AS allocated
+			FROM ip_networks n
+			LEFT JOIN (SELECT network_id, COUNT(*) AS cnt FROM service_ip_addresses GROUP BY network_id) a ON a.network_id = n.id
+			WHERE family(n.network) = $1
+			ORDER BY n.network`, family)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for networks: %w", err)
 		}
 	}
 
-	ipNetworks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipNetwork])
+	ipNetworks, err := pgx.CollectRows(rows, pgx.RowToStructByName[ipNetworkWithAllocated])
 	if err != nil {
 		return nil, fmt.Errorf("unable to CollectRows for networks: %w", err)
 	}
@@ -7508,6 +7527,74 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 		ID:      id,
 		Network: network,
 	}, nil
+}
+
+func newIPNetworkIdentifier(ctx context.Context, tx pgx.Tx, input string) (ipNetworkIdentifier, error) {
+	if input == "" {
+		return ipNetworkIdentifier{}, errEmptyInputIdentifier
+	}
+
+	var id pgtype.UUID
+	var network netip.Prefix
+
+	inputID := new(pgtype.UUID)
+	err := inputID.Scan(input)
+	if err == nil {
+		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &network)
+		if err != nil {
+			return ipNetworkIdentifier{}, err
+		}
+	} else {
+		prefix, parseErr := netip.ParsePrefix(input)
+		if parseErr != nil {
+			return ipNetworkIdentifier{}, fmt.Errorf("invalid network prefix: %w", parseErr)
+		}
+
+		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE network = $1 FOR SHARE", prefix.Masked()).Scan(&id, &network)
+		if err != nil {
+			return ipNetworkIdentifier{}, err
+		}
+	}
+
+	return ipNetworkIdentifier{
+		id:      id,
+		network: network,
+	}, nil
+}
+
+func deleteNetwork(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, input string) (netip.Prefix, error) {
+	if !ad.Superuser {
+		return netip.Prefix{}, cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var network netip.Prefix
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		networkIdent, err := newIPNetworkIdentifier(dbCtx, tx, input)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("deleteNetwork: unable to resolve network identifier: %w", err)
+		}
+
+		network = networkIdent.network
+
+		_, err = tx.Exec(dbCtx, "DELETE FROM ip_networks WHERE id = $1", networkIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteNetwork: DELETE network failed: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("deleteNetwork: transaction failed: %w", err)
+	}
+
+	return network, nil
 }
 
 func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
@@ -7576,6 +7663,10 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Post("/superuser/create/org", consoleCreateOrgHandler(dbc, cookieStore))
 		r.Get("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
 		r.Post("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
+		r.Get("/superuser/ip-networks", consoleIPNetworksHandler(dbc, cookieStore))
+		r.Delete("/superuser/ip-networks/{networkID}", consoleIPNetworkDeleteHandler(dbc, cookieStore))
+		r.Get("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc, cookieStore))
+		r.Post("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc, cookieStore))
 		r.Get("/superuser/cache-nodes", consoleCacheNodesHandler(dbc, cookieStore))
 		r.Delete("/superuser/cache-nodes/{cachenode}", consoleCacheNodeDeleteHandler(dbc, cookieStore))
 		r.Get("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
@@ -8956,7 +9047,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden(api403String)
 				}
-				logger.Err(err).Msg("unable to query ipv4 networks")
+				logger.Err(err).Msg("unable to query IP networks")
 				return nil, err
 			}
 
@@ -8989,25 +9080,58 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from networks POST handler")
 				}
 
-				ipNet, err := insertNetwork(ctx, dbc, input.Body.Network, ad)
+				ipNet, err := insertNetwork(ctx, dbc, input.Body.Network.Masked(), ad)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
-						return nil, huma.Error409Conflict("IPv4 network already exists")
+						return nil, huma.Error409Conflict("IP network already exists")
 					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden("not allowed to create this IPv4 network")
+						return nil, huma.Error403Forbidden("not allowed to create IP network")
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
-						return nil, huma.Error400BadRequest("content of request is not valid for IPv4 network")
+						return nil, huma.Error400BadRequest("content of request is not valid for IP network")
 					case errors.Is(err, cdnerrors.ErrExclutionViolation):
-						return nil, huma.Error409Conflict("IPv4 network is already covered by existing networks")
+						return nil, huma.Error409Conflict("IP network is already covered by existing networks")
 					}
-					logger.Err(err).Msg("unable to add IPv4 network")
+					logger.Err(err).Msg("unable to add IP network")
 					return nil, err
 				}
 				resp := &ipNetworkOutput{Body: ipNet}
 				return resp, nil
 			},
 		)
+
+		huma.Delete(api, "/v1/ip-networks/{networkID}", func(ctx context.Context, input *struct {
+			NetworkID string `path:"networkID" example:"00000011-0000-0000-0000-000000000001" doc:"IP network ID (UUID)" minLength:"1"`
+		},
+		) (*struct{}, error) {
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from ip-network DELETE handler")
+			}
+
+			var networkID pgtype.UUID
+			if err := networkID.Scan(input.NetworkID); err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid IP network ID format")
+			}
+
+			_, err := deleteNetwork(ctx, dbc, ad, networkID.String())
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403DeleteString)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(ipNetworkNotFound)
+				default:
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+						return nil, huma.Error409Conflict("cannot delete IP network: addresses are allocated from it")
+					}
+					return nil, fmt.Errorf("unable to delete ip network: %w", err)
+				}
+			}
+
+			return nil, nil
+		})
 
 		huma.Get(api, "/v1/cache-nodes", func(ctx context.Context, _ *struct{}) (*cacheNodesOutput, error) {
 			logger := zlog.Ctx(ctx)
@@ -9726,12 +9850,22 @@ type ipNetwork struct {
 	Network netip.Prefix `json:"network" example:"198.51.100.0/24" doc:"a IPv4 or IPv6 network"`
 }
 
+type ipNetworkWithAllocated struct {
+	ipNetwork
+	Allocated int64 `json:"allocated" doc:"Number of service IP addresses allocated from this network"`
+}
+
 type ipNetworksOutput struct {
-	Body []ipNetwork
+	Body []ipNetworkWithAllocated
 }
 
 type ipNetworkOutput struct {
 	Body ipNetwork
+}
+
+type ipNetworkIdentifier struct {
+	id      pgtype.UUID
+	network netip.Prefix
 }
 
 // Generate a random password containing A-Z, a-z and 0-9
@@ -12268,6 +12402,237 @@ func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
+func consoleIPNetworksHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		networks, err := selectNetworks(ctx, dbc, ad, 0)
+		if err != nil {
+			logger.Err(err).Msg("ip networks console: database lookup failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		flashMessages := session.Flashes(flashMessageKeys.ipNetworks)
+		if flashMessages != nil {
+			err = session.Save(r, w)
+			if err != nil {
+				logger.Err(err).Msg("ip networks console: updating session with flash message failed")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		}
+		flashMessageStrings := getFlashMessageStrings(flashMessages)
+
+		listItems := ipNetworksToListItems(networks)
+
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sessionSelectedOrg(session), components.IPNetworksContent(listItems, flashMessageStrings, ""))
+		if err != nil {
+			logger.Err(err).Msg("unable to render ip networks page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func ipNetworksToListItems(networks []ipNetworkWithAllocated) []cdntypes.IPNetworkListItem {
+	items := make([]cdntypes.IPNetworkListItem, len(networks))
+	for i, n := range networks {
+		items[i] = cdntypes.IPNetworkListItem{
+			ID:        n.ID,
+			Network:   n.Network,
+			Allocated: n.Allocated,
+		}
+	}
+	return items
+}
+
+func parseUUIDParam(w http.ResponseWriter, r *http.Request, param string) (pgtype.UUID, bool) {
+	idStr := chi.URLParam(r, param)
+	if idStr == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return pgtype.UUID{}, false
+	}
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return pgtype.UUID{}, false
+	}
+	return id, true
+}
+
+func consoleIPNetworkDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		networkID, ok := parseUUIDParam(w, r, "networkID")
+		if !ok {
+			return
+		}
+
+		deletedNetwork, err := deleteNetwork(ctx, dbc, ad, networkID.String())
+		if err != nil {
+			var errorMessage string
+			switch {
+			case errors.Is(err, cdnerrors.ErrForbidden):
+				logger.Err(err).Msg("ip networks console: not authorized to delete network")
+				errorMessage = "Not allowed to delete IP network"
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("ip networks console: network not found")
+				errorMessage = consoleIPNetworkNotFound
+			default:
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+					logger.Err(err).Msg("ip network deletion failed: addresses are still allocated")
+					errorMessage = "Cannot delete IP network: addresses are allocated from it"
+				} else {
+					logger.Err(err).Msg("ip networks console: deletion failed")
+					errorMessage = "IP network deletion failed"
+				}
+			}
+			networks, listErr := selectNetworks(ctx, dbc, ad, 0)
+			if listErr != nil {
+				logger.Err(listErr).Msg("ip networks console: unable to fetch network list for re-render")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			listItems := ipNetworksToListItems(networks)
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sessionSelectedOrg(session), components.IPNetworksContent(listItems, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render ip networks page with delete error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		session.AddFlash(fmt.Sprintf("IP network '%s' deleted!", deletedNetwork.String()), flashMessageKeys.ipNetworks)
+		err = session.Save(r, w)
+		if err != nil {
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(consoleSuperuserIPNetworks, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleCreateIPNetworkHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+		title := "Add IP network"
+
+		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(components.IPNetworkFormData{}))
+			if err != nil {
+				logger.Err(err).Msg("unable to render ip network creation page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse create-ip-network POST form")
+				return
+			}
+
+			formData := createIPNetworkForm{}
+			err := schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST create-ip-network form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			ipFormData := components.IPNetworkFormData{
+				IPNetworkFormFields: components.IPNetworkFormFields{
+					Network: formData.Network,
+				},
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				validationErrors := err.(validator.ValidationErrors)
+				for _, fieldError := range validationErrors {
+					switch fieldError.StructField() {
+					case "Network":
+						ipFormData.Errors.Network = "network prefix is required"
+					}
+				}
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render ip network creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			parsedPrefix, parseErr := netip.ParsePrefix(formData.Network)
+			if parseErr != nil {
+				ipFormData.Errors.Network = "not a valid network prefix (e.g. 198.51.100.0/24)"
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render ip network creation page on validation error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			prefix := parsedPrefix.Masked()
+
+			_, err = insertNetwork(ctx, dbc, prefix, ad)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					ipFormData.Errors.Network = consoleAlreadyExists
+				case errors.Is(err, cdnerrors.ErrExclutionViolation):
+					ipFormData.Errors.Network = "overlaps with an existing network"
+				case errors.Is(err, cdnerrors.ErrCheckViolation):
+					ipFormData.Errors.Network = "not a valid network prefix"
+				default:
+					ipFormData.Errors.ServerError = "IP network creation failed"
+				}
+				logger.Err(err).Msg("ip network creation failed")
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render ip network creation page on error")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			session.AddFlash(fmt.Sprintf("IP network '%s' added!", prefix.String()), flashMessageKeys.ipNetworks)
+			err = session.Save(r, w)
+			if err != nil {
+				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+				return
+			}
+
+			validatedRedirect(consoleSuperuserIPNetworks, w, r, http.StatusSeeOther)
+		default:
+			logger.Error().Str("method", r.Method).Msg("method not supported for create-ip-network handler")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -12305,20 +12670,6 @@ func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.Ha
 	}
 }
 
-func parseUserIDParam(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
-	userIDStr := chi.URLParam(r, "userID")
-	if userIDStr == "" {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return pgtype.UUID{}, false
-	}
-	var userID pgtype.UUID
-	if err := userID.Scan(userIDStr); err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return pgtype.UUID{}, false
-	}
-	return userID, true
-}
-
 func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
@@ -12329,7 +12680,7 @@ func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 			return
 		}
 
-		userID, ok := parseUserIDParam(w, r)
+		userID, ok := parseUUIDParam(w, r, "userID")
 		if !ok {
 			return
 		}
@@ -12529,7 +12880,7 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 			return
 		}
 
-		userID, ok := parseUserIDParam(w, r)
+		userID, ok := parseUUIDParam(w, r, "userID")
 		if !ok {
 			return
 		}
@@ -12706,7 +13057,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 			return
 		}
 
-		userID, ok := parseUserIDParam(w, r)
+		userID, ok := parseUUIDParam(w, r, "userID")
 		if !ok {
 			return
 		}

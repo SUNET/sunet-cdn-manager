@@ -5555,6 +5555,26 @@ func TestGetIPNetworks(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			// Verify allocation counts for successful requests
+			if test.expectedStatus == http.StatusOK && test.family == 0 {
+				var networks []ipNetworkWithAllocated
+				if err := json.Unmarshal(jsonData, &networks); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+
+				allocations := map[string]int64{}
+				for _, n := range networks {
+					allocations[n.Network.String()] = n.Allocated
+				}
+
+				if allocations["192.0.2.0/24"] != 2 {
+					t.Fatalf("expected 2 allocations for 192.0.2.0/24, got %d", allocations["192.0.2.0/24"])
+				}
+				if allocations["198.51.100.0/24"] != 0 {
+					t.Fatalf("expected 0 allocations for 198.51.100.0/24, got %d", allocations["198.51.100.0/24"])
+				}
+			}
 		})
 	}
 }
@@ -5678,6 +5698,144 @@ func TestPostIPNetworks(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+		})
+	}
+}
+
+func TestDeleteIPNetwork(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// First create a network we can delete (no allocated IPs)
+	newNet := struct {
+		Network netip.Prefix `json:"network"`
+	}{
+		Network: netip.MustParsePrefix("10.10.0.0/24"),
+	}
+	b, err := json.Marshal(newNet)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/ip-networks", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("failed to create test network: status %d", resp.StatusCode)
+	}
+
+	var created ipNetwork
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		networkID      string
+		expectedStatus int
+	}{
+		{
+			description:    "failed non-superuser request",
+			username:       "username1",
+			password:       validUserPassword,
+			networkID:      created.ID.String(),
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			description:    "failed request, invalid network ID format",
+			username:       "admin",
+			password:       validAdminPassword,
+			networkID:      "not-a-uuid",
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			description:    "failed request, network not found",
+			username:       "admin",
+			password:       validAdminPassword,
+			networkID:      "00000000-0000-0000-0000-000000000099",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			description:    "failed request, network has allocated IPs",
+			username:       "admin",
+			password:       validAdminPassword,
+			networkID:      "00000011-0000-0000-0000-000000000001",
+			expectedStatus: http.StatusConflict,
+		},
+		{
+			description:    "successful delete by UUID (created network)",
+			username:       "admin",
+			password:       validAdminPassword,
+			networkID:      created.ID.String(),
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			description:    "successful delete by UUID (seeded network without allocations)",
+			username:       "admin",
+			password:       validAdminPassword,
+			networkID:      "00000011-0000-0000-0000-000000000002",
+			expectedStatus: http.StatusNoContent,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatalf("DELETE ip-networks unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			}
+
+			// Verify successful deletes by confirming re-delete returns 404
+			if test.expectedStatus == http.StatusNoContent {
+				req2, err := http.NewRequest("DELETE", ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req2.SetBasicAuth(test.username, test.password)
+
+				resp2, err := http.DefaultClient.Do(req2) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp2.Body.Close()
+
+				if resp2.StatusCode != http.StatusNotFound {
+					t.Fatalf("expected 404 after deletion, got %d", resp2.StatusCode)
+				}
+			}
 		})
 	}
 }
@@ -8649,6 +8807,15 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Cannot delete node group: nodes are still assigned to it",
 		},
+		{
+			description:      "delete nonexistent ip network shows in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           "DELETE",
+			path:             "/console/superuser/ip-networks/00000000-0000-0000-0000-000000000099",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleIPNetworkNotFound,
+		},
 	}
 
 	for _, test := range tests {
@@ -9811,4 +9978,277 @@ sub vcl_backend_error {
 			}
 		})
 	}
+}
+
+func TestConsoleIPNetworks(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+	t.Run("list page renders", func(t *testing.T) {
+		req, err := http.NewRequest("GET", ts.URL+"/console/superuser/ip-networks", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatalf("failed to parse HTML: %v", err)
+		}
+
+		type networkRow struct {
+			network   string
+			family    string
+			allocated string
+			disabled  bool
+		}
+
+		rows := []networkRow{}
+		doc.Find("table tbody tr").Each(func(_ int, s *goquery.Selection) {
+			tds := s.Find("td")
+			row := networkRow{
+				network:   strings.TrimSpace(tds.Eq(0).Text()),
+				family:    strings.TrimSpace(tds.Eq(1).Text()),
+				allocated: strings.TrimSpace(tds.Eq(2).Text()),
+			}
+			_, row.disabled = tds.Eq(3).Find("button").Attr("disabled")
+			rows = append(rows, row)
+		})
+
+		// Verify seeded networks appear with correct data
+		found := map[string]networkRow{}
+		for _, r := range rows {
+			found[r.network] = r
+		}
+
+		if r, ok := found["192.0.2.0/24"]; !ok {
+			t.Fatal("expected 192.0.2.0/24 in list page")
+		} else {
+			if r.family != "IPv4" {
+				t.Fatalf("expected IPv4 family, got %s", r.family)
+			}
+			if r.allocated != "2" {
+				t.Fatalf("expected 2 allocations for 192.0.2.0/24, got %s", r.allocated)
+			}
+			if !r.disabled {
+				t.Fatal("expected delete button to be disabled for 192.0.2.0/24 (has allocations)")
+			}
+		}
+
+		if r, ok := found["198.51.100.0/24"]; !ok {
+			t.Fatal("expected 198.51.100.0/24 in list page")
+		} else {
+			if r.allocated != "0" {
+				t.Fatalf("expected 0 allocations for 198.51.100.0/24, got %s", r.allocated)
+			}
+			if r.disabled {
+				t.Fatal("expected delete button to be enabled for 198.51.100.0/24 (no allocations)")
+			}
+		}
+	})
+
+	t.Run("create page renders", func(t *testing.T) {
+		req, err := http.NewRequest("GET", ts.URL+"/console/superuser/create/ip-network", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("create network via form", func(t *testing.T) {
+		form := url.Values{"network": {"10.20.0.0/24"}}
+		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "10.20.0.0/24") {
+			t.Fatal("expected newly created network in redirect page")
+		}
+	})
+
+	t.Run("create duplicate network shows error", func(t *testing.T) {
+		form := url.Values{"network": {"10.20.0.0/24"}}
+		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), consoleAlreadyExists) {
+			t.Fatal("expected 'already exists' error message")
+		}
+	})
+
+	t.Run("create overlapping network shows error", func(t *testing.T) {
+		form := url.Values{"network": {"10.20.0.0/25"}}
+		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "overlaps with an existing network") {
+			t.Fatal("expected 'overlaps' error message")
+		}
+	})
+
+	t.Run("create invalid prefix shows error", func(t *testing.T) {
+		form := url.Values{"network": {"not-a-prefix"}}
+		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "not a valid network prefix") {
+			t.Fatal("expected validation error message")
+		}
+	})
+
+	t.Run("delete network with allocated IPs shows error", func(t *testing.T) {
+		// 192.0.2.0/24 has allocated IPs, use its UUID
+		req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/ip-networks/00000011-0000-0000-0000-000000000001", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "Cannot delete IP network") {
+			t.Fatal("expected FK violation error message in page")
+		}
+	})
+
+	t.Run("delete unused network succeeds", func(t *testing.T) {
+		// Use a seeded network with no allocated IPs: 3fff::/20 (ID 00000012-0000-0000-0000-000000000002)
+		req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/ip-networks/00000012-0000-0000-0000-000000000002", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "deleted!") {
+			t.Fatal("expected flash message confirming deletion")
+		}
+	})
 }

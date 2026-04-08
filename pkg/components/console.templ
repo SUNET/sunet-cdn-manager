@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
+	"net/netip"
 	"net/url"
 	"strconv"
 )
@@ -16,6 +17,13 @@ func activeAttr(section string, u *url.URL) templ.Attributes {
 		return templ.Attributes{"aria-current": "page"}
 	}
 	return templ.Attributes{}
+}
+
+func ipNetworkFamily(prefix netip.Prefix) string {
+	if prefix.Addr().Is6() {
+		return "IPv6"
+	}
+	return "IPv4"
 }
 
 templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string, availableOrgNames []string, contents templ.Component, itemLabel string) {
@@ -166,6 +174,7 @@ templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames
 					if ad.Superuser {
 						<li><p class="nav-section-label">Superuser</p></li>
 						<li><a href="/console/superuser/orgs" { activeAttr("orgs", u)... }>Organizations</a></li>
+						<li><a href="/console/superuser/ip-networks" { activeAttr("ip-networks", u)... }>IP networks</a></li>
 						<li><a href="/console/superuser/cache-nodes" { activeAttr("cache-nodes", u)... }>Cache nodes</a></li>
 						<li><a href="/console/superuser/l4lb-nodes" { activeAttr("l4lb-nodes", u)... }>L4LB nodes</a></li>
 						<li><a href="/console/superuser/node-groups" { activeAttr("node-groups", u)... }>Node groups</a></li>
@@ -1232,6 +1241,69 @@ templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
 		</label>
 		<span class="error-text">{ formData.Errors.Description }</span>
 		<button type="submit">Save changes</button>
+	</form>
+}
+
+templ IPNetworksContent(ipNetworks []cdntypes.IPNetworkListItem, flashMessages []string, errorMessage string) {
+	<p class="secondary-text">Networks used for allocating IP addresses to services.</p>
+	@flashMessagesComponent(flashMessages)
+	if errorMessage != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
+	}
+	if len(ipNetworks) == 0 {
+		<article class="empty-state">
+			<p>No IP networks added yet</p>
+			<a href="/console/superuser/create/ip-network" role="button">Add your first IP network</a>
+		</article>
+	} else {
+		<table>
+			<thead>
+				<tr>
+					<th>Network</th>
+					<th>Family</th>
+					<th>Allocated</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, n := range ipNetworks {
+					<tr>
+						<td>{ n.Network.String() }</td>
+						<td>{ ipNetworkFamily(n.Network) }</td>
+						<td>{ strconv.FormatInt(n.Allocated, 10) }</td>
+						<td>
+							<button
+								type="button"
+								hx-delete={ string(templ.URL(fmt.Sprintf("/console/superuser/ip-networks/%s", n.ID.String()))) }
+								hx-target="body"
+								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", n.Network.String()) }
+								hx-disabled-elt="this"
+								disabled?={ n.Allocated != 0 }
+							>
+								Delete
+							</button>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p>
+			<a href="/console/superuser/create/ip-network" role="button">Add IP network</a>
+		</p>
+	}
+}
+
+templ CreateIPNetworkContent(formData IPNetworkFormData) {
+	if formData.Errors.ServerError != "" {
+		<span class="error-text" role="alert" aria-live="polite">{ formData.Errors.ServerError }</span>
+	}
+	<form method="post" action="/console/superuser/create/ip-network" hx-disabled-elt="find button[type='submit']">
+		<label for="network">
+			Network prefix
+			<input type="text" id="network" name="network" placeholder="e.g. 198.51.100.0/24" value={ formData.Network } required/>
+		</label>
+		<span class="error-text">{ formData.Errors.Network }</span>
+		<button type="submit">Add IP network</button>
 	</form>
 }
 

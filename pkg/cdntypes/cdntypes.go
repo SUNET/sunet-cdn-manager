@@ -302,6 +302,12 @@ type L4LBNodeListItem struct {
 	NodeGroupName *string      `json:"node_group_name"`
 }
 
+type IPNetworkListItem struct {
+	ID        pgtype.UUID  `json:"id"`
+	Network   netip.Prefix `json:"network"`
+	Allocated int64        `json:"allocated"`
+}
+
 type L4LBNodeConfig struct {
 	L4LBNode   L4LBNode              `json:"l4lb_node"`
 	IPNetworks []netip.Prefix        `json:"ip_networks"`
