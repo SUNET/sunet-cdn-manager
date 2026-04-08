@@ -6,11 +6,13 @@ package components
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
 	"strings"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 )
 
@@ -169,6 +171,16 @@ type PasswordResetFormErrors struct {
 type PasswordResetFormData struct {
 	PasswordResetFormFields
 	Errors PasswordResetFormErrors
+}
+
+// ipAllocationErrMsg extracts the user-facing message from an IPAllocationError,
+// bypassing any fmt.Errorf wrapping from intermediate functions.
+func ipAllocationErrMsg(err error) string {
+	var ipAllocErr *cdnerrors.IPAllocationError
+	if errors.As(err, &ipAllocErr) {
+		return ipAllocErr.Error()
+	}
+	return cdnerrors.ErrNoServiceIPAddresses.Error()
 }
 
 // AddressesString formats a node's addresses as newline-separated text for

@@ -34,6 +34,7 @@ var (
 	ErrNotLocalUser                  = errors.New("operation is only available for local users")
 	ErrOldPasswordRequired           = errors.New("old password is required")
 	ErrSelfDelete                    = errors.New("users cannot delete themselves")
+	ErrNoServiceIPAddresses          = errors.New("no service IP addresses available for allocation")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
@@ -98,6 +99,25 @@ func (e *DependentsError) Error() string {
 
 func (e *DependentsError) Unwrap() error {
 	return ErrHasDependents
+}
+
+// IPAllocationError identifies as ErrNoServiceIPAddresses and indicates which
+// address family (IPv4 or IPv6) could not be allocated and how many were requested.
+type IPAllocationError struct {
+	Family    string // "IPv4" or "IPv6"
+	Requested int
+}
+
+func (e *IPAllocationError) Error() string {
+	suffix := "addresses"
+	if e.Requested == 1 {
+		suffix = "address"
+	}
+	return fmt.Sprintf("unable to allocate %d service %s %s", e.Requested, e.Family, suffix)
+}
+
+func (e *IPAllocationError) Unwrap() error {
+	return ErrNoServiceIPAddresses
 }
 
 func joinParts(parts []string) string {

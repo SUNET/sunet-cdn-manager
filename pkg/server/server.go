@@ -5803,11 +5803,11 @@ func allocateServiceIPs(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID, r
 	}
 
 	if len(allocatedV4) != requestedV4 {
-		return nil, fmt.Errorf("unable to allocate requested number of IPv4 addresses (%d)", requestedV4)
+		return nil, &cdnerrors.IPAllocationError{Family: "IPv4", Requested: requestedV4}
 	}
 
 	if len(allocatedV6) != requestedV6 {
-		return nil, fmt.Errorf("unable to allocate requested number of IPv6 addresses (%d)", requestedV6)
+		return nil, &cdnerrors.IPAllocationError{Family: "IPv6", Requested: requestedV6}
 	}
 
 	allocatedIPs := []serviceIPAddr{}
@@ -8696,6 +8696,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 				id, err := insertService(ctx, logger, dbc, input.Body.Name, &input.Body.Org, ad)
 				if err != nil {
+					var ipAllocErr *cdnerrors.IPAllocationError
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
@@ -8707,6 +8708,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 						return nil, huma.Error409Conflict("service quota hit, not allowed to create more services")
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error422UnprocessableEntity("invalid service data")
+					case errors.As(err, &ipAllocErr):
+						return nil, huma.Error422UnprocessableEntity(ipAllocErr.Error())
 					}
 					logger.Err(err).Msg("unable to add service")
 					return nil, err
