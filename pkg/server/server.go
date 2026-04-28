@@ -7282,7 +7282,6 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	preambleInput := vclPreambleInput{
 		VCLVersion: "4.1",
 		Modules: []string{
-			"std",
 			"proxy",
 		},
 		OriginGroups:           referencedOriginGroups,
