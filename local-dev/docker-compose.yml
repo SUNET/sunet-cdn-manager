@@ -1,6 +1,6 @@
 services:
   db:
-    image: "postgres:18.0-trixie"
+    image: "postgres:18.3-trixie"
     environment:
       - POSTGRES_PASSWORD=dev
       - POSTGRES_INITDB_ARGS=--data-checksums

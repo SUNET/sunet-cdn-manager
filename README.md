@@ -15,21 +15,18 @@ The project uses [templ](https://templ.guide) for generating HTML.
 * Commit all the updated files.
 
 ### Running tests
-Running tests require a local PostgreSQL 15 or newer. The need for
-at least version 15 is because the database setup expects the "Constrain
-ordinary users to user-private schemas" schema usage pattern as described at
+Tests utilize [Testcontainers for Go](https://golang.testcontainers.org) for
+running additional services:
+* Keycloak
+* PostgreSQL
+* [sunet-vcl-validator](https://github.com/SUNET/sunet-vcl-validator)
+
+PostgreSQL must be version 18 or newer. The initial need for at least version
+15 was because the database setup expects the "Constrain ordinary users to
+user-private schemas" schema usage pattern as described at
 https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATTERNS
-
-If running macOS the following can be done prior to running tests:
-```
-brew install postgresql@18
-export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
-```
-
-Some tests utilize [Testcontainers for Go](https://golang.testcontainers.org)
-(specifically for running
-[sunet-vcl-validator](https://github.com/SUNET/sunet-vcl-validator) and keycloak). This
-means you also need to be able to run containers for these tests to work.
+and now 18 is needed since we have migrations that expect NOT NULL constraints
+to be named.
 
 ### Setting up a local dev enviroment
 #### Initialize infrastructure

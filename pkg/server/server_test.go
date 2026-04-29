@@ -29,6 +29,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
+	"github.com/SUNET/sunet-cdn-manager/pkg/testhelpers"
 	"github.com/coreos/go-oidc/v3/oidc"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
@@ -37,8 +38,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/rs/zerolog"
-	"github.com/stapelberg/postgrestest"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -60,22 +61,29 @@ const (
 	dbPassword = "cdn-password"
 )
 
-var pgt *postgrestest.Server
+var pgContainer *postgres.PostgresContainer
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	var err error
-	pgt, err = postgrestest.Start(ctx, postgrestest.WithSQLDriver("pgx"))
+
+	pgContainer, err = testhelpers.CreatePostgreSQLContainer(ctx)
 	if err != nil {
 		panic(err)
 	}
-	defer pgt.Cleanup()
+	defer func() {
+		err := testcontainers.TerminateContainer(pgContainer)
+		if err != nil {
+			panic(err)
+		}
+	}()
 
-	// Make sure our "cdn" user is present in the database server, this
-	// matches the "cdn" schema we create in each test-specific database.
-	pgurl := pgt.DefaultDatabase()
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		panic(err)
+	}
 
-	pgConfig, err := pgxpool.ParseConfig(pgurl)
+	pgConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		panic(err)
 	}
@@ -510,7 +518,7 @@ type testServerInput struct {
 func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
 	t.Helper()
 
-	pgurl, err := pgt.CreateDatabase(ctx)
+	pgurl, err := testhelpers.CreateDatabase(ctx, t, pgContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +541,7 @@ func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, 
 
 	// Mimic initial setup done by init-cdn-db.sh on our real database
 	// servers. But instead of creating a "cdn" database we use use the randomized
-	// database that was given to us by pgt.CreateDatabase(). Since the
+	// database that was given to us by testhelpers.CreateDatabase(). Since the
 	// psql test server is shared between tests it would not work if each
 	// test tried to create its own "cdn" database.
 	//
@@ -574,8 +582,6 @@ func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encr
 		return nil, err
 	}
 
-	t.Log(pgConfig.ConnString())
-
 	err = migrations.Up(ctx, logger, pgConfig)
 	if err != nil {
 		return nil, err
@@ -583,7 +589,6 @@ func initDatabase(ctx context.Context, t *testing.T, logger zerolog.Logger, encr
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
-		dbPool.Close()
 		return nil, fmt.Errorf("unable to create database pool for cdn user: %w", err)
 	}
 
@@ -756,8 +761,6 @@ func TestServerInit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	t.Log(pgConfig.ConnString())
 
 	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
 
