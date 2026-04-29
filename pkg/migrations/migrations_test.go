@@ -9,23 +9,33 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
-	"github.com/stapelberg/postgrestest"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 var (
-	pgt    *postgrestest.Server
-	logger zerolog.Logger
+	pgContainer *postgres.PostgresContainer
+	logger      zerolog.Logger
 )
 
 func TestMain(m *testing.M) {
 	var err error
-	pgt, err = postgrestest.Start(context.Background(), postgrestest.WithSQLDriver("pgx"))
+
+	ctx := context.Background()
+
+	pgContainer, err = testhelpers.CreatePostgreSQLContainer(ctx)
 	if err != nil {
 		panic(err)
 	}
-	defer pgt.Cleanup()
+	defer func() {
+		err := testcontainers.TerminateContainer(pgContainer)
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
 		return filepath.Base(file) + ":" + strconv.Itoa(line)
@@ -35,8 +45,8 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-func prepareDatabase() (*pgxpool.Config, error) {
-	pgurl, err := pgt.CreateDatabase(context.Background())
+func prepareDatabase(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
+	pgurl, err := testhelpers.CreateDatabase(ctx, t, pgContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +62,8 @@ func prepareDatabase() (*pgxpool.Config, error) {
 }
 
 func TestUpMigrations(t *testing.T) {
-	pgConfig, err := prepareDatabase()
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
