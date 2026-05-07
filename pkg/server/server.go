@@ -10104,6 +10104,8 @@ func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool
 
 	if sessionKeys[0].EncKey == nil {
 		logger.Info().Msg("gorilla session encryption key is nil, using unencrypted cookies")
+	} else {
+		logger.Info().Msg("gorilla session encryption key is present, using encrypted cookies")
 	}
 
 	sessionKeyPairs := [][]byte{}
