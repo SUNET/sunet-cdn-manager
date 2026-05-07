@@ -10266,7 +10266,6 @@ func setupJwkCache(ctx context.Context, logger zerolog.Logger, client *http.Clie
 			),
 		),
 	)
-	options = append(options, httprc.WithHTTPClient(client))
 
 	// First, set up the `jwk.Cache` object. You need to pass it a
 	// `context.Context` object to control the lifecycle of the background fetching goroutine.
@@ -10275,7 +10274,7 @@ func setupJwkCache(ctx context.Context, logger zerolog.Logger, client *http.Clie
 		return nil, fmt.Errorf("unable to create JWK cache: %w", err)
 	}
 
-	if err := jwkCache.Register(ctx, oiConf.JwksURI); err != nil {
+	if err := jwkCache.Register(ctx, oiConf.JwksURI, jwk.WithHTTPClient(jwk.WrapHTTPClientDefaults(client))); err != nil {
 		return nil, fmt.Errorf("failed to register keycloak JWKS: %w", err)
 	}
 
