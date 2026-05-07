@@ -27,9 +27,11 @@ type Config struct {
 }
 
 type serverSettings struct {
-	URL              string `validate:"required,https_url"`
-	Addr             string `validate:"required"`
-	VCLValidationURL string `mapstructure:"vcl_validation_url" validate:"required"`
+	URL                  string        `validate:"required,https_url"`
+	Addr                 string        `validate:"required"`
+	VCLValidationURL     string        `mapstructure:"vcl_validation_url" validate:"required"`
+	ConsoleSessionMaxAge time.Duration `mapstructure:"console_session_max_age" validate:"required,min=1s"`
+	ConsoleSessionCapAge time.Duration `mapstructure:"console_session_cap_age" validate:"required,min=1s,gtefield=ConsoleSessionMaxAge"`
 }
 
 type dbSettings struct {

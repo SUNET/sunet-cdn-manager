@@ -46,6 +46,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/gorilla/schema"
+	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
@@ -176,6 +177,10 @@ const (
 	// VCL template with URL-encoding expansion up to ~3x plus other
 	// form fields)
 	formMaxSize = 4 * 1024 * 1024
+
+	// Checking for exact error string is not great but securecookie does
+	// not seem to expose better sentinels
+	cookieExpirationError = "securecookie: expired timestamp"
 )
 
 var (
@@ -398,7 +403,8 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	consoleMissingAuthData           = "console: session missing AuthData"
+	consoleMissingAuthData           = "console: request context missing AuthData"
+	consoleMissingSessionData        = "console: request context missing session data"
 	consoleMissingServicePath        = "console: missing service path in URL"
 	consoleMissingOrgPath            = "console: missing org path in URL"
 	consoleMissingOrgParam           = "console: missing org parameter in URL"
@@ -416,21 +422,24 @@ const (
 	consoleCreateServiceRenderErr    = "unable to render create service error page"
 )
 
-func consoleDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDashboardHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		if ad.Username == nil {
 			logger.Error().Msg("consoleDashboardHandler: ad.Username is not set")
@@ -625,21 +634,17 @@ func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData,
 	}, nil
 }
 
-func consoleOrgDashboardHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -737,21 +742,24 @@ func getFlashMessageStrings(flashMessages []any) []string {
 	return flashMessageStrings
 }
 
-func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDomainsHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -802,21 +810,24 @@ func consoleDomainsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 	}
 }
 
-func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgParam := chi.URLParam(r, "org")
 		if orgParam == "" {
@@ -913,21 +924,24 @@ func consoleDomainDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 	}
 }
 
-func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
+func consoleAPITokensHandler(dbc *dbConn, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -979,21 +993,24 @@ func consoleAPITokensHandler(dbc *dbConn, cookieStore *sessions.CookieStore, tok
 	}
 }
 
-func consoleAPITokenDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
+func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgParam := chi.URLParam(r, "org")
 		if orgParam == "" {
@@ -1108,23 +1125,26 @@ func parseLimitedForm(w http.ResponseWriter, r *http.Request, maxSize int64) err
 	return err
 }
 
-func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
+func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm *keycloakClientManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
 		title := "Add API token"
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -1269,21 +1289,24 @@ func consoleCreateAPITokenHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 	}
 }
 
-func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgParam := chi.URLParam(r, "org")
 		if orgParam == "" {
@@ -1401,21 +1424,24 @@ func consoleServiceDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
-func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -1498,23 +1524,26 @@ func consoleServicesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 	}
 }
 
-func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
 		title := "Add domain"
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -1650,23 +1679,26 @@ func consoleCreateDomainHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 	}
 }
 
-func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateServiceHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
 		title := "Create service"
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
@@ -1781,21 +1813,17 @@ func consoleCreateServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
-func consoleNewOriginFieldsetHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleNewOriginFieldsetHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgStr := r.URL.Query().Get("org")
 		if orgStr == "" {
@@ -1878,21 +1906,24 @@ func consoleNewOriginFieldsetHandler(dbc *dbConn, cookieStore *sessions.CookieSt
 	}
 }
 
-func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgSwitcherHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
+		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgStr := r.URL.Query().Get("org")
 		if orgStr == "" {
@@ -1957,7 +1988,7 @@ func consoleOrgSwitcherHandler(dbc *dbConn, cookieStore *sessions.CookieStore) h
 	}
 }
 
-func consoleServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -1978,16 +2009,12 @@ func consoleServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 
 		title := "Service"
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		serviceVersions, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
 		if err != nil {
@@ -2024,7 +2051,7 @@ func consoleServiceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 	}
 }
 
-func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -2059,16 +2086,12 @@ func consoleServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 
 		title := "Service version"
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		svc, err := getServiceVersionConfig(ctx, dbc, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
@@ -2159,7 +2182,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 	return cloneData, nil
 }
 
-func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
+func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorClient, confTemplates configTemplates) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -2180,16 +2203,12 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 
 		title := "Create service version"
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
@@ -2332,7 +2351,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Cooki
 	}
 }
 
-func consoleActivateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -2381,16 +2400,12 @@ func consoleActivateServiceVersionHandler(dbc *dbConn, cookieStore *sessions.Coo
 
 		title := "Activate service version"
 
-		session := getSession(r, cookieStore)
-
-		adRef, ok := session.Values["ad"]
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		ad := adRef.(cdntypes.AuthData)
 
 		switch r.Method {
 		case http.MethodGet:
@@ -2565,7 +2580,7 @@ type nodeGroupAssignForm struct {
 }
 
 // Endpoint used for console login
-func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore) http.HandlerFunc {
+func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -2573,7 +2588,12 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 		case http.MethodGet:
 			q := r.URL.Query()
 			returnTo := q.Get(returnToKey)
-			adRef := authFromSession(logger, cookieStore, r)
+			session := getSession(r, cookieStore)
+			adRef, err := authFromSession(logger, session, consoleSessionCapAge, r, w)
+			if err != nil {
+				// We have already written a failure response to the client, just return
+				return
+			}
 			if adRef != nil {
 				switch returnTo {
 				case "":
@@ -2588,7 +2608,7 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 			}
 
 			// No existing login session, show login form
-			err := renderLoginPage(w, r, returnTo, false)
+			err = renderLoginPage(w, r, returnTo, false)
 			if err != nil {
 				logger.Err(err).Msg("unable to render login page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2654,12 +2674,10 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 			}
 
 			session := getSession(r, cookieStore)
-			session.Values["ad"] = ad
 
-			logger.Info().Msg("saving login session")
-			err = session.Save(r, w)
+			logger.Info().Msg("loginHandler: saving login session")
+			err = setSessionAuth(logger, session, ad, r, w)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
@@ -2740,7 +2758,12 @@ func logoutSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions
 	logger := hlog.FromRequest(r)
 	session, err := cookieStore.Get(r, cookieName)
 	if err != nil {
-		logger.Err(err).Msg("logoutSession: unable to decode existing cookie, using new one")
+		var scErr securecookie.Error
+		if errors.As(err, &scErr) && scErr.IsDecode() && scErr.Error() == cookieExpirationError {
+			logger.Debug().Err(err).Msg("logoutSession: cookie is expired")
+		} else {
+			logger.Err(err).Msg("logoutSession: unable to decode existing cookie")
+		}
 	}
 
 	// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
@@ -2753,7 +2776,12 @@ func getSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Se
 	logger := hlog.FromRequest(r)
 	session, err := cookieStore.Get(r, cookieName)
 	if err != nil {
-		logger.Err(err).Msg("getSession: unable to decode existing cookie, using new one")
+		var scErr securecookie.Error
+		if errors.As(err, &scErr) && scErr.IsDecode() && scErr.Error() == cookieExpirationError {
+			logger.Debug().Err(err).Msg("getSession: cookie is expired")
+		} else {
+			logger.Err(err).Msg("getSession: unable to decode existing cookie, using new one")
+		}
 	}
 
 	return session
@@ -2921,12 +2949,9 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 			}
 		}
 
-		session.Values["ad"] = ad
-
-		err = session.Save(r, w)
+		logger.Info().Msg("oauth2CallbackHandler: saving login session")
+		err = setSessionAuth(logger, session, ad, r, w)
 		if err != nil {
-			logger.Err(err).Msg("unable to save session")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -2937,6 +2962,21 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 
 		validatedRedirect(consolePath, w, r, http.StatusFound)
 	}
+}
+
+func setSessionAuth(logger *zerolog.Logger, s *sessions.Session, ad cdntypes.AuthData, r *http.Request, w http.ResponseWriter) error {
+	s.Values["login_at"] = time.Now().Unix()
+
+	s.Values["ad"] = ad
+
+	err := s.Save(r, w)
+	if err != nil {
+		logger.Err(err).Msg("setSessionAuth: unable to save session")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return err
+	}
+
+	return nil
 }
 
 type keycloakClaims struct {
@@ -3106,7 +3146,10 @@ func newArgon2DefaultSettings() argon2Settings {
 	return argon2Settings
 }
 
-type authDataKey struct{}
+type (
+	authDataKey    struct{}
+	sessionDataKey struct{}
+)
 
 const (
 	wwwAuthenticateHeader = "WWW-Authenticate"
@@ -3348,25 +3391,60 @@ const (
 	cookieName = "sunet-cdn-manager"
 )
 
-func authFromSession(logger *zerolog.Logger, cookieStore *sessions.CookieStore, r *http.Request) *cdntypes.AuthData {
-	session := getSession(r, cookieStore)
-
+func authFromSession(logger *zerolog.Logger, session *sessions.Session, consoleSessionCapAge time.Duration, r *http.Request, w http.ResponseWriter) (*cdntypes.AuthData, error) {
 	adInt, ok := session.Values["ad"]
 	if !ok {
-		return nil
+		return nil, nil
+	}
+
+	loginAt, ok := session.Values["login_at"].(int64)
+	var expireReason string
+	if !ok {
+		expireReason = "login_at missing or unexpected type in session"
+	} else if time.Since(time.Unix(loginAt, 0)) > consoleSessionCapAge {
+		expireReason = "session exceeded cap age"
+	}
+	if expireReason != "" {
+		// The user has been logged in for the maximum allowed duration, force re-auth
+		logger.Info().Str("reason", expireReason).Msg("expiring user session")
+		session.Options.MaxAge = -1
+		err := session.Save(r, w)
+		if err != nil {
+			logger.Err(err).Msg("authFromSession: unable to save expired session")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return nil, err
+		}
+		// Redirect to login (or just display the loginform if already at the login handler)
+		return nil, nil
+	}
+
+	// Slide inactivity window by re-saving (MaxAge is reset)
+	// This could lead to duplicate Set-Cookie headers if further handlers
+	// call Save() but as the last header is expected to win it should be
+	// fine.
+	err := session.Save(r, w)
+	if err != nil {
+		logger.Err(err).Msg("authFromSession: unable to slide session window")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil, err
 	}
 
 	logger.Info().Msg("using authentication data from session")
 	ad := adInt.(cdntypes.AuthData)
-	return &ad
+	return &ad, nil
 }
 
-func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Handler) http.Handler {
+func consoleAuthMiddleware(cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			logger := hlog.FromRequest(r)
 
-			adRef := authFromSession(logger, cookieStore, r)
+			session := getSession(r, cookieStore)
+			adRef, err := authFromSession(logger, session, consoleSessionCapAge, r, w)
+			if err != nil {
+				// We have already written a failure response to the client, just return
+				return
+			}
 			if adRef == nil {
 				logger.Info().Msg("consoleAuthMiddleware: redirecting to login page")
 				err := redirectToLoginPage(w, r)
@@ -3379,6 +3457,7 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore) func(next http.Han
 			}
 
 			ctx := context.WithValue(r.Context(), authDataKey{}, *adRef)
+			ctx = context.WithValue(ctx, sessionDataKey{}, session)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -7636,70 +7715,70 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 	router.Route(consolePath, func(r chi.Router) {
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Use(consoleAuthMiddleware(cookieStore))
-		r.Get("/", consoleDashboardHandler(dbc, cookieStore))
-		r.Get("/org/{org}", consoleOrgDashboardHandler(dbc, cookieStore))
-		r.Get("/org/{org}/domains", consoleDomainsHandler(dbc, cookieStore))
-		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbc, cookieStore))
-		r.Get("/org/{org}/create/domain", consoleCreateDomainHandler(dbc, cookieStore))
-		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbc, cookieStore))
-		r.Get("/org/{org}/services", consoleServicesHandler(dbc, cookieStore))
-		r.Get("/org/{org}/services/{service}", consoleServiceHandler(dbc, cookieStore))
-		r.Delete("/org/{org}/services/{service}", consoleServiceDeleteHandler(dbc, cookieStore))
-		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
-		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc, cookieStore))
-		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc, cookieStore))
-		r.Get("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
-		r.Post("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, cookieStore, vclValidator, confTemplates))
-		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
-		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc, cookieStore))
-		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, cookieStore, tokenURL, serverURL))
-		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, cookieStore, clientCredAEADs, kccm, tokenURL, serverURL))
-		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
-		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, cookieStore, encryptionClientCredAEAD, kccm))
+		r.Use(consoleAuthMiddleware(cookieStore, conf.Server.ConsoleSessionCapAge))
+		r.Get("/", consoleDashboardHandler(dbc))
+		r.Get("/org/{org}", consoleOrgDashboardHandler(dbc))
+		r.Get("/org/{org}/domains", consoleDomainsHandler(dbc))
+		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbc))
+		r.Get("/org/{org}/create/domain", consoleCreateDomainHandler(dbc))
+		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbc))
+		r.Get("/org/{org}/services", consoleServicesHandler(dbc))
+		r.Get("/org/{org}/services/{service}", consoleServiceHandler(dbc))
+		r.Delete("/org/{org}/services/{service}", consoleServiceDeleteHandler(dbc))
+		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
+		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
+		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc))
+		r.Get("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, vclValidator, confTemplates))
+		r.Post("/org/{org}/create/service/version/{service}", consoleCreateServiceVersionHandler(dbc, vclValidator, confTemplates))
+		r.Get("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc))
+		r.Post("/org/{org}/services/{service}/{version}/activate", consoleActivateServiceVersionHandler(dbc))
+		r.Get("/org/{org}/api-tokens", consoleAPITokensHandler(dbc, tokenURL, serverURL))
+		r.Delete("/org/{org}/api-tokens/{api-token}", consoleAPITokenDeleteHandler(dbc, clientCredAEADs, kccm, tokenURL, serverURL))
+		r.Get("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, encryptionClientCredAEAD, kccm))
+		r.Post("/org/{org}/create/api-token", consoleCreateAPITokenHandler(dbc, encryptionClientCredAEAD, kccm))
 		// htmx helpers
-		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc, cookieStore))
-		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc, cookieStore))
+		r.Get("/new-origin-fieldset", consoleNewOriginFieldsetHandler(dbc))
+		r.Get("/org-switcher", consoleOrgSwitcherHandler(dbc))
 		// Superuser console routes
-		r.Get("/superuser/orgs", consoleOrgsHandler(dbc, cookieStore))
-		r.Delete("/superuser/orgs/{org}", consoleOrgDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/org", consoleCreateOrgHandler(dbc, cookieStore))
-		r.Post("/superuser/create/org", consoleCreateOrgHandler(dbc, cookieStore))
-		r.Get("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
-		r.Post("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc, cookieStore))
-		r.Get("/superuser/ip-networks", consoleIPNetworksHandler(dbc, cookieStore))
-		r.Delete("/superuser/ip-networks/{networkID}", consoleIPNetworkDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc, cookieStore))
-		r.Post("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc, cookieStore))
-		r.Get("/superuser/cache-nodes", consoleCacheNodesHandler(dbc, cookieStore))
-		r.Delete("/superuser/cache-nodes/{cachenode}", consoleCacheNodeDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
-		r.Post("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc, cookieStore))
-		r.Get("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc, cookieStore))
-		r.Post("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc, cookieStore))
-		r.Put("/superuser/cache-nodes/{cachenode}/maintenance", consoleCacheNodeMaintenanceHandler(dbc, cookieStore))
-		r.Put("/superuser/cache-nodes/{cachenode}/node-group", consoleCacheNodeGroupHandler(dbc, cookieStore))
-		r.Get("/superuser/l4lb-nodes", consoleL4LBNodesHandler(dbc, cookieStore))
-		r.Delete("/superuser/l4lb-nodes/{l4lbnode}", consoleL4LBNodeDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc, cookieStore))
-		r.Post("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc, cookieStore))
-		r.Get("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc, cookieStore))
-		r.Post("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc, cookieStore))
-		r.Put("/superuser/l4lb-nodes/{l4lbnode}/maintenance", consoleL4LBNodeMaintenanceHandler(dbc, cookieStore))
-		r.Put("/superuser/l4lb-nodes/{l4lbnode}/node-group", consoleL4LBNodeGroupHandler(dbc, cookieStore))
-		r.Get("/superuser/node-groups", consoleNodeGroupsHandler(dbc, cookieStore))
-		r.Delete("/superuser/node-groups/{nodegroup}", consoleNodeGroupDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc, cookieStore))
-		r.Post("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc, cookieStore))
-		r.Get("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
-		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc, cookieStore))
-		r.Get("/superuser/users", consoleUsersHandler(dbc, cookieStore))
-		r.Delete("/superuser/users/{userID}", consoleUserDeleteHandler(dbc, cookieStore))
-		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
-		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, cookieStore, argon2Mutex))
-		r.Get("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc, cookieStore))
-		r.Post("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc, cookieStore))
-		r.Post("/superuser/users/{userID}/reset-password", consoleUserResetPasswordHandler(dbc, cookieStore, argon2Mutex, loginCache))
+		r.Get("/superuser/orgs", consoleOrgsHandler(dbc))
+		r.Delete("/superuser/orgs/{org}", consoleOrgDeleteHandler(dbc))
+		r.Get("/superuser/create/org", consoleCreateOrgHandler(dbc))
+		r.Post("/superuser/create/org", consoleCreateOrgHandler(dbc))
+		r.Get("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc))
+		r.Post("/superuser/orgs/{org}/edit", consoleEditOrgHandler(dbc))
+		r.Get("/superuser/ip-networks", consoleIPNetworksHandler(dbc))
+		r.Delete("/superuser/ip-networks/{networkID}", consoleIPNetworkDeleteHandler(dbc))
+		r.Get("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc))
+		r.Post("/superuser/create/ip-network", consoleCreateIPNetworkHandler(dbc))
+		r.Get("/superuser/cache-nodes", consoleCacheNodesHandler(dbc))
+		r.Delete("/superuser/cache-nodes/{cachenode}", consoleCacheNodeDeleteHandler(dbc))
+		r.Get("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc))
+		r.Post("/superuser/create/cache-node", consoleCreateCacheNodeHandler(dbc))
+		r.Get("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc))
+		r.Post("/superuser/cache-nodes/{cachenode}/edit", consoleEditCacheNodeHandler(dbc))
+		r.Put("/superuser/cache-nodes/{cachenode}/maintenance", consoleCacheNodeMaintenanceHandler(dbc))
+		r.Put("/superuser/cache-nodes/{cachenode}/node-group", consoleCacheNodeGroupHandler(dbc))
+		r.Get("/superuser/l4lb-nodes", consoleL4LBNodesHandler(dbc))
+		r.Delete("/superuser/l4lb-nodes/{l4lbnode}", consoleL4LBNodeDeleteHandler(dbc))
+		r.Get("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc))
+		r.Post("/superuser/create/l4lb-node", consoleCreateL4LBNodeHandler(dbc))
+		r.Get("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc))
+		r.Post("/superuser/l4lb-nodes/{l4lbnode}/edit", consoleEditL4LBNodeHandler(dbc))
+		r.Put("/superuser/l4lb-nodes/{l4lbnode}/maintenance", consoleL4LBNodeMaintenanceHandler(dbc))
+		r.Put("/superuser/l4lb-nodes/{l4lbnode}/node-group", consoleL4LBNodeGroupHandler(dbc))
+		r.Get("/superuser/node-groups", consoleNodeGroupsHandler(dbc))
+		r.Delete("/superuser/node-groups/{nodegroup}", consoleNodeGroupDeleteHandler(dbc))
+		r.Get("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc))
+		r.Post("/superuser/create/node-group", consoleCreateNodeGroupHandler(dbc))
+		r.Get("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc))
+		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc))
+		r.Get("/superuser/users", consoleUsersHandler(dbc))
+		r.Delete("/superuser/users/{userID}", consoleUserDeleteHandler(dbc))
+		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, argon2Mutex))
+		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, argon2Mutex))
+		r.Get("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc))
+		r.Post("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc))
+		r.Post("/superuser/users/{userID}/reset-password", consoleUserResetPasswordHandler(dbc, argon2Mutex, loginCache))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -7717,8 +7796,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 	router.Route("/auth", func(r chi.Router) {
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Get("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
-		r.Post("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore))
+		r.Get("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
+		r.Post("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
 		r.Post("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
@@ -10101,7 +10180,7 @@ func getSessionKeys(ctx context.Context, dbPool *pgxpool.Pool) ([]sessionKey, er
 	return sessionKeys, nil
 }
 
-func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool) (*sessions.CookieStore, error) {
+func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool, consoleSessionMaxAge time.Duration) (*sessions.CookieStore, error) {
 	sessionKeys, err := getSessionKeys(ctx, dbPool)
 	if err != nil {
 		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
@@ -10127,6 +10206,18 @@ func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
+
+	// This controls how long the cookie will be valid from the last time
+	// Save() was called on it.
+	maxAgeSeconds := int(consoleSessionMaxAge / time.Second)
+	// Make sure we don't accidentally set a 0 MaxAge which makes it long
+	// lived, preferring either 1 or -1
+	if consoleSessionMaxAge > 0 && maxAgeSeconds == 0 {
+		maxAgeSeconds = 1
+	} else if consoleSessionMaxAge < 0 && maxAgeSeconds == 0 {
+		maxAgeSeconds = -1
+	}
+	sessionStore.MaxAge(maxAgeSeconds)
 
 	return sessionStore, nil
 }
@@ -10415,10 +10506,10 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return fmt.Errorf("unable to check for roles in the database, is it initialized? (see init command): %w", err)
 	}
 	if !rolesExists {
-		return errors.New("we exepect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
+		return errors.New("we expect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	cookieStore, err := getSessionStore(runCtx, logger, dbPool)
+	cookieStore, err := getSessionStore(runCtx, logger, dbPool, conf.Server.ConsoleSessionMaxAge)
 	if err != nil {
 		return fmt.Errorf("getSessionStore failed: %w", err)
 	}
@@ -10661,23 +10752,24 @@ func isOrgMember(ad cdntypes.AuthData, orgParam string) bool {
 
 // consoleSuperuserCheck validates that the session user is a superuser.
 // Returns the AuthData and true if ok, or writes a 403 if not superuser or a 500 if auth data is missing, and returns false.
-func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request, cookieStore *sessions.CookieStore) (cdntypes.AuthData, *sessions.Session, bool) {
+func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request) (cdntypes.AuthData, *sessions.Session, bool) {
 	logger := hlog.FromRequest(r)
-	session := getSession(r, cookieStore)
+	ctx := r.Context()
 
-	adRef, ok := session.Values["ad"]
+	ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 	if !ok {
-		logger.Error().Msg(consoleMissingAuthData)
+		logger.Error().Msg("consoleSuperuserCheck: unable to read auth data from context")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return cdntypes.AuthData{}, nil, false
 	}
 
-	ad, ok := adRef.(cdntypes.AuthData)
+	session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
 	if !ok {
-		logger.Error().Msg("consoleSuperuserCheck: unexpected auth data type in session")
+		logger.Error().Msg("consoleSuperuserCheck: unable to read session data from context")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return cdntypes.AuthData{}, nil, false
 	}
+
 	if !ad.Superuser {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return cdntypes.AuthData{}, nil, false
@@ -10698,12 +10790,12 @@ func sessionSelectedOrg(session *sessions.Session) string {
 	return ""
 }
 
-func consoleOrgsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgsHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -10735,12 +10827,12 @@ func consoleOrgsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.Han
 	}
 }
 
-func consoleOrgDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleOrgDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -10794,13 +10886,13 @@ func consoleOrgDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 	}
 }
 
-func consoleCreateOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add organization"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -10910,12 +11002,12 @@ func consoleCreateOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 	}
 }
 
-func consoleEditOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11068,12 +11160,12 @@ func consoleEditOrgHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.
 	}
 }
 
-func consoleCacheNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCacheNodesHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11112,12 +11204,12 @@ func consoleCacheNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 	}
 }
 
-func consoleCacheNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCacheNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11173,13 +11265,13 @@ func consoleCacheNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleCreateCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add cache node"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11280,12 +11372,12 @@ func consoleCreateCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleEditCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11428,12 +11520,12 @@ func consoleEditCacheNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
-func consoleCacheNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCacheNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11501,12 +11593,12 @@ func consoleCacheNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.Cooki
 	}
 }
 
-func consoleCacheNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11584,12 +11676,12 @@ func consoleCacheNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 	}
 }
 
-func consoleL4LBNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleL4LBNodesHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11628,12 +11720,12 @@ func consoleL4LBNodesHandler(dbc *dbConn, cookieStore *sessions.CookieStore) htt
 	}
 }
 
-func consoleL4LBNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleL4LBNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11689,13 +11781,13 @@ func consoleL4LBNodeDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 	}
 }
 
-func consoleCreateL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add L4LB node"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11796,12 +11888,12 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore
 	}
 }
 
-func consoleEditL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -11944,12 +12036,12 @@ func consoleEditL4LBNodeHandler(dbc *dbConn, cookieStore *sessions.CookieStore) 
 	}
 }
 
-func consoleL4LBNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleL4LBNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12017,12 +12109,12 @@ func consoleL4LBNodeMaintenanceHandler(dbc *dbConn, cookieStore *sessions.Cookie
 	}
 }
 
-func consoleL4LBNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12100,12 +12192,12 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
-func consoleNodeGroupsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleNodeGroupsHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12137,12 +12229,12 @@ func consoleNodeGroupsHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 	}
 }
 
-func consoleNodeGroupDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleNodeGroupDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12198,13 +12290,13 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleCreateNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add node group"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12289,12 +12381,12 @@ func consoleCreateNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12410,12 +12502,12 @@ func consoleEditNodeGroupHandler(dbc *dbConn, cookieStore *sessions.CookieStore)
 	}
 }
 
-func consoleIPNetworksHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleIPNetworksHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12475,12 +12567,12 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request, param string) (pgtyp
 	return id, true
 }
 
-func consoleIPNetworkDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleIPNetworkDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12536,13 +12628,13 @@ func consoleIPNetworkDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleCreateIPNetworkHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add IP network"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12641,12 +12733,12 @@ func consoleCreateIPNetworkHandler(dbc *dbConn, cookieStore *sessions.CookieStor
 	}
 }
 
-func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleUsersHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12678,12 +12770,12 @@ func consoleUsersHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.Ha
 	}
 }
 
-func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleUserDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12735,13 +12827,13 @@ func consoleUserDeleteHandler(dbc *dbConn, cookieStore *sessions.CookieStore) ht
 	}
 }
 
-func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, argon2Mutex *sync.Mutex) http.HandlerFunc {
+func consoleCreateUserHandler(dbc *dbConn, argon2Mutex *sync.Mutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		title := "Add user"
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12878,12 +12970,12 @@ func consoleCreateUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore, ar
 	}
 }
 
-func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http.HandlerFunc {
+func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13050,12 +13142,12 @@ func consoleEditUserHandler(dbc *dbConn, cookieStore *sessions.CookieStore) http
 	}
 }
 
-func consoleUserResetPasswordHandler(dbc *dbConn, cookieStore *sessions.CookieStore, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) http.HandlerFunc {
+func consoleUserResetPasswordHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r, cookieStore)
+		ad, session, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
