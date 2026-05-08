@@ -2,6 +2,8 @@
 url = "https://manager.sunet-cdn.localhost:8444"
 addr = "127.0.0.1:8444"
 vcl_validation_url = "http://localhost:8888/validate-vcl"
+console_session_max_age = "1h"
+console_session_cap_age = "8h"
 
 [db]
 dbname = "cdn"

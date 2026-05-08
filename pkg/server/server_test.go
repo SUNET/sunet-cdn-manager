@@ -505,14 +505,16 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 }
 
 type testServerInput struct {
-	encryptedSessionKey bool
-	vclValidator        *vclValidatorClient
-	kcClientManager     *keycloakClientManager
-	jwkCache            *jwk.Cache
-	jwtIssuer           string
-	oiConf              openidConfig
-	encryptionPasswords []string
-	dbPool              *pgxpool.Pool
+	encryptedSessionKey  bool
+	vclValidator         *vclValidatorClient
+	kcClientManager      *keycloakClientManager
+	jwkCache             *jwk.Cache
+	jwtIssuer            string
+	oiConf               openidConfig
+	encryptionPasswords  []string
+	dbPool               *pgxpool.Pool
+	consoleSessionMaxAge time.Duration
+	consoleSessionCapAge time.Duration
 }
 
 func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
@@ -618,7 +620,11 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		dbPoolCreated = true
 	}
 
-	cookieStore, err := getSessionStore(ctx, logger, tsi.dbPool)
+	if tsi.consoleSessionMaxAge == 0 {
+		tsi.consoleSessionMaxAge = 1 * time.Hour
+	}
+
+	cookieStore, err := getSessionStore(ctx, logger, tsi.dbPool, tsi.consoleSessionMaxAge)
 	if err != nil {
 		if dbPoolCreated {
 			tsi.dbPool.Close()
@@ -732,7 +738,14 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to parse testserver URL: %v", err)
 	}
 
-	router := newChiRouter(config.Config{}, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
+	if tsi.consoleSessionCapAge == 0 {
+		tsi.consoleSessionCapAge = 8 * time.Hour
+	}
+
+	conf := config.Config{}
+	conf.Server.ConsoleSessionCapAge = tsi.consoleSessionCapAge
+
+	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
 
 	ts.Config.Handler = router
 
@@ -8129,16 +8142,9 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 	})
 
-	// Verify the redirect only fires once. consoleLogin follows the
-	// full redirect chain (login -> /console -> /console/org/org1)
-	// which sets selectedOrgKey. A subsequent GET /console should
-	// render the superuser dashboard directly (200), not redirect.
+	// Verify the redirect only fires once.
 	t.Run("superuser with org subsequent visit renders dashboard", func(t *testing.T) {
-		client := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
-
-		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
+		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
 
 		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
 		if err != nil {
@@ -8146,7 +8152,33 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 
+		// This request follows the full redirect chain (login -> /console ->
+		// /console/org/org1) which sets selectedOrgKey. A subsequent GET
+		// /console should render the superuser dashboard directly (200), not
+		// redirect.
 		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatal("unexpected status code when filling in selectedOrgKey")
+		}
+
+		// Now do the subsequent lookup that should not follow redirects
+		// and verify we directly get a 200
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err = http.NewRequest("GET", ts.URL+"/console", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err = client.Do(req) // #nosec G704
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8161,7 +8193,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 	// membership (admin user) gets the generic dashboard (200) with
 	// no redirect, since ad.OrgName is nil.
 	t.Run("superuser without org sees generic dashboard", func(t *testing.T) {
-		client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -8189,7 +8221,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 	// org switcher. After that, GET /console should render the
 	// dashboard (200) and not re-redirect to the org.
 	t.Run("superuser with org can unselect org and stay on generic dashboard", func(t *testing.T) {
-		client := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
+		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
 
 		// Use the org switcher to explicitly unselect
 		req, err := http.NewRequest("GET", ts.URL+"/console/org-switcher?org="+url.QueryEscape(cdntypes.OrgNotSelected), nil)
@@ -8266,7 +8298,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, test.username, test.password)
+			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
 			req, err := http.NewRequest("GET", ts.URL+"/console/org/"+test.orgNameOrID+"/services", nil)
 			if err != nil {
@@ -8382,7 +8414,7 @@ func TestConsoleFormLimit(t *testing.T) {
 			defer loginResp.Body.Close()
 
 			if loginResp.StatusCode != test.statusCode {
-				t.Fatalf("unexpected console login status code: %d, expected %d", loginResp.StatusCode, test.statusCode)
+				t.Fatalf("TestConsoleFormLimit: unexpected console login status code: %d, expected %d", loginResp.StatusCode, test.statusCode)
 			}
 		})
 	}
@@ -8823,7 +8855,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, test.username, test.password)
+			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
 			var reqBody io.Reader
 			if test.formBody != "" {
@@ -8953,7 +8985,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, test.username, test.password)
+			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
 			req, err := http.NewRequest(test.method, ts.URL+test.path, nil)
 			if err != nil {
@@ -9066,7 +9098,7 @@ func TestGetRoles(t *testing.T) {
 }
 
 // consoleLogin is a helper that performs console login and returns an authenticated client.
-func consoleLogin(t *testing.T, tsURL string, username, password string) *http.Client {
+func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.Client, *http.Cookie) {
 	t.Helper()
 
 	jar, err := cookiejar.New(nil)
@@ -9074,7 +9106,15 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) *http.C
 		t.Fatal(err)
 	}
 
-	client := &http.Client{Jar: jar}
+	client := &http.Client{
+		Jar: jar,
+		// Do not automatically follow redirects so when we inspect the
+		// response cookies below we are sure to inspect the initial
+		// response.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	form := url.Values{
 		"username": {username},
@@ -9100,8 +9140,15 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) *http.C
 	}
 	defer loginResp.Body.Close()
 
-	if loginResp.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected console login status code: %d", loginResp.StatusCode)
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("consoleLogin: unexpected console login status code: %d", loginResp.StatusCode)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range loginResp.Cookies() {
+		if c.Name == cookieName {
+			sessionCookie = c
+		}
 	}
 
 	cookieFound := false
@@ -9115,7 +9162,11 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) *http.C
 		t.Fatal("login failed: session cookie is missing")
 	}
 
-	return client
+	// Make the client follow redirects again so downstream users work as normal clients
+	// client.CheckRedirect = nil
+	client.CheckRedirect = nil
+
+	return client, sessionCookie
 }
 
 func TestConsoleUsersList(t *testing.T) {
@@ -9153,7 +9204,7 @@ func TestConsoleUsersList(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, test.username, test.password)
+			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
 			req, err := http.NewRequest("GET", ts.URL+"/console/superuser/users", nil)
 			if err != nil {
@@ -9260,7 +9311,7 @@ func TestConsoleCreateUser(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+			client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -9378,7 +9429,7 @@ func TestConsoleEditUser(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+			client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -9489,7 +9540,7 @@ func TestConsoleDeleteUser(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+			client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -9608,7 +9659,7 @@ func TestConsoleResetPassword(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+			client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -9993,7 +10044,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 	}
 	defer ts.Close()
 
-	client := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 	t.Run("list page renders", func(t *testing.T) {
 		req, err := http.NewRequest("GET", ts.URL+"/console/superuser/ip-networks", nil)
@@ -10254,4 +10305,126 @@ func TestConsoleIPNetworks(t *testing.T) {
 			t.Fatal("expected flash message confirming deletion")
 		}
 	})
+}
+
+func TestConsoleCookieExpiration(t *testing.T) {
+	tests := []struct {
+		description          string
+		username             string
+		password             string
+		expectedStatus       int
+		consoleSessionMaxAge time.Duration
+		consoleSessionCapAge time.Duration
+		sleepDuration        time.Duration
+		expectedLocation     string
+	}{
+		{
+			description:          "re-auth on expired activity window",
+			username:             "admin",
+			password:             validAdminPassword,
+			expectedStatus:       http.StatusFound,
+			consoleSessionMaxAge: 1 * time.Second,
+			consoleSessionCapAge: 1 * time.Hour,
+			sleepDuration:        2 * time.Second,
+			expectedLocation:     "/auth/login?return_to=%2Fconsole",
+		},
+		{
+			description:          "re-auth on expired cap window",
+			username:             "admin",
+			password:             validAdminPassword,
+			expectedStatus:       http.StatusFound,
+			consoleSessionMaxAge: 1 * time.Hour,
+			consoleSessionCapAge: 1 * time.Second,
+			sleepDuration:        2 * time.Second,
+			expectedLocation:     "/auth/login?return_to=%2Fconsole",
+		},
+		{
+			description:          "valid cookie got MaxAge renewed",
+			username:             "admin",
+			password:             validAdminPassword,
+			expectedStatus:       http.StatusOK,
+			consoleSessionMaxAge: 1 * time.Hour,
+			consoleSessionCapAge: 8 * time.Hour,
+			sleepDuration:        2 * time.Second,
+			expectedLocation:     "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			ts, dbPool, err := prepareServer(t, testServerInput{consoleSessionMaxAge: test.consoleSessionMaxAge, consoleSessionCapAge: test.consoleSessionCapAge})
+			if dbPool != nil {
+				defer dbPool.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ts.Close()
+
+			// Initial login
+			_, sessionCookie := consoleLogin(t, ts.URL, test.username, test.password)
+
+			time.Sleep(test.sleepDuration)
+
+			// New client that does not use a cookie jar that will
+			// leave out expired cookies, we add the cookie
+			// manually to test server behavior
+			client := &http.Client{
+				// Do not automatically follow redirects so we
+				// can test the different cookie state outcomes
+				// based on initial server response.
+				CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+
+			req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(&http.Cookie{
+				Name:  cookieName,
+				Value: sessionCookie.Value,
+			})
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if test.expectedLocation != "" {
+				if resp.Header.Get("Location") != test.expectedLocation {
+					t.Fatalf("unexpected Location header: have: '%s', want: '%s'", resp.Header.Get("Location"), test.expectedLocation)
+				}
+			}
+
+			if resp.StatusCode != test.expectedStatus {
+				t.Fatalf("unexpected status code: %d", resp.StatusCode)
+			}
+
+			// If the response was OK we want to verify the expires
+			// duration has been increased by sliding
+			if resp.StatusCode == http.StatusOK {
+				if sessionCookie.Expires.IsZero() {
+					t.Fatal("initial session cookie expires field is zero")
+				}
+
+				var sessionCookieNext *http.Cookie
+				for _, c := range resp.Cookies() {
+					if c.Name == cookieName {
+						sessionCookieNext = c
+					}
+				}
+
+				if sessionCookieNext.Expires.IsZero() {
+					t.Fatal("next session cookie expires field is zero")
+				}
+
+				if !sessionCookieNext.Expires.After(sessionCookie.Expires) {
+					t.Fatal("next session cookie expires field is not after initial session cookie")
+				}
+			}
+		})
+	}
 }
