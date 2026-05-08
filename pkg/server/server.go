@@ -3692,7 +3692,8 @@ func selectCacheNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([
 			GROUP BY node_id
 		) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
 		ORDER BY cache_nodes.name
-		`)
+		`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for all cache nodes: %w", err)
 	}
@@ -3853,7 +3854,8 @@ func selectL4LBNodes(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]
 			FROM l4lb_node_addresses
 			GROUP BY node_id
 		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
-		ORDER BY name`)
+		ORDER BY name`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for all l4lb nodes: %w", err)
 	}
@@ -4210,7 +4212,8 @@ func selectUserForEdit(ctx context.Context, dbc *dbConn, userID pgtype.UUID, ad 
 		LEFT JOIN orgs o ON u.org_id = o.id
 		WHERE u.id = $1`, userID).Scan(
 		&userData.ID, &userData.DisplayName, &userData.RoleName,
-		&userData.OrgName, &userData.AuthProvider)
+		&userData.OrgName, &userData.AuthProvider,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return cdntypes.UserEditData{}, cdnerrors.ErrNotFound
@@ -5176,7 +5179,8 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 		err = tx.QueryRow(dbCtx,
 			"UPDATE orgs SET name = $1, service_quota = $2, domain_quota = $3, client_token_quota = $4 WHERE id = $5 RETURNING id, name, service_quota, domain_quota, client_token_quota",
 			name, serviceQuota, domainQuota, clientTokenQuota, orgIdent.id).Scan(
-			&updatedOrg.ID, &updatedOrg.Name, &updatedOrg.ServiceQuota, &updatedOrg.DomainQuota, &updatedOrg.ClientTokenQuota)
+			&updatedOrg.ID, &updatedOrg.Name, &updatedOrg.ServiceQuota, &updatedOrg.DomainQuota, &updatedOrg.ClientTokenQuota,
+		)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -6435,7 +6439,8 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				originGroups,
 				origins,
 				domains,
-				vclTemplate)
+				vclTemplate,
+			)
 			if err != nil {
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
@@ -13237,7 +13242,8 @@ func selectCacheNodeListItems(ctx context.Context, dbc *dbConn, ad cdntypes.Auth
 		) AS agg_addresses ON agg_addresses.node_id = cache_nodes.id
 		LEFT JOIN node_groups ON node_groups.id = cache_nodes.node_group_id
 		ORDER BY cache_nodes.name
-		`)
+		`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for cache node list items: %w", err)
 	}
@@ -13273,7 +13279,8 @@ func selectL4LBNodeListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 		) AS agg_addresses ON agg_addresses.node_id = l4lb_nodes.id
 		LEFT JOIN node_groups ON node_groups.id = l4lb_nodes.node_group_id
 		ORDER BY l4lb_nodes.name
-		`)
+		`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for l4lb node list items: %w", err)
 	}

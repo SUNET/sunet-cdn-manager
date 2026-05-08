@@ -15,7 +15,8 @@ import (
 
 func CreatePostgreSQLContainer(ctx context.Context) (*postgres.PostgresContainer, error) {
 	// https://golang.testcontainers.org/modules/postgres/
-	pgContainer, err := postgres.Run(ctx,
+	pgContainer, err := postgres.Run(
+		ctx,
 		"postgres:18.3-trixie",
 		postgres.WithDatabase("postgres"),
 		postgres.WithUsername("postgres"),
