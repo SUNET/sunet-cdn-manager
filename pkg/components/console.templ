@@ -856,7 +856,7 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 	}
 }
 
-templ LoginPage(returnTo string, loginFailed bool) {
+templ LoginPage(loginFailed bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -879,9 +879,6 @@ templ LoginPage(returnTo string, loginFailed bool) {
 						<div class="login-error" role="alert">Login failed!</div>
 					}
 					<form method="post" action={ templ.URL("/auth/login") }>
-						if returnTo != "" {
-							<input type="hidden" name="return_to" value={ returnTo }/>
-						}
 						<label for="username">
 							Username
 							<input type="text" id="username" name="username" required/>
