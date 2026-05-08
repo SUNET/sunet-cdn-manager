@@ -10383,8 +10383,11 @@ func TestConsoleCookieExpiration(t *testing.T) {
 				t.Fatal(err)
 			}
 			req.AddCookie(&http.Cookie{
-				Name:  cookieName,
-				Value: sessionCookie.Value,
+				Name:     cookieName,
+				Value:    sessionCookie.Value,
+				Secure:   true,
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
 			})
 
 			resp, err := client.Do(req) // #nosec G704
