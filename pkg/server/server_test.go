@@ -10521,3 +10521,58 @@ func TestValidateRelativeRedirect(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeURL(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantRedacted bool
+	}{
+		{
+			name:         "callback url that should have params redacted",
+			input:        "/auth/oidc/keycloak/callback?code=some-opaque-code&iss=https%3A%2F%2Fkeycloak.sunet-cdn.localhost%3A8443%2Frealms%2Fsunet-cdn-manager&session_state=some-opaque-session-state&state=some-opaque-state",
+			wantRedacted: true,
+		},
+		{
+			name:         "unrelated url that should not have params redacted",
+			input:        "/unrelated/callback?code=some-opaque-code&iss=https%3A%2F%2Fkeycloak.sunet-cdn.localhost%3A8443%2Frealms%2Fsunet-cdn-manager&session_state=some-opaque-session-state&state=some-opaque-state",
+			wantRedacted: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.input)
+			if err != nil {
+				t.Fatalf("unable to parse input url: %v", err)
+			}
+
+			output := sanitizeURL(u)
+			if tc.wantRedacted {
+				for k, vals := range output.Query() {
+					if _, ok := sensitiveQueryParams[k]; ok {
+						for _, v := range vals {
+							if v != "REDACTED" {
+								t.Fatalf("found un-redacted query param in '%s': %s", k, v)
+							}
+						}
+					} else {
+						for _, v := range vals {
+							if v == "REDACTED" {
+								t.Fatalf("found redacted query param in '%s' that is not part of sensitiveQueryParams: %s", k, v)
+							}
+						}
+					}
+				}
+			} else {
+				for k, vals := range output.Query() {
+					for _, v := range vals {
+						if v == "REDACTED" {
+							t.Fatalf("found redacted query param in unrelated URL '%s': %s", k, v)
+						}
+					}
+				}
+			}
+		})
+	}
+}
