@@ -7703,6 +7703,62 @@ func deleteNetwork(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, input
 	return network, nil
 }
 
+var sensitiveQueryParams = map[string]struct{}{
+	"code":          {},
+	"state":         {},
+	"session_state": {},
+}
+
+// Remove some OIDC-related query params from logging, results in e.g.:
+// "url":"/auth/oidc/keycloak/callback?code=REDACTED&iss=https%3A%2F%2Fkeycloak.sunet-cdn.localhost%3A8443%2Frealms%2Fsunet-cdn-manager&session_state=REDACTED&state=REDACTED"
+func sanitizeURL(u *url.URL) *url.URL {
+	if u.RawQuery == "" {
+		return u
+	}
+
+	if !strings.HasPrefix(u.Path, "/auth/oidc/") {
+		return u
+	}
+
+	q := u.Query()
+	redacted := false
+	for k := range q {
+		if _, ok := sensitiveQueryParams[k]; ok {
+			q.Set(k, "REDACTED")
+			redacted = true
+		}
+	}
+	if !redacted {
+		return u
+	}
+
+	clone := *u
+	clone.RawQuery = q.Encode()
+	return &clone
+}
+
+// Local copy of https://pkg.go.dev/github.com/rs/zerolog/hlog#RefererHandler
+// for being able to sanitize the logged URL.
+func refererHandler(fieldKey string) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if ref := r.Header.Get("Referer"); ref != "" {
+				u, err := url.Parse(ref)
+				if err != nil {
+					ref = "UNABLE-TO-SANITIZE-URL"
+				} else {
+					ref = sanitizeURL(u).String()
+				}
+				log := zerolog.Ctx(r.Context())
+				log.UpdateContext(func(c zerolog.Context) zerolog.Context {
+					return c.Str(fieldKey, ref)
+				})
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
@@ -7711,7 +7767,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
 			hlog.FromRequest(r).Info().
 				Str("method", r.Method).
-				Stringer("url", r.URL).
+				Stringer("url", sanitizeURL(r.URL)).
 				Int("status", status).
 				Int("size", size).
 				Dur("duration", duration).
@@ -7719,7 +7775,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		}),
 		hlog.RemoteAddrHandler("ip"),
 		hlog.UserAgentHandler("user_agent"),
-		hlog.RefererHandler("referer"),
+		refererHandler("referer"),
 		hlog.RequestIDHandler("req_id", "Request-Id"),
 	)
 	router.Use(hlogChain...)
