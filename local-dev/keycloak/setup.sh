@@ -5,7 +5,15 @@ set -eu
 # Make it so we can run the script from anywhere
 cd "$(dirname "$0")"
 
+domain=""
+
+# shellcheck source=/dev/null
 . settings.sh
+
+if [[ $domain = "" ]]; then
+    echo "missing domain in settings.sh"
+    exit 1
+fi
 
 gen_dir="generated"
 
@@ -154,6 +162,23 @@ admin_client_secret=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
 	"$base_url/admin/realms/$realm/clients/$admin_client_uuid/client-secret" | jq -r .value)
 
+
+echo "Create role that we can assign to the admin client that grants it permissions to do client creation"
+curl -ksi -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-admin-role.json \
+	"$base_url/admin/realms/$realm/roles"
+
+admin_role_uuid=$(curl -ks -X GET \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @keycloak-admin-role.json \
+        "$base_url/admin/realms/$realm/roles/sunet-cdn-manager-admin-role" | jq -r .id)
+
+echo
+echo "admin role id: $admin_role_uuid"
+
 echo "Finding related service account UUID for admin client"
 admin_service_account_id=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
@@ -169,62 +194,57 @@ create_client_role_uuid=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
 	"$base_url/admin/realms/$realm/clients/$realm_management_client_uuid/roles/create-client" | jq -r .id)
 
+# Apply create-client role as a composite (associated role) to
+# sunet-cdn-manager-admin-role role. For some reason the roles/
+# endpoint allows us to use the name of the role rather than the UUID
+# id (which instead uses role-by-id/)
+echo "Apply create-client role as composite (associated role) to sunet-cdn-manager-admin-role"
+curl -ksi -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+        -d @- \
+	"$base_url/admin/realms/$realm/roles/sunet-cdn-manager-admin-role/composites" <<EOF
+[
+  {
+    "id":"$create_client_role_uuid",
+    "name":"sunet-cdn-manager-admin-client",
+    "description":"\${role_create-client}"
+  }
+]
+EOF
+
 curl -iks -X POST \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
 	-d @- \
-	"$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/clients/$realm_management_client_uuid" <<EOF
+	"$base_url/admin/realms/$realm/users/$admin_service_account_id/role-mappings/realm" <<EOF
 [
     {
-        "id":"$create_client_role_uuid",
-        "name":"create-client",
-        "description":"\${role_create-client}"
+        "id":"$admin_role_uuid",
+        "name":"sunet-cdn-manager-admin-role",
+        "description":"Role used for managing API client credentials"
     }
 ]
 EOF
 
-echo "Creating client-scope for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
-client_scope_uuid=$(curl -iks -X POST \
+# Find UUID for client registration policy that allows assigning our
+# custom client-scope that includes the audience mapper for new
+# clients at registration
+kc_component_scope_policy=$(curl -ks -X GET \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
-	-d @- \
-	"$base_url/admin/realms/$realm/client-scopes" <<EOF | awk -F/ '/^(L|l)ocation:/{print $NF}' | sed 's/\r$//'
+        "$base_url/admin/realms/$realm/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" | jq '.[] | select(.providerType == "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" and .providerId == "allowed-client-templates" and .subType == "authenticated")')
 
-{
-  "name": "sunet-cdn-manager-aud",
-  "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
-  "type": "none",
-  "protocol": "openid-connect",
-  "attributes": {
-    "display.on.consent.screen": "true",
-    "consent.screen.text": "",
-    "include.in.token.scope": "false",
-    "gui.order": ""
-  }
-}
-EOF
-)
+updated_kc_component_scope_policy=$(echo "$kc_component_scope_policy" | jq '.config."allowed-client-scopes" += ["sunet-cdn-manager-aud"]')
 
-echo "Creating client-scope mapper for adding audience (aud) entry to client credentials used for accessing the CDN Manager API"
-curl -iks -X POST \
+kc_component_scope_policy_uuid=$(echo "$updated_kc_component_scope_policy" | jq -r .id)
+
+echo "Updating client registration policy"
+curl -ksi -X PUT \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
-	-d @- \
-	"$base_url/admin/realms/$realm/client-scopes/$client_scope_uuid/protocol-mappers/models" <<EOF
-{
-  "protocol": "openid-connect",
-  "protocolMapper": "oidc-audience-mapper",
-  "name": "sunet-cdn-manager-aud",
-  "config": {
-    "included.client.audience": "",
-    "included.custom.audience": "sunet-cdn-manager",
-    "id.token.claim": "false",
-    "access.token.claim": "true",
-    "lightweight.claim": "false",
-    "introspection.token.claim": "true"
-  }
-}
-EOF
+        -d @<(echo "$updated_kc_component_scope_policy") \
+        "$base_url/admin/realms/$realm/components/$kc_component_scope_policy_uuid"
 
 echo
 oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)

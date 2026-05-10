@@ -1,0 +1,5 @@
+{
+  "name":"sunet-cdn-manager-admin-role",
+  "description":"Role used for managing API client credentials",
+  "attributes": {}
+}
