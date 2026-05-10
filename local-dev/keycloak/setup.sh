@@ -11,8 +11,8 @@ domain=""
 . settings.sh
 
 if [[ $domain = "" ]]; then
-    echo "missing domain in settings.sh"
-    exit 1
+	echo "missing domain in settings.sh"
+	exit 1
 fi
 
 gen_dir="generated"
@@ -162,7 +162,6 @@ admin_client_secret=$(curl -ks \
 	-H "Authorization: bearer $access_token" \
 	"$base_url/admin/realms/$realm/clients/$admin_client_uuid/client-secret" | jq -r .value)
 
-
 echo "Create role that we can assign to the admin client that grants it permissions to do client creation"
 curl -ksi -X POST \
 	-H "Authorization: bearer $access_token" \
@@ -174,7 +173,7 @@ admin_role_uuid=$(curl -ks -X GET \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
 	-d @keycloak-admin-role.json \
-        "$base_url/admin/realms/$realm/roles/sunet-cdn-manager-admin-role" | jq -r .id)
+	"$base_url/admin/realms/$realm/roles/sunet-cdn-manager-admin-role" | jq -r .id)
 
 echo
 echo "admin role id: $admin_role_uuid"
@@ -202,7 +201,7 @@ echo "Apply create-client role as composite (associated role) to sunet-cdn-manag
 curl -ksi -X POST \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
-        -d @- \
+	-d @- \
 	"$base_url/admin/realms/$realm/roles/sunet-cdn-manager-admin-role/composites" <<EOF
 [
   {
@@ -233,7 +232,7 @@ EOF
 kc_component_scope_policy=$(curl -ks -X GET \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
-        "$base_url/admin/realms/$realm/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" | jq '.[] | select(.providerType == "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" and .providerId == "allowed-client-templates" and .subType == "authenticated")')
+	"$base_url/admin/realms/$realm/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" | jq '.[] | select(.providerType == "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" and .providerId == "allowed-client-templates" and .subType == "authenticated")')
 
 updated_kc_component_scope_policy=$(echo "$kc_component_scope_policy" | jq '.config."allowed-client-scopes" += ["sunet-cdn-manager-aud"]')
 
@@ -243,8 +242,8 @@ echo "Updating client registration policy"
 curl -ksi -X PUT \
 	-H "Authorization: bearer $access_token" \
 	-H "Content-Type: application/json" \
-        -d @<(echo "$updated_kc_component_scope_policy") \
-        "$base_url/admin/realms/$realm/components/$kc_component_scope_policy_uuid"
+	-d @<(echo "$updated_kc_component_scope_policy") \
+	"$base_url/admin/realms/$realm/components/$kc_component_scope_policy_uuid"
 
 echo
 oidc_server_client_id=$(jq -r .clientId keycloak-server-client.json)
