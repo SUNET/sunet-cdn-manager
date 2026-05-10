@@ -10530,7 +10530,7 @@ func TestSanitizeURL(t *testing.T) {
 	}{
 		{
 			name:         "callback url that should have params redacted",
-			input:        "/auth/oidc/keycloak/callback?code=some-opaque-code&iss=https%3A%2F%2Fkeycloak.sunet-cdn.localhost%3A8443%2Frealms%2Fsunet-cdn-manager&session_state=some-opaque-session-state&state=some-opaque-state",
+			input:        "/auth" + keycloakCallbackPath + "?code=some-opaque-code&iss=https%3A%2F%2Fkeycloak.sunet-cdn.localhost%3A8443%2Frealms%2Fsunet-cdn-manager&session_state=some-opaque-session-state&state=some-opaque-state",
 			wantRedacted: true,
 		},
 		{

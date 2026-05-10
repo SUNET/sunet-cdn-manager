@@ -181,6 +181,9 @@ const (
 	// Checking for exact error string is not great but securecookie does
 	// not seem to expose better sentinels
 	cookieExpirationError = "securecookie: expired timestamp"
+
+	keycloakPath         = "/oidc/keycloak"
+	keycloakCallbackPath = keycloakPath + "/callback"
 )
 
 var (
@@ -7716,7 +7719,9 @@ func sanitizeURL(u *url.URL) *url.URL {
 		return u
 	}
 
-	if !strings.HasPrefix(u.Path, "/auth/oidc/") {
+	callbackPath := "/auth" + keycloakCallbackPath
+
+	if u.Path != callbackPath && !strings.HasPrefix(u.Path, callbackPath+"/") {
 		return u
 	}
 
@@ -7894,8 +7899,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 				Scopes: []string{oidc.ScopeOpenID},
 			}
 
-			r.Get("/oidc/keycloak", keycloakOIDCHandler(cookieStore, oauth2Config))
-			r.Get("/oidc/keycloak/callback", oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbc))
+			r.Get(keycloakPath, keycloakOIDCHandler(cookieStore, oauth2Config))
+			r.Get(keycloakCallbackPath, oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbc))
 		}
 	})
 
