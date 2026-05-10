@@ -17,7 +17,7 @@ query_timeout = "15s"
 
 [oidc]
 issuer = "https://keycloak.sunet-cdn.localhost:8443/realms/sunet-cdn-manager"
-client_id = "server-client-id"
+client_id = "sunet-cdn-manager-server"
 client_secret = "server-client-secret"
 redirect_url = "https://manager.sunet-cdn.localhost:8444/auth/oidc/keycloak/callback"
 
