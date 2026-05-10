@@ -8075,52 +8075,17 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 
 	// Verify that a superuser with org membership hitting /console
 	// with no selectedOrgKey in their session gets 303-redirected to
-	// their org dashboard. Login is done manually (not via consoleLogin)
-	// because we need redirects disabled before the login redirect
-	// chain reaches /console.
+	// their org dashboard.
 	t.Run("superuser with org redirects to org dashboard", func(t *testing.T) {
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
 
-		client := &http.Client{
-			Jar: jar,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-
-		form := url.Values{
-			"username": {"admin-with-org"},
-			"password": {validAdminPassword},
-		}
-
-		req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-
-		// Login POST returns 302 -> /console
-		loginResp, err := client.Do(req) // #nosec G704
-		if err != nil {
-			t.Fatal(err)
-		}
-		loginResp.Body.Close()
-
-		if loginResp.StatusCode != http.StatusFound {
-			t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
-		}
-
-		loginLocation := loginResp.Header.Get("Location")
-		if loginLocation != "/console" {
-			t.Fatalf("expected login redirect to /console, got %s", loginLocation)
+		// Disable following redirects so we can inspect each step
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
 		}
 
 		// Follow the redirect to /console manually — this should trigger 303 to org dashboard
-		req, err = http.NewRequest("GET", ts.URL+loginLocation, nil)
+		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8139,6 +8104,79 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		consoleLocation := consoleResp.Header.Get("Location")
 		if consoleLocation != "/console/org/org1" {
 			t.Fatalf("expected redirect to /console/org/org1, got %s", consoleLocation)
+		}
+	})
+
+	// Verify that a superuser with org membership GETing a specific URL
+	// while unauthenticated is redirected there after login instead of
+	// the default location. Login is done manually (not via consoleLogin)
+	// so we can perform the initial request with our own client and
+	// cookiejar.
+	t.Run("superuser with org gets redirected back to requested page after auth", func(t *testing.T) {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		client := &http.Client{
+			Jar: jar,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		form := url.Values{
+			"username": {"admin-with-org"},
+			"password": {validAdminPassword},
+		}
+
+		origGetPath := "/console/org/sunet/domains"
+
+		// Unauthenticated request to init session cookie
+		req, err := http.NewRequest("GET", ts.URL+origGetPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Initial GET returns 302 -> /auth/login
+		getResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		getResp.Body.Close()
+
+		if getResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", getResp.StatusCode)
+		}
+
+		loginPath := "/auth/login"
+
+		getLocation := getResp.Header.Get("Location")
+		if getLocation != loginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", loginPath, getLocation)
+		}
+
+		req, err = http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Login POST returns 302 -> origGetPath
+		loginResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		loginResp.Body.Close()
+
+		if loginResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
+		}
+
+		loginLocation := loginResp.Header.Get("Location")
+		if loginLocation != origGetPath {
+			t.Fatalf("expected login redirect to '%s', got %s", origGetPath, loginLocation)
 		}
 	})
 
@@ -9142,6 +9180,11 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.
 
 	if loginResp.StatusCode != http.StatusFound {
 		t.Fatalf("consoleLogin: unexpected console login status code: %d", loginResp.StatusCode)
+	}
+
+	loginLocation := loginResp.Header.Get("Location")
+	if loginLocation != "/console" {
+		t.Fatalf("expected login redirect to /console, got %s", loginLocation)
 	}
 
 	var sessionCookie *http.Cookie
@@ -10326,7 +10369,7 @@ func TestConsoleCookieExpiration(t *testing.T) {
 			consoleSessionMaxAge: 1 * time.Second,
 			consoleSessionCapAge: 1 * time.Hour,
 			sleepDuration:        2 * time.Second,
-			expectedLocation:     "/auth/login?return_to=%2Fconsole",
+			expectedLocation:     "/auth/login",
 		},
 		{
 			description:          "re-auth on expired cap window",
@@ -10336,7 +10379,7 @@ func TestConsoleCookieExpiration(t *testing.T) {
 			consoleSessionMaxAge: 1 * time.Hour,
 			consoleSessionCapAge: 1 * time.Second,
 			sleepDuration:        2 * time.Second,
-			expectedLocation:     "/auth/login?return_to=%2Fconsole",
+			expectedLocation:     "/auth/login",
 		},
 		{
 			description:          "valid cookie got MaxAge renewed",
@@ -10427,6 +10470,53 @@ func TestConsoleCookieExpiration(t *testing.T) {
 				if !sessionCookieNext.Expires.After(sessionCookie.Expires) {
 					t.Fatal("next session cookie expires field is not after initial session cookie")
 				}
+			}
+		})
+	}
+}
+
+func TestValidateRelativeRedirect(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantAccept  bool
+		wantErrText string // substring of the error message; ignored if wantAccept is true
+	}{
+		{name: "console root", input: "/console", wantAccept: true},
+		{name: "nested console path", input: "/console/org/foo/services?x=y#z", wantAccept: true},
+		{name: "auth login", input: "/auth/login", wantAccept: true},
+		{name: "bare root", input: "/", wantAccept: true},
+
+		{name: "empty", input: "", wantErrText: "empty"},
+		{name: "no leading slash", input: "console", wantErrText: "must start with"},
+		{name: "protocol-relative", input: "//evil.example/foo", wantErrText: "host not allowed"},
+		{name: "absolute https", input: "https://evil.example/foo", wantErrText: "must start with"},
+		{name: "javascript scheme", input: "javascript:alert(1)", wantErrText: "must start with"},
+		{name: "scheme-only opaque", input: "http:foo", wantErrText: "must start with"},
+		{name: "encoded slash decodes to leading double slash", input: "/%2fevil.example/foo", wantErrText: "decoded path starts"},
+
+		// Backslash in the decoded path: browsers may normalize \ to /,
+		// turning "/\evil/foo" into "//evil/foo" (cross-origin). Check
+		// catches both raw and percent-encoded forms via u.Path inspection.
+		{name: "raw backslash in path", input: "/\\evil.example/foo", wantErrText: "decoded path contains backslash"},
+		{name: "encoded backslash lowercase", input: "/%5cevil.example/foo", wantErrText: "decoded path contains backslash"},
+		{name: "encoded backslash uppercase", input: "/%5Cevil.example/foo", wantErrText: "decoded path contains backslash"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRelativeRedirect(tc.input)
+			if tc.wantAccept {
+				if err != nil {
+					t.Fatalf("validateRelativeRedirect(%q) err = %v, want nil", tc.input, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateRelativeRedirect(%q) err = nil, want error containing %q", tc.input, tc.wantErrText)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrText) {
+				t.Fatalf("validateRelativeRedirect(%q) err = %q, want substring %q", tc.input, err.Error(), tc.wantErrText)
 			}
 		})
 	}

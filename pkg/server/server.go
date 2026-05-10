@@ -191,8 +191,12 @@ var (
 	// use a single instance of Validate, it caches struct info
 	validate = validator.New(validator.WithRequiredStructEnabled())
 
-	returnToKey    = "return_to"
-	selectedOrgKey = "selected_org"
+	// pendingReturnToKey holds the path the user was trying to reach
+	// when an unauthenticated request was redirected to /auth/login.
+	// Set by redirectToLoginPage; consumed-and-deleted by loginHandler
+	// POST and oauth2CallbackHandler.
+	pendingReturnToKey = "pending_return_to"
+	selectedOrgKey     = "selected_org"
 
 	validNetworkFamilies = map[int]struct{}{
 		4: {},
@@ -2497,26 +2501,60 @@ func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, 
 	return component.Render(r.Context(), w)
 }
 
-// Return user to content of return_to query parameter but only if it points to a place we control
-// https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
-func validatedRedirect(returnTo string, w http.ResponseWriter, r *http.Request, code int) {
-	logger := hlog.FromRequest(r)
-	returnToURL, err := url.Parse(returnTo)
+// validateRelativeRedirect returns nil if target is a same-origin
+// path safe to use as a Location: header value, or an error
+// describing which check failed.
+func validateRelativeRedirect(target string) error {
+	if target == "" {
+		return errors.New("empty target")
+	}
+	if !strings.HasPrefix(target, "/") {
+		return errors.New("must start with '/'")
+	}
+	u, err := url.Parse(target)
 	if err != nil {
-		logger.Err(err).Msg("unable to parse return_to content as URL")
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		return fmt.Errorf("url.Parse: %w", err)
 	}
-
-	// Make sure the URL does not point to anything outside this server
-	if r.URL.Host != returnToURL.Host {
-		logger.Err(err).Msg("redirect target does not point to this service, not redirecting")
-		http.Error(w, "redirect target does not point to this service", http.StatusBadRequest)
-		return
+	if u.Scheme != "" {
+		return fmt.Errorf("scheme not allowed: %q", u.Scheme)
 	}
+	if u.Opaque != "" {
+		return fmt.Errorf("opaque not allowed: %q", u.Opaque)
+	}
+	if u.Host != "" {
+		return fmt.Errorf("host not allowed: %q", u.Host)
+	}
+	if u.User != nil {
+		return errors.New("userinfo not allowed")
+	}
+	if strings.HasPrefix(u.Path, "//") {
+		return errors.New("decoded path starts with '//' (protocol-relative after percent-decoding)")
+	}
+	// WHATWG path-state treats a raw backslash as equivalent to a
+	// forward slash for "special" schemes
+	// (https://url.spec.whatwg.org/#path-state), so a Location: value
+	// of "/\evil.example/foo" can be re-parsed as "//evil.example/foo"
+	// by the browser -- a cross-origin redirect. Check the decoded
+	// u.Path so this catches both raw '\' and percent-encoded '%5C'
+	// forms uniformly.
+	if strings.ContainsRune(u.Path, '\\') {
+		return errors.New("decoded path contains backslash (browsers may normalize '\\' to '/' in Location, producing a cross-origin redirect)")
+	}
+	return nil
+}
 
-	logger.Info().Str("return_to", returnToURL.String()).Msg("redirecting user")
-	http.Redirect(w, r, returnToURL.String(), code)
+// validatedRedirect emits a same-origin HTTP redirect. If target
+// fails validation it falls back to consolePath (always safe by
+// construction) and logs a warning. If we ever need to redirect to a path that
+// is not same-origin we will probably need to introduce an allow-list.
+func validatedRedirect(target string, w http.ResponseWriter, r *http.Request, code int) {
+	logger := hlog.FromRequest(r)
+	if err := validateRelativeRedirect(target); err != nil {
+		logger.Warn().Err(err).Str("target", target).Msg("redirect target failed validation; falling back to consolePath")
+		target = consolePath
+	}
+	logger.Info().Str("target", target).Msg("redirecting user")
+	http.Redirect(w, r, target, code) // #nosec G710 -- target validated above (or replaced with consolePath, which is a constant)
 }
 
 type loginForm struct {
@@ -2526,7 +2564,6 @@ type loginForm struct {
 	// Password length validation needs to be kept in sync with the
 	// /api/v1/users POST endpoint for user creation
 	Password string `schema:"password" validate:"min=15,max=64"` // #nosec G117 -- Used for form password input, never used for serialized output
-	ReturnTo string `schema:"return_to"`
 }
 
 type createServiceForm struct {
@@ -2579,6 +2616,21 @@ type nodeGroupAssignForm struct {
 	NodeGroup string `schema:"node-group"`
 }
 
+func consumePendingReturnTo(session *sessions.Session) string {
+	// Consume any pending return-to that was stashed by
+	// redirectToLoginPage when the user originally hit a
+	// protected page.
+	target := consolePath
+	if rtVal, ok := session.Values[pendingReturnToKey]; ok {
+		if rt, isString := rtVal.(string); isString && rt != "" {
+			target = rt
+		}
+		delete(session.Values, pendingReturnToKey)
+	}
+
+	return target
+}
+
 // Endpoint used for console login
 func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -2586,8 +2638,6 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 		ctx := r.Context()
 		switch r.Method {
 		case http.MethodGet:
-			q := r.URL.Query()
-			returnTo := q.Get(returnToKey)
 			session := getSession(r, cookieStore)
 			adRef, err := authFromSession(logger, session, consoleSessionCapAge, r, w)
 			if err != nil {
@@ -2595,20 +2645,13 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 				return
 			}
 			if adRef != nil {
-				switch returnTo {
-				case "":
-					logger.Info().Msg("login: session already has ad data but no return_to, redirecting to console")
-					validatedRedirect(consolePath, w, r, http.StatusFound)
-					return
-				default:
-					logger.Info().Msg("login: session already has ad data and return_to, redirecting to return_to")
-					validatedRedirect(returnTo, w, r, http.StatusFound)
-					return
-				}
+				logger.Info().Msg("login: session already has ad data, redirecting to console")
+				validatedRedirect(consolePath, w, r, http.StatusFound)
+				return
 			}
 
 			// No existing login session, show login form
-			err = renderLoginPage(w, r, returnTo, false)
+			err = renderLoginPage(w, r, false)
 			if err != nil {
 				logger.Err(err).Msg("unable to render login page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2632,7 +2675,7 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST login form data, treating as failed login")
-				err := renderLoginPage(w, r, formData.ReturnTo, true)
+				err := renderLoginPage(w, r, true)
 				if err != nil {
 					logger.Err(err).Msg("unable to render login page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2654,14 +2697,14 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 				switch err {
 				case pgx.ErrNoRows:
 					// The user does not exist etc, try again
-					err := renderLoginPage(w, r, formData.ReturnTo, true)
+					err := renderLoginPage(w, r, true)
 					if err != nil {
 						logger.Err(err).Msg("unable to render bad password page for non-existant user")
 					}
 					return
 				case cdnerrors.ErrBadPassword:
 					// Bad password, try again
-					err := renderLoginPage(w, r, formData.ReturnTo, true)
+					err := renderLoginPage(w, r, true)
 					if err != nil {
 						logger.Err(err).Msg("unable to render bad password page for bad password")
 					}
@@ -2675,27 +2718,16 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 
 			session := getSession(r, cookieStore)
 
+			target := consumePendingReturnTo(session)
+
 			logger.Info().Msg("loginHandler: saving login session")
 			err = setSessionAuth(logger, session, ad, r, w)
 			if err != nil {
 				return
 			}
 
-			// Login is successful at this point, send the now authenticated user to their original location (or consolePath if no such hint is available)
-			if formData.ReturnTo != "" {
-				u, err := url.Parse(formData.ReturnTo)
-				if err != nil {
-					logger.Err(err).Msg("unable to parse form return_to as URL")
-					http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-					return
-				}
-
-				logger.Info().Msg("redirecting logged in user to return_to found in POSTed form if valid")
-				validatedRedirect(u.String(), w, r, http.StatusFound)
-				return
-			}
-			logger.Info().Msg("no return_to in POST data, redirecting logged in user to consolePath")
-			validatedRedirect(consolePath, w, r, http.StatusFound)
+			logger.Info().Str("return_to", target).Msg("redirecting logged-in user")
+			validatedRedirect(target, w, r, http.StatusFound)
 			return
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for login handler")
@@ -2710,9 +2742,6 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
-		q := r.URL.Query()
-		returnTo := q.Get(returnToKey)
-
 		session := logoutSession(r, cookieStore)
 
 		logger.Info().Msg("logout: saving expired login session")
@@ -2722,18 +2751,10 @@ func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
 			return
 		}
 
-		// User should be logged out at this point, send them to where
-		// they were originally headed (which will in turn probably
-		// redirect them to /auth/login). Use StatusSeeOther (303) to
-		// make sure the request uses GET rather than the POST that
-		// sent them to this handler.
-		if returnTo != "" {
-			validatedRedirect(returnTo, w, r, http.StatusSeeOther)
-			return
-		}
-
-		// No return_to hint, just send them to the console and do so
-		// using StatusSeeOther (303) for the same reason as above.
+		// User is logged out; send them to the console (which will
+		// redirect them through the auth flow if they hit a protected
+		// page next). Use StatusSeeOther (303) to force the next
+		// request to be GET rather than the POST that sent them here.
 		validatedRedirect(consolePath, w, r, http.StatusSeeOther)
 	}
 }
@@ -2742,7 +2763,6 @@ type oidcCallbackData struct {
 	State        string `validate:"required"`
 	Nonce        string `validate:"required"`
 	PKCEVerifier string `validate:"required"`
-	ReturnTo     string
 }
 
 // Based on example code at https://github.com/coreos/go-oidc/blob/v3/example/idtoken/app.go
@@ -2793,12 +2813,11 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.
 		logger := hlog.FromRequest(r)
 		var err error
 
-		q := r.URL.Query()
-		returnTo := q.Get(returnToKey)
-
-		ocd := oidcCallbackData{
-			ReturnTo: returnTo,
-		}
+		// Note: pendingReturnToKey may already be in the session
+		// (set by redirectToLoginPage before the user clicked the
+		// Keycloak link). It is consumed by oauth2CallbackHandler
+		// after a successful round-trip; no need to read it here.
+		ocd := oidcCallbackData{}
 
 		ocd.State, err = oidcRandString()
 		if err != nil {
@@ -2949,18 +2968,16 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 			}
 		}
 
+		target := consumePendingReturnTo(session)
+
 		logger.Info().Msg("oauth2CallbackHandler: saving login session")
 		err = setSessionAuth(logger, session, ad, r, w)
 		if err != nil {
 			return
 		}
 
-		if ocd.ReturnTo != "" {
-			validatedRedirect(ocd.ReturnTo, w, r, http.StatusFound)
-			return
-		}
-
-		validatedRedirect(consolePath, w, r, http.StatusFound)
+		logger.Info().Str("return_to", target).Msg("redirecting logged-in user (OIDC)")
+		validatedRedirect(target, w, r, http.StatusFound)
 	}
 }
 
@@ -3170,31 +3187,42 @@ func sendHumaUnauthorized(logger *zerolog.Logger, api huma.API, humaCtx huma.Con
 }
 
 // Login page/form for browser based (not API) requests
-func renderLoginPage(w http.ResponseWriter, r *http.Request, returnTo string, loginFailed bool) error {
-	component := components.LoginPage(returnTo, loginFailed)
+func renderLoginPage(w http.ResponseWriter, r *http.Request, loginFailed bool) error {
+	component := components.LoginPage(loginFailed)
 	err := component.Render(r.Context(), w)
 	return err
 }
 
-func redirectToLoginPage(w http.ResponseWriter, r *http.Request) error {
-	// Even if a url.URL contains a pointer it is expected to be immutable
-	// so it should be safe to make a shallow copy:
-	// https://github.com/golang/go/issues/38351
-	redirectURL := *r.URL
+func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessions.Session) {
+	logger := hlog.FromRequest(r)
 
-	// Remember where we wanted to go, but only overwrite it if it is not already set
-	q := r.URL.Query()
-	if !q.Has(returnToKey) {
-		q.Set(returnToKey, r.URL.String())
-		redirectURL.RawQuery = q.Encode()
+	// Stash the path the user was trying to reach so we can send
+	// them back there after authentication. r.URL.RequestURI() is
+	// "path?query" with no scheme/host which guarantees same-origin
+	// by construction. If a user has e.g. multiple tabs open this results
+	// in Last-write-wins which should be good enough: a single browser
+	// session has a single most-recent intent.
+	//
+	// The main reason of storing the return-to path in the session over
+	// using e.g. a return_to query param is that this means we can trust
+	// that the value was written by our server rather than whatever free-form
+	// input was forged by a client via e.g. "?return_to=https://evil.example..."
+	requestURI := r.URL.RequestURI()
+
+	// Try to not exceed cookie size limits
+	if len(requestURI) > 1024 {
+		http.Error(w, fmt.Sprintf("request URI too long for session cookie: %d", len(requestURI)), http.StatusRequestURITooLong)
+		return
 	}
 
-	// Redirect to the login handler
-	redirectURL.Path = "/auth/login"
+	session.Values[pendingReturnToKey] = requestURI
+	if err := session.Save(r, w); err != nil {
+		// Losing the deep-link is acceptable degradation; failing
+		// the response is not.
+		logger.Err(err).Msg("redirectToLoginPage: failed to save pending return-to in session")
+	}
 
-	validatedRedirect(redirectURL.String(), w, r, http.StatusFound)
-
-	return nil
+	validatedRedirect("/auth/login", w, r, http.StatusFound)
 }
 
 func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expectedSalt []byte, password string) string {
@@ -3447,12 +3475,7 @@ func consoleAuthMiddleware(cookieStore *sessions.CookieStore, consoleSessionCapA
 			}
 			if adRef == nil {
 				logger.Info().Msg("consoleAuthMiddleware: redirecting to login page")
-				err := redirectToLoginPage(w, r)
-				if err != nil {
-					logger.Err(err).Msg("unable to redirect to login page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
+				redirectToLoginPage(w, r, session)
 				return
 			}
 
