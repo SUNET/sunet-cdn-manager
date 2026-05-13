@@ -7475,27 +7475,6 @@ type haproxyConfInput struct {
 }
 
 func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) (string, error) {
-	//// Detect what haproxy backends should be present
-	//haProxyHTTP := false
-	//haProxyHTTPS := false
-	//for _, origin := range origins {
-	//	// If both have been found we do not need to look at more
-	//	// backends
-	//	if haProxyHTTP && haProxyHTTPS {
-	//		break
-	//	}
-
-	//	if origin.TLS {
-	//		haProxyHTTPS = true
-	//	} else {
-	//		haProxyHTTP = true
-	//	}
-	//}
-
-	//if !haProxyHTTP && !haProxyHTTPS {
-	//	return "", fmt.Errorf("neither HTTPS or HTTP origin assigned, this is unexpected")
-	//}
-
 	// Get a list of all origin groups that are actually referenced by
 	// origins, we do the same for varnish where it is required but might
 	// as well do it here so the config only contains exactly what is
