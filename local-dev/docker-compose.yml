@@ -1,6 +1,6 @@
 services:
   db:
-    image: "postgres:18.3-trixie"
+    image: "platform.sunet.se/sunet-cdn/cdn-postgres-pgbr:18.3-trixie-27b6b5066137cffc5246eb676a8ef9878b5dc967"
     environment:
       - POSTGRES_PASSWORD=dev
       - POSTGRES_INITDB_ARGS=--data-checksums
@@ -8,7 +8,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+      - pgbr_data:/var/lib/pgbackrest
+      - ./pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf
       - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    command:
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=pgbackrest --stanza=cdn archive-push %p
   keycloak:
     image: "quay.io/keycloak/keycloak:26.0.7"
     environment:
@@ -42,3 +49,4 @@ services:
       - ./satosa/generated/config:/etc/satosa
 volumes:
   postgres_data:
+  pgbr_data:
