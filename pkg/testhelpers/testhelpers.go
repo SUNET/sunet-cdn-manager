@@ -17,7 +17,7 @@ func CreatePostgreSQLContainer(ctx context.Context) (*postgres.PostgresContainer
 	// https://golang.testcontainers.org/modules/postgres/
 	pgContainer, err := postgres.Run(
 		ctx,
-		"postgres:18.3-trixie",
+		"platform.sunet.se/sunet-cdn/cdn-postgres-pgbr:18.3-trixie-27b6b5066137cffc5246eb676a8ef9878b5dc967",
 		postgres.WithDatabase("postgres"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
