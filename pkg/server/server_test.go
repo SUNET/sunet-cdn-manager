@@ -8180,6 +8180,42 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 	})
 
+	// Verify that a GET for a specific URL while unauthenticated is
+	// redirected via HX-Redirect if sending a htmx request.
+	t.Run("superuser with org doing htmx request gets redirected back to requested page after auth via HX-Redirect", func(t *testing.T) {
+		client := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		origGetPath := "/console/org/sunet/domains"
+
+		// Unauthenticated request
+		req, err := http.NewRequest("GET", ts.URL+origGetPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Mimic htmx request
+		req.Header.Set("HX-Request", "true")
+
+		// Initial GET returns 200 response with HX-Redirect set
+		getResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		getResp.Body.Close()
+
+		if getResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 from login with HX-Request, got %d", getResp.StatusCode)
+		}
+
+		if getResp.Header.Get("HX-Redirect") != authLoginPath {
+			t.Fatalf("expected HX-Redirect header with path '%s', got '%s'", authLoginPath, getResp.Header.Get("HX-Redirect"))
+		}
+	})
+
 	// Verify the redirect only fires once.
 	t.Run("superuser with org subsequent visit renders dashboard", func(t *testing.T) {
 		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
