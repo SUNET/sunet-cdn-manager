@@ -14,6 +14,7 @@ import (
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 //go:embed css/*.css
@@ -171,6 +172,12 @@ type PasswordResetFormErrors struct {
 type PasswordResetFormData struct {
 	PasswordResetFormFields
 	Errors PasswordResetFormErrors
+}
+
+type selectInputOption struct {
+	value    string
+	selected bool
+	content  string
 }
 
 // ipAllocationErrMsg extracts the user-facing message from an IPAllocationError,
@@ -414,4 +421,27 @@ func urlToSection(u *url.URL) string {
 	}
 
 	return parts[3]
+}
+
+func nodeGroupToOptions(nodeGroupID *pgtype.UUID, nodeGroupName *string, nodeGroups []cdntypes.NodeGroup) []selectInputOption {
+	options := []selectInputOption{
+		{
+			value:    "",
+			selected: nodeGroupID == nil,
+			content:  "-- none --",
+		},
+	}
+
+	for _, ng := range nodeGroups {
+		options = append(
+			options,
+			selectInputOption{
+				value:    ng.Name,
+				selected: nodeGroupName != nil && *nodeGroupName == ng.Name,
+				content:  ng.Name,
+			},
+		)
+	}
+
+	return options
 }

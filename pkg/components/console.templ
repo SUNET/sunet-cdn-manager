@@ -104,6 +104,44 @@ templ picoCssLinks() {
 	<link rel="stylesheet" href="/css/pico-settings.css"/>
 }
 
+templ checkboxInput(name string, checked bool, putTarget string, confirmMessage string, ariaLabel string) {
+	// hx-confirm cannot be used on <input> because the browser updates
+	// the checkbox state before the confirm dialog appears, and cancelling
+	// does not restore it. Instead _hyperscript confirms on change, flips back
+	// the previous value on cancel, and triggers a custom "confirmed" event.
+	<input
+		type="checkbox"
+		checked?={ checked }
+		hx-put={ string(templ.URL(putTarget)) }
+		hx-target="body"
+		hx-trigger="confirmed"
+		data-confirm={ confirmMessage }
+		_="on change if confirm(my @data-confirm) trigger confirmed on me else set my checked to not my checked"
+		aria-label={ ariaLabel }
+		name={ name }
+	/>
+}
+
+templ selectInput(name string, putTarget string, confirmMessage string, ariaLabel string, selectOptions []selectInputOption) {
+	// hx-confirm cannot be used on <select> because the browser updates
+	// the displayed value before the confirm dialog appears, and cancelling
+	// does not restore it. Instead _hyperscript confirms on change, restores
+	// the previous value on cancel, and triggers a custom "confirmed" event.
+	<select
+		hx-put={ string(templ.URL(putTarget)) }
+		hx-target="body"
+		hx-trigger="confirmed"
+		name={ name }
+		data-confirm={ confirmMessage }
+		_="on focus set my @data-prev to my value on change set v to my value if v is '' set v to 'none' end set msg to my @data-confirm set msg to msg.replace('{value}', v) if confirm(msg) trigger confirmed on me else set my value to my @data-prev"
+		aria-label={ ariaLabel }
+	>
+		for _, so := range selectOptions {
+			<option value={ so.value } selected?={ so.selected }>{ so.content }</option>
+		}
+	</select>
+}
+
 templ Dashboard(dashData cdntypes.DashboardData) {
 	if !dashData.ResourceAccess {
 		<article class="empty-state">
@@ -928,34 +966,22 @@ templ CacheNodesContent(nodes []cdntypes.CacheNodeListItem, nodeGroups []cdntype
 							}
 						</td>
 						<td>
-							<input
-								type="checkbox"
-								checked?={ node.Maintenance }
-								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/maintenance", node.Name))) }
-								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name) }
-								aria-label={ fmt.Sprintf("Toggle maintenance for '%s'", node.Name) }
-								name="maintenance"
-							/>
+							@checkboxInput(
+								"maintenance",
+								node.Maintenance,
+								fmt.Sprintf("/console/superuser/cache-nodes/%s/maintenance", node.Name),
+								fmt.Sprintf("Toggle maintenance for '%s'?", node.Name),
+								fmt.Sprintf("Toggle maintenance for '%s'", node.Name),
+							)
 						</td>
 						<td>
-							// hx-confirm cannot be used on <select> because the browser updates
-							// the displayed value before the confirm dialog appears, and cancelling
-							// does not restore it. Instead _hyperscript confirms on change, restores
-							// the previous value on cancel, and triggers a custom "confirmed" event.
-							<select
-								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/node-group", node.Name))) }
-								hx-target="body"
-								hx-trigger="confirmed"
-								name="node-group"
-								_={ fmt.Sprintf("on focus set my @data-prev to my value on change set v to my value if v is '' set v to 'none' end if confirm(`Change node group for '%s' to '${v}'?`) trigger confirmed on me else set my value to my @data-prev", node.Name) }
-								aria-label={ fmt.Sprintf("Select node group for '%s'", node.Name) }
-							>
-								<option value="" selected?={ node.NodeGroupID == nil }>-- none --</option>
-								for _, ng := range nodeGroups {
-									<option value={ ng.Name } selected?={ node.NodeGroupName != nil && *node.NodeGroupName == ng.Name }>{ ng.Name }</option>
-								}
-							</select>
+							@selectInput(
+								"node-group",
+								fmt.Sprintf("/console/superuser/cache-nodes/%s/node-group", node.Name),
+								fmt.Sprintf("Change node group for '%s' to '{value}'?", node.Name),
+								fmt.Sprintf("Select node group for '%s'", node.Name),
+								nodeGroupToOptions(node.NodeGroupID, node.NodeGroupName, nodeGroups),
+							)
 						</td>
 						<td>
 							<a href={ templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", node.Name)) } role="button" class="secondary">Edit</a>
@@ -1060,34 +1086,22 @@ templ L4LBNodesContent(nodes []cdntypes.L4LBNodeListItem, nodeGroups []cdntypes.
 							}
 						</td>
 						<td>
-							<input
-								type="checkbox"
-								checked?={ node.Maintenance }
-								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/maintenance", node.Name))) }
-								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Toggle maintenance mode for '%s'?", node.Name) }
-								aria-label={ fmt.Sprintf("Toggle maintenance for '%s'", node.Name) }
-								name="maintenance"
-							/>
+							@checkboxInput(
+								"maintenance",
+								node.Maintenance,
+								fmt.Sprintf("/console/superuser/l4lb-nodes/%s/maintenance", node.Name),
+								fmt.Sprintf("Toggle maintenance for '%s'?", node.Name),
+								fmt.Sprintf("Toggle maintenance for '%s'", node.Name),
+							)
 						</td>
 						<td>
-							// hx-confirm cannot be used on <select> because the browser updates
-							// the displayed value before the confirm dialog appears, and cancelling
-							// does not restore it. Instead _hyperscript confirms on change, restores
-							// the previous value on cancel, and triggers a custom "confirmed" event.
-							<select
-								hx-put={ string(templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/node-group", node.Name))) }
-								hx-target="body"
-								hx-trigger="confirmed"
-								name="node-group"
-								_={ fmt.Sprintf("on focus set my @data-prev to my value on change set v to my value if v is '' set v to 'none' end if confirm(`Change node group for '%s' to '${v}'?`) trigger confirmed on me else set my value to my @data-prev", node.Name) }
-								aria-label={ fmt.Sprintf("Select node group for '%s'", node.Name) }
-							>
-								<option value="" selected?={ node.NodeGroupID == nil }>-- none --</option>
-								for _, ng := range nodeGroups {
-									<option value={ ng.Name } selected?={ node.NodeGroupName != nil && *node.NodeGroupName == ng.Name }>{ ng.Name }</option>
-								}
-							</select>
+							@selectInput(
+								"node-group",
+								fmt.Sprintf("/console/superuser/l4lb-nodes/%s/node-group", node.Name),
+								fmt.Sprintf("Change node group for '%s' to '{value}'?", node.Name),
+								fmt.Sprintf("Select node group for '%s'", node.Name),
+								nodeGroupToOptions(node.NodeGroupID, node.NodeGroupName, nodeGroups),
+							)
 						</td>
 						<td>
 							<a href={ templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", node.Name)) } role="button" class="secondary">Edit</a>
