@@ -9,6 +9,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const (
+	// AuthLoginPath is the HTTP path for the login endpoint.
+	AuthLoginPath = "/auth/login"
+	// AuthLogoutPath is the HTTP path for the logout endpoint.
+	AuthLogoutPath = "/auth/logout"
+)
+
 // AuthData represents authentication data for a given user or org client credential.
 // The Username and UserID fields are only set for users, not org client
 // credentials and OrgID/OrgName may be unset for users not currently members

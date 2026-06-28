@@ -112,7 +112,6 @@ const (
 	// exclusion_violation: 23P01
 	pgExclusionViolation = "23P01"
 
-	authLoginPath                    = "/auth/login"
 	consolePath                      = "/console"
 	consoleSuperuserCacheNodes       = "/console/superuser/cache-nodes"
 	consoleSuperuserL4LBNodes        = "/console/superuser/l4lb-nodes"
@@ -3247,21 +3246,21 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessio
 		// hx-boost). Instead of sending a normal redirect which would
 		// lead to htmx swapping the login page into the body instruct
 		// it to do a full reload of the whole page with a response header.
-		w.Header().Add("HX-Redirect", authLoginPath)
+		w.Header().Add("HX-Redirect", cdntypes.AuthLoginPath)
 
 		logger.Info().Msg("issuing HX-Redirect to login page")
 		// From https://htmx.org/headers/hx-redirect/
 		// ===
 		// Response headers are not processed on 3xx response codes.
 		// ===
-		_, err := fmt.Fprintf(w, "HX-Redirect header is set to '%s'", authLoginPath)
+		_, err := fmt.Fprintf(w, "HX-Redirect header is set to '%s'", cdntypes.AuthLoginPath)
 		if err != nil {
 			logger.Err(err).Msg("redirectToLoginPage: unable to write HX-Redirect response")
 		}
 		return
 	}
 
-	validatedRedirect(authLoginPath, w, r, http.StatusFound)
+	validatedRedirect(cdntypes.AuthLoginPath, w, r, http.StatusFound)
 }
 
 func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expectedSalt []byte, password string) string {
