@@ -978,7 +978,7 @@ func TestGetUsers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/users", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1072,7 +1072,7 @@ func TestGetUser(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+test.userID, nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/users/"+test.userID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1215,7 +1215,7 @@ func TestPostUsers(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/users", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/users", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1351,7 +1351,7 @@ func TestPutUser(t *testing.T) {
 
 			t.Log(string(b))
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.targetUserID, r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/users/"+test.targetUserID, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1471,7 +1471,7 @@ func TestDeleteUser(t *testing.T) {
 				}
 			}
 
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/users/"+test.targetUserID, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/users/"+test.targetUserID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1623,7 +1623,7 @@ func TestPutPassword(t *testing.T) {
 
 			t.Log(string(b))
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/users/"+test.modifiedUserID+"/local-password", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/users/"+test.modifiedUserID+"/local-password", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1686,7 +1686,7 @@ func TestPutPassword(t *testing.T) {
 }
 
 func testAuth(t *testing.T, ts *httptest.Server, username string, userID string, password string) (int, error) {
-	req, err := http.NewRequest("GET", ts.URL+"/api/v1/users/"+userID, nil)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/users/"+userID, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -1759,7 +1759,7 @@ func TestGetOrgs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1860,7 +1860,7 @@ func TestGetOrgClientCredentials(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.nameOrID+"/client-credentials", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2634,7 +2634,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
+			postReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2749,7 +2749,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 			}
 
 			// Attempt re-encryption prior to DELETE
-			reEncryptReq, err := http.NewRequest("POST", ts.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
+			reEncryptReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2786,7 +2786,7 @@ func TestPostDeleteOrgClientCredentials(t *testing.T) {
 				t.Fatalf("invalid re-encryption counts: TotalTokens=%d, UpdatedTokens=%d, SkippedTokens=%d, FailedTokens=%d", reEncryptResult.TotalTokens, reEncryptResult.UpdatedTokens, reEncryptResult.SkippedTokens, reEncryptResult.FailedTokens)
 			}
 
-			deleteReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)
+			deleteReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+test.credName, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2876,7 +2876,7 @@ func TestPostOrgClientCredentialsInvalidName(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2918,7 +2918,7 @@ func createCred(t *testing.T, ts *httptest.Server, username, password, org strin
 
 	r := bytes.NewReader(b)
 
-	postReq, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs/"+org+"/client-credentials", r)
+	postReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/orgs/"+org+"/client-credentials", r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3053,7 +3053,7 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 				}
 
 				// Attempt re-encryption
-				reEncryptReq, err := http.NewRequest("POST", ts2.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
+				reEncryptReq, err := http.NewRequest(http.MethodPost, ts2.URL+"/api/v1/re-encrypt-org-client-registration-tokens", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -3129,7 +3129,7 @@ func TestPostReEncryptOrgClientCredentials(t *testing.T) {
 
 			for _, credName := range createdCredNames {
 				func() {
-					deleteReq, err := http.NewRequest("DELETE", ts3.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+credName, nil)
+					deleteReq, err := http.NewRequest(http.MethodDelete, ts3.URL+"/api/v1/orgs/"+test.orgNameOrID+"/client-credentials/"+credName, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -3232,7 +3232,7 @@ func TestGetOrg(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/orgs/"+test.nameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3354,7 +3354,7 @@ func TestGetDomains(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/domains", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/domains", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3458,7 +3458,7 @@ func TestGetServiceIPs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/ips", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3580,7 +3580,7 @@ func TestPostOrganizations(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/orgs", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/orgs", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3686,7 +3686,7 @@ func TestGetServices(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3817,7 +3817,7 @@ func TestGetService(t *testing.T) {
 				t.Fatal("user needs service name or ID for service test")
 			}
 
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3948,7 +3948,7 @@ func TestDeleteService(t *testing.T) {
 				t.Fatal("user needs service name or ID for service test")
 			}
 
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4152,7 +4152,7 @@ func TestPostServices(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/services", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4264,7 +4264,7 @@ func TestDeleteDomain(t *testing.T) {
 				t.Fatal("user needs domain name or ID for domain test")
 			}
 
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/domains/"+test.domainNameOrID, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/domains/"+test.domainNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4354,7 +4354,7 @@ func TestPostDomains(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/domains", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/domains", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4464,7 +4464,7 @@ func TestGetServiceVersions(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4945,7 +4945,7 @@ func TestPostServiceVersion(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5085,7 +5085,7 @@ func TestActivateServiceVersion(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/active", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5201,7 +5201,7 @@ func TestGetOriginGroups(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5314,7 +5314,7 @@ func TestPostOriginGroups(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5437,7 +5437,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(test.version, 10)+"/vcl", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5538,7 +5538,7 @@ func TestGetIPNetworks(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/ip-networks", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/ip-networks", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5685,7 +5685,7 @@ func TestPostIPNetworks(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/ip-networks", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/ip-networks", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5739,7 +5739,7 @@ func TestDeleteIPNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := http.NewRequest("POST", ts.URL+"/api/v1/ip-networks", bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/ip-networks", bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5814,7 +5814,7 @@ func TestDeleteIPNetwork(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5836,7 +5836,7 @@ func TestDeleteIPNetwork(t *testing.T) {
 
 			// Verify successful deletes by confirming re-delete returns 404
 			if test.expectedStatus == http.StatusNoContent {
-				req2, err := http.NewRequest("DELETE", ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
+				req2, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/ip-networks/"+test.networkID, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -5940,7 +5940,7 @@ func TestGetCacheNodeConfigs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/cache-node-configs/"+test.cacheNodeNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6062,7 +6062,7 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/l4lb-node-configs/"+test.l4lbNameOrID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6206,7 +6206,7 @@ func TestPostCacheNodes(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/cache-nodes", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/cache-nodes", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6310,7 +6310,7 @@ func TestGetCacheNodes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/cache-nodes", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/cache-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6456,7 +6456,7 @@ func TestPutCacheNodeMaintenance(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/maintenance", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/maintenance", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6588,7 +6588,7 @@ func TestPutCacheNodeGroup(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/node-group", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/cache-nodes/"+test.cacheNodeNameOrID+"/node-group", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6675,7 +6675,7 @@ func TestGetL4LBNodes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/l4lb-nodes", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/l4lb-nodes", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6841,7 +6841,7 @@ func TestPostL4LBNodes(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/l4lb-nodes", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/l4lb-nodes", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6982,7 +6982,7 @@ func TestPutL4LBNodeMaintenance(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/maintenance", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/maintenance", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7114,7 +7114,7 @@ func TestPutL4LBNodeGroup(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/node-group", r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNodeNameOrID+"/node-group", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7189,7 +7189,7 @@ func TestGetNodeGroups(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/node-groups", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/node-groups", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7277,7 +7277,7 @@ func TestPostNodeGroups(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("POST", ts.URL+"/api/v1/node-groups", r)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/node-groups", r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7411,7 +7411,7 @@ func TestPutCacheNode(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7519,7 +7519,7 @@ func TestDeleteCacheNode(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7542,7 +7542,7 @@ func TestDeleteCacheNode(t *testing.T) {
 
 			// Verify the resource is actually gone by retrying the DELETE
 			if test.expectedStatus == http.StatusNoContent {
-				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
+				retryReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/cache-nodes/"+test.cacheNode, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -7663,7 +7663,7 @@ func TestPutL4LBNode(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7771,7 +7771,7 @@ func TestDeleteL4LBNode(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -7794,7 +7794,7 @@ func TestDeleteL4LBNode(t *testing.T) {
 
 			// Verify the resource is actually gone by retrying the DELETE
 			if test.expectedStatus == http.StatusNoContent {
-				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
+				retryReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/l4lb-nodes/"+test.l4lbNode, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -7906,7 +7906,7 @@ func TestPutNodeGroup(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/node-groups/"+test.nodeGroup, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8014,7 +8014,7 @@ func TestDeleteNodeGroup(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8037,7 +8037,7 @@ func TestDeleteNodeGroup(t *testing.T) {
 
 			// Verify the resource is actually gone by retrying the DELETE
 			if test.expectedStatus == http.StatusNoContent {
-				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
+				retryReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/node-groups/"+test.nodeGroup, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -8085,7 +8085,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 
 		// Follow the redirect to /console manually — this should trigger 303 to org dashboard
-		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8133,7 +8133,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		origGetPath := "/console/org/sunet/domains"
 
 		// Unauthenticated request to init session cookie
-		req, err := http.NewRequest("GET", ts.URL+origGetPath, nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+origGetPath, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8190,7 +8190,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		origGetPath := "/console/org/sunet/domains"
 
 		// Unauthenticated request
-		req, err := http.NewRequest("GET", ts.URL+origGetPath, nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+origGetPath, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8313,7 +8313,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		origPath := "/console/org/sunet/domains"
 
 		// Unauthenticated request to init session cookie
-		req, err := http.NewRequest("GET", ts.URL+origPath, nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+origPath, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8390,7 +8390,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 	t.Run("superuser with org subsequent visit renders dashboard", func(t *testing.T) {
 		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
 
-		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8416,7 +8416,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 			return http.ErrUseLastResponse
 		}
 
-		req, err = http.NewRequest("GET", ts.URL+"/console", nil)
+		req, err = http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8443,7 +8443,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 			return http.ErrUseLastResponse
 		}
 
-		req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8468,7 +8468,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
 
 		// Use the org switcher to explicitly unselect
-		req, err := http.NewRequest("GET", ts.URL+"/console/org-switcher?org="+url.QueryEscape(cdntypes.OrgNotSelected), nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/org-switcher?org="+url.QueryEscape(cdntypes.OrgNotSelected), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8487,7 +8487,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 			return http.ErrUseLastResponse
 		}
 
-		req, err = http.NewRequest("GET", ts.URL+"/console", nil)
+		req, err = http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8544,7 +8544,7 @@ func TestConsoleServicesComponent(t *testing.T) {
 		t.Run(test.description, func(t *testing.T) {
 			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
-			req, err := http.NewRequest("GET", ts.URL+"/console/org/"+test.orgNameOrID+"/services", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/org/"+test.orgNameOrID+"/services", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8642,7 +8642,7 @@ func TestConsoleFormLimit(t *testing.T) {
 				"password": {test.password},
 			}
 
-			req, err := http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/auth/login", strings.NewReader(form.Encode()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8787,7 +8787,7 @@ func TestPutOrganization(t *testing.T) {
 
 			r := bytes.NewReader(b)
 
-			req, err := http.NewRequest("PUT", ts.URL+"/api/v1/orgs/"+test.org, r)
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/orgs/"+test.org, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8894,7 +8894,7 @@ func TestDeleteOrganization(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.org, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/orgs/"+test.org, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8917,7 +8917,7 @@ func TestDeleteOrganization(t *testing.T) {
 
 			// Verify the resource is actually gone by retrying the DELETE
 			if test.expectedStatus == http.StatusNoContent {
-				retryReq, err := http.NewRequest("DELETE", ts.URL+"/api/v1/orgs/"+test.org, nil)
+				retryReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/orgs/"+test.org, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -8960,7 +8960,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent cache node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/superuser/cache-nodes/nonexistent-node",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleCacheNodeNotFound,
@@ -8969,7 +8969,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent L4LB node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/superuser/l4lb-nodes/nonexistent-node",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleL4LBNodeNotFound,
@@ -8978,7 +8978,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent node group shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/superuser/node-groups/nonexistent-group",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Node group not found",
@@ -8987,7 +8987,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent domain shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org1/domains/nonexistent.example.com",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Domain not found",
@@ -8996,7 +8996,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent service shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org1/services/nonexistent-service",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Service not found",
@@ -9005,7 +9005,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "toggle maintenance on nonexistent cache node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "PUT",
+			method:           http.MethodPut,
 			path:             "/console/superuser/cache-nodes/nonexistent-node/maintenance",
 			formBody:         "maintenance=on",
 			expectedStatus:   http.StatusOK,
@@ -9015,7 +9015,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "toggle maintenance on nonexistent L4LB node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "PUT",
+			method:           http.MethodPut,
 			path:             "/console/superuser/l4lb-nodes/nonexistent-node/maintenance",
 			formBody:         "maintenance=on",
 			expectedStatus:   http.StatusOK,
@@ -9025,7 +9025,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "assign node group on nonexistent cache node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "PUT",
+			method:           http.MethodPut,
 			path:             "/console/superuser/cache-nodes/nonexistent-node/node-group",
 			formBody:         "node-group=node-group-1",
 			expectedStatus:   http.StatusOK,
@@ -9035,7 +9035,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "assign node group on nonexistent L4LB node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "PUT",
+			method:           http.MethodPut,
 			path:             "/console/superuser/l4lb-nodes/nonexistent-node/node-group",
 			formBody:         "node-group=node-group-1",
 			expectedStatus:   http.StatusOK,
@@ -9045,7 +9045,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent API token shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org1/api-tokens/nonexistent-token",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "API token not found",
@@ -9054,7 +9054,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "org1 user deleting org2 API token shows forbidden error",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org2/api-tokens/nonexistent-token",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleNotAllowedDeleteAPIToken,
@@ -9063,7 +9063,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "org1 user deleting org2 domain shows forbidden error",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org2/domains/example.se",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleNotAllowedDeleteDomain,
@@ -9072,7 +9072,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "org1 user deleting org2 service shows forbidden error",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/org/org2/services/org1-service1",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Not allowed to delete service",
@@ -9081,7 +9081,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete node group with assigned nodes shows conflict error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/superuser/node-groups/node-group-1",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: "Cannot delete node group: nodes are still assigned to it",
@@ -9090,7 +9090,7 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			description:      "delete nonexistent ip network shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "DELETE",
+			method:           http.MethodDelete,
 			path:             "/console/superuser/ip-networks/00000000-0000-0000-0000-000000000099",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleIPNetworkNotFound,
@@ -9166,7 +9166,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "forbidden on domains list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/org/org2/domains",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleNeedOrgMembershipMsg,
@@ -9175,7 +9175,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "forbidden on services list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/org/org2/services",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleNeedOrgMembershipMsg,
@@ -9184,7 +9184,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "forbidden on api tokens list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/org/org2/api-tokens",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleNeedOrgMembershipMsg,
@@ -9193,7 +9193,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "org not found on dashboard",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/org/nonexistent-org",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleOrgNotFound,
@@ -9202,7 +9202,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "org not found on create domain page",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/org/nonexistent-org/create/domain",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleOrgNotFound,
@@ -9211,7 +9211,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "org not found on edit org page",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/superuser/orgs/nonexistent-org/edit",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleOrgNotFound,
@@ -9220,7 +9220,7 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 			description:      "cache node not found on edit page",
 			username:         "admin",
 			password:         validAdminPassword,
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/superuser/cache-nodes/nonexistent/edit",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleCacheNodeNotFound,
@@ -9297,7 +9297,7 @@ func TestGetRoles(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest("GET", ts.URL+"/api/v1/roles", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/roles", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9370,7 +9370,7 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.
 		t.Fatal(err)
 	}
 
-	req, err := http.NewRequest("POST", tsURL+"/auth/login", strings.NewReader(form.Encode()))
+	req, err := http.NewRequest(http.MethodPost, tsURL+"/auth/login", strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9454,7 +9454,7 @@ func TestConsoleUsersList(t *testing.T) {
 		t.Run(test.description, func(t *testing.T) {
 			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
 
-			req, err := http.NewRequest("GET", ts.URL+"/console/superuser/users", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/superuser/users", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9565,7 +9565,7 @@ func TestConsoleCreateUser(t *testing.T) {
 				return http.ErrUseLastResponse
 			}
 
-			req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/user", strings.NewReader(test.formData.Encode()))
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/create/user", strings.NewReader(test.formData.Encode()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9636,24 +9636,24 @@ func TestConsoleEditUser(t *testing.T) {
 	}{
 		{
 			description: "GET edit form for existing user",
-			method:      "GET",
+			method:      http.MethodGet,
 			path:        "/console/superuser/users/00000006-0000-0000-0000-000000000002/edit",
 		},
 		{
 			description:      "GET edit form for non-existent user",
-			method:           "GET",
+			method:           http.MethodGet,
 			path:             "/console/superuser/users/00000000-0000-0000-0000-000000000000/edit",
 			expectedErrorMsg: consoleUserNotFound,
 		},
 		{
 			description:    "GET edit form with invalid UUID returns 400",
-			method:         "GET",
+			method:         http.MethodGet,
 			path:           "/console/superuser/users/not-a-uuid/edit",
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			description: "POST edit to change user role",
-			method:      "POST",
+			method:      http.MethodPost,
 			path:        "/console/superuser/users/00000006-0000-0000-0000-000000000007/edit",
 			formData: url.Values{
 				"display_name": {"username6"},
@@ -9664,7 +9664,7 @@ func TestConsoleEditUser(t *testing.T) {
 		},
 		{
 			description: "POST edit non-existent user",
-			method:      "POST",
+			method:      http.MethodPost,
 			path:        "/console/superuser/users/00000000-0000-0000-0000-000000000000/edit",
 			formData: url.Values{
 				"display_name": {"nonexistent-user"},
@@ -9794,7 +9794,7 @@ func TestConsoleDeleteUser(t *testing.T) {
 				return http.ErrUseLastResponse
 			}
 
-			req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/users/"+test.userToDelete, nil)
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/console/superuser/users/"+test.userToDelete, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9913,7 +9913,7 @@ func TestConsoleResetPassword(t *testing.T) {
 				return http.ErrUseLastResponse
 			}
 
-			req, err := http.NewRequest("POST", ts.URL+"/console/superuser/users/"+test.userToReset+"/reset-password", strings.NewReader(test.formData.Encode()))
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/users/"+test.userToReset+"/reset-password", strings.NewReader(test.formData.Encode()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -10295,7 +10295,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
 	t.Run("list page renders", func(t *testing.T) {
-		req, err := http.NewRequest("GET", ts.URL+"/console/superuser/ip-networks", nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/superuser/ip-networks", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10372,7 +10372,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 	})
 
 	t.Run("create page renders", func(t *testing.T) {
-		req, err := http.NewRequest("GET", ts.URL+"/console/superuser/create/ip-network", nil)
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/superuser/create/ip-network", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10390,7 +10390,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("create network via form", func(t *testing.T) {
 		form := url.Values{"network": {"10.20.0.0/24"}}
-		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10418,7 +10418,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("create duplicate network shows error", func(t *testing.T) {
 		form := url.Values{"network": {"10.20.0.0/24"}}
-		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10446,7 +10446,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("create overlapping network shows error", func(t *testing.T) {
 		form := url.Values{"network": {"10.20.0.0/25"}}
-		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10474,7 +10474,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("create invalid prefix shows error", func(t *testing.T) {
 		form := url.Values{"network": {"not-a-prefix"}}
-		req, err := http.NewRequest("POST", ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/create/ip-network", strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10502,7 +10502,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("delete network with allocated IPs shows error", func(t *testing.T) {
 		// 192.0.2.0/24 has allocated IPs, use its UUID
-		req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/ip-networks/00000011-0000-0000-0000-000000000001", nil)
+		req, err := http.NewRequest(http.MethodDelete, ts.URL+"/console/superuser/ip-networks/00000011-0000-0000-0000-000000000001", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10529,7 +10529,7 @@ func TestConsoleIPNetworks(t *testing.T) {
 
 	t.Run("delete unused network succeeds", func(t *testing.T) {
 		// Use a seeded network with no allocated IPs: 3fff::/20 (ID 00000012-0000-0000-0000-000000000002)
-		req, err := http.NewRequest("DELETE", ts.URL+"/console/superuser/ip-networks/00000012-0000-0000-0000-000000000002", nil)
+		req, err := http.NewRequest(http.MethodDelete, ts.URL+"/console/superuser/ip-networks/00000012-0000-0000-0000-000000000002", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10626,7 +10626,7 @@ func TestConsoleCookieExpiration(t *testing.T) {
 				},
 			}
 
-			req, err := http.NewRequest("GET", ts.URL+"/console", nil)
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
