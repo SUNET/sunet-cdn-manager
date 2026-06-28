@@ -42,7 +42,7 @@ templ ConsolePage(u *url.URL, title string, ad cdntypes.AuthData, orgName string
 						} else {
 							Username missing
 						}
-						<form id="logout" method="POST" action={ templ.URL("/auth/logout") } hx-boost="false">
+						<form id="logout" method="POST" action={ templ.URL(cdntypes.AuthLogoutPath) } hx-boost="false">
 							<button type="submit" role="button">Logout</button>
 						</form>
 					</span>
@@ -916,7 +916,7 @@ templ LoginPage(loginFailed bool) {
 					if loginFailed {
 						<div class="login-error" role="alert">Login failed!</div>
 					}
-					<form method="post" action={ templ.URL("/auth/login") }>
+					<form method="post" action={ templ.URL(cdntypes.AuthLoginPath) }>
 						<label for="username">
 							Username
 							<input type="text" id="username" name="username" required/>

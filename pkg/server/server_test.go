@@ -8150,11 +8150,11 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 
 		location := getResp.Header.Get("Location")
-		if location != authLoginPath {
-			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
+		if location != cdntypes.AuthLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", cdntypes.AuthLoginPath, location)
 		}
 
-		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
+		req, err = http.NewRequest(http.MethodPost, ts.URL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8209,8 +8209,8 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 			t.Fatalf("expected 200 from login with HX-Request, got %d", getResp.StatusCode)
 		}
 
-		if getResp.Header.Get("HX-Redirect") != authLoginPath {
-			t.Fatalf("expected HX-Redirect header with path '%s', got '%s'", authLoginPath, getResp.Header.Get("HX-Redirect"))
+		if getResp.Header.Get("HX-Redirect") != cdntypes.AuthLoginPath {
+			t.Fatalf("expected HX-Redirect header with path '%s', got '%s'", cdntypes.AuthLoginPath, getResp.Header.Get("HX-Redirect"))
 		}
 	})
 
@@ -8260,11 +8260,11 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 
 		location := nonGetResp.Header.Get("Location")
-		if location != authLoginPath {
-			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
+		if location != cdntypes.AuthLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", cdntypes.AuthLoginPath, location)
 		}
 
-		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
+		req, err = http.NewRequest(http.MethodPost, ts.URL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8330,8 +8330,8 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 
 		location := getResp.Header.Get("Location")
-		if location != authLoginPath {
-			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
+		if location != cdntypes.AuthLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", cdntypes.AuthLoginPath, location)
 		}
 
 		// Follow up with unauthenticated non-GET request that triggers a login redirect.
@@ -8358,11 +8358,11 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 		}
 
 		location = nonGetResp.Header.Get("Location")
-		if location != authLoginPath {
-			t.Fatalf("expected unauth redirect for follow-up request to '%s', got %s", authLoginPath, location)
+		if location != cdntypes.AuthLoginPath {
+			t.Fatalf("expected unauth redirect for follow-up request to '%s', got %s", cdntypes.AuthLoginPath, location)
 		}
 
-		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
+		req, err = http.NewRequest(http.MethodPost, ts.URL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8642,7 +8642,7 @@ func TestConsoleFormLimit(t *testing.T) {
 				"password": {test.password},
 			}
 
-			req, err := http.NewRequest(http.MethodPost, ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+			req, err := http.NewRequest(http.MethodPost, ts.URL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9370,7 +9370,7 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.
 		t.Fatal(err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, tsURL+"/auth/login", strings.NewReader(form.Encode()))
+	req, err := http.NewRequest(http.MethodPost, tsURL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10574,7 +10574,7 @@ func TestConsoleCookieExpiration(t *testing.T) {
 			consoleSessionMaxAge: 1 * time.Second,
 			consoleSessionCapAge: 1 * time.Hour,
 			sleepDuration:        2 * time.Second,
-			expectedLocation:     "/auth/login",
+			expectedLocation:     cdntypes.AuthLoginPath,
 		},
 		{
 			description:          "re-auth on expired cap window",
@@ -10584,7 +10584,7 @@ func TestConsoleCookieExpiration(t *testing.T) {
 			consoleSessionMaxAge: 1 * time.Hour,
 			consoleSessionCapAge: 1 * time.Second,
 			sleepDuration:        2 * time.Second,
-			expectedLocation:     "/auth/login",
+			expectedLocation:     cdntypes.AuthLoginPath,
 		},
 		{
 			description:          "valid cookie got MaxAge renewed",
@@ -10689,7 +10689,7 @@ func TestValidateRelativeRedirect(t *testing.T) {
 	}{
 		{name: "console root", input: "/console", wantAccept: true},
 		{name: "nested console path", input: "/console/org/foo/services?x=y#z", wantAccept: true},
-		{name: "auth login", input: "/auth/login", wantAccept: true},
+		{name: "auth login", input: cdntypes.AuthLoginPath, wantAccept: true},
 		{name: "bare root", input: "/", wantAccept: true},
 
 		{name: "empty", input: "", wantErrText: "empty"},
