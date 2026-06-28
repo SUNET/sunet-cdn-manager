@@ -8149,14 +8149,12 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 			t.Fatalf("expected 302 from login, got %d", getResp.StatusCode)
 		}
 
-		loginPath := "/auth/login"
-
-		getLocation := getResp.Header.Get("Location")
-		if getLocation != loginPath {
-			t.Fatalf("expected unauth redirect to '%s', got %s", loginPath, getLocation)
+		location := getResp.Header.Get("Location")
+		if location != authLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
 		}
 
-		req, err = http.NewRequest("POST", ts.URL+"/auth/login", strings.NewReader(form.Encode()))
+		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -8213,6 +8211,178 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 
 		if getResp.Header.Get("HX-Redirect") != authLoginPath {
 			t.Fatalf("expected HX-Redirect header with path '%s', got '%s'", authLoginPath, getResp.Header.Get("HX-Redirect"))
+		}
+	})
+
+	// Verify that a superuser with org membership doing a non-GET of a specific URL
+	// while unauthenticated is NOT redirected there after login but instead
+	// being sent to the default location.
+	t.Run("superuser with org gets redirected to default page after auth for non-GET", func(t *testing.T) {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		client := &http.Client{
+			Jar: jar,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		form := url.Values{
+			"username": {"admin-with-org"},
+			"password": {validAdminPassword},
+		}
+
+		origNonGetPath := "/console/org/sunet/domains"
+
+		// Unauthenticated non-GET request that triggers a login redirect.
+		// Non-GET requests should not set a return-to target, so after
+		// login we should go to the default page.
+		req, err := http.NewRequest(http.MethodPut, ts.URL+origNonGetPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Need to set Sec-Fetch-Site otherwise we get a 403 from the
+		// anti CSRF middleware since we use a PUT here.
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Initial non-GET returns 302 -> /auth/login
+		nonGetResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonGetResp.Body.Close()
+
+		if nonGetResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", nonGetResp.StatusCode)
+		}
+
+		location := nonGetResp.Header.Get("Location")
+		if location != authLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
+		}
+
+		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Login POST returns 302 -> default consolePath rather than origNonGetPath
+		loginResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		loginResp.Body.Close()
+
+		if loginResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
+		}
+
+		loginLocation := loginResp.Header.Get("Location")
+		if loginLocation != consolePath {
+			t.Fatalf("expected login redirect to '%s', got %s", consolePath, loginLocation)
+		}
+	})
+
+	// Verify that a superuser with org membership first doing a GET
+	// followed by a non-GET of a specific URL while unauthenticated is NOT
+	// redirected there after login but instead being sent to the default
+	// location.
+	t.Run("superuser with org gets redirected to default page after auth for non-GET following a GET", func(t *testing.T) {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		client := &http.Client{
+			Jar: jar,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		form := url.Values{
+			"username": {"admin-with-org"},
+			"password": {validAdminPassword},
+		}
+
+		origPath := "/console/org/sunet/domains"
+
+		// Unauthenticated request to init session cookie
+		req, err := http.NewRequest("GET", ts.URL+origPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Initial GET returns 302 -> /auth/login
+		getResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		getResp.Body.Close()
+
+		if getResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", getResp.StatusCode)
+		}
+
+		location := getResp.Header.Get("Location")
+		if location != authLoginPath {
+			t.Fatalf("expected unauth redirect to '%s', got %s", authLoginPath, location)
+		}
+
+		// Follow up with unauthenticated non-GET request that triggers a login redirect.
+		// Non-GET requests should not set a return-to target, so after
+		// login we should go to the default page because the server
+		// cleared up the data from the previous request.
+		req, err = http.NewRequest(http.MethodPut, ts.URL+origPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Need to set Sec-Fetch-Site otherwise we get a 403 from the
+		// anti CSRF middleware since we use a PUT here.
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Initial non-GET returns 302 -> /auth/login
+		nonGetResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonGetResp.Body.Close()
+
+		if nonGetResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", nonGetResp.StatusCode)
+		}
+
+		location = nonGetResp.Header.Get("Location")
+		if location != authLoginPath {
+			t.Fatalf("expected unauth redirect for follow-up request to '%s', got %s", authLoginPath, location)
+		}
+
+		req, err = http.NewRequest(http.MethodPost, ts.URL+authLoginPath, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		// Login POST returns 302 -> default consolePath rather than origNonGetPath
+		loginResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		loginResp.Body.Close()
+
+		if loginResp.StatusCode != http.StatusFound {
+			t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
+		}
+
+		loginLocation := loginResp.Header.Get("Location")
+		if loginLocation != consolePath {
+			t.Fatalf("expected login redirect to '%s', got %s", consolePath, loginLocation)
 		}
 	})
 
@@ -9242,7 +9412,6 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.
 	}
 
 	// Make the client follow redirects again so downstream users work as normal clients
-	// client.CheckRedirect = nil
 	client.CheckRedirect = nil
 
 	return client, sessionCookie

@@ -3200,30 +3200,46 @@ func renderLoginPage(w http.ResponseWriter, r *http.Request, loginFailed bool) e
 func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessions.Session) {
 	logger := hlog.FromRequest(r)
 
-	// Stash the path the user was trying to reach so we can send
-	// them back there after authentication. r.URL.RequestURI() is
-	// "path?query" with no scheme/host which guarantees same-origin
-	// by construction. If a user has e.g. multiple tabs open this results
-	// in Last-write-wins which should be good enough: a single browser
-	// session has a single most-recent intent.
-	//
-	// The main reason of storing the return-to path in the session over
-	// using e.g. a return_to query param is that this means we can trust
-	// that the value was written by our server rather than whatever free-form
-	// input was forged by a client via e.g. "?return_to=https://evil.example..."
-	requestURI := r.URL.RequestURI()
+	// If this was a GET, store the target so we can send the user back to
+	// where they were trying to go. For other methods like POST or PUT we
+	// cannot easily redirect the browser to the correct place, so just send
+	// them to the console.
+	if r.Method == http.MethodGet {
+		// Stash the path the user was trying to reach so we can send
+		// them back there after authentication. r.URL.RequestURI() is
+		// "path?query" with no scheme/host which guarantees same-origin
+		// by construction. If a user has e.g. multiple tabs open this results
+		// in Last-write-wins which should be good enough: a single browser
+		// session has a single most-recent intent.
+		//
+		// The main reason of storing the return-to path in the session over
+		// using e.g. a return_to query param is that this means we can trust
+		// that the value was written by our server rather than whatever free-form
+		// input was forged by a client via e.g. "?return_to=https://evil.example..."
+		requestURI := r.URL.RequestURI()
 
-	// Try to not exceed cookie size limits
-	if len(requestURI) > 1024 {
-		http.Error(w, fmt.Sprintf("request URI too long for session cookie: %d", len(requestURI)), http.StatusRequestURITooLong)
-		return
-	}
+		// Try to not exceed cookie size limits
+		if len(requestURI) > 1024 {
+			http.Error(w, fmt.Sprintf("request URI too long for session cookie: %d", len(requestURI)), http.StatusRequestURITooLong)
+			return
+		}
 
-	session.Values[pendingReturnToKey] = requestURI
-	if err := session.Save(r, w); err != nil {
-		// Losing the deep-link is acceptable degradation; failing
-		// the response is not.
-		logger.Err(err).Msg("redirectToLoginPage: failed to save pending return-to in session")
+		session.Values[pendingReturnToKey] = requestURI
+		if err := session.Save(r, w); err != nil {
+			// Losing the deep-link is acceptable degradation; failing
+			// the response is not.
+			logger.Err(err).Msg("redirectToLoginPage: failed to save pending return-to in session")
+		}
+	} else {
+		// For other methods clean up potentially stale redirect
+		// target to make sure we end up at the default location
+		// instead.
+		if _, ok := session.Values[pendingReturnToKey]; ok {
+			delete(session.Values, pendingReturnToKey)
+			if err := session.Save(r, w); err != nil {
+				logger.Err(err).Msg("redirectToLoginPage: failed to clear return-to in session")
+			}
+		}
 	}
 
 	if r.Header.Get("HX-Request") != "" {
@@ -10071,7 +10087,7 @@ func generatePassword(length int) (string, error) {
 		}
 
 		if !bigI.IsInt64() {
-			return "", errors.New("rand.Int can not be represented as int64")
+			return "", errors.New("rand.Int cannot be represented as int64")
 		}
 
 		b.WriteRune(chars[int(bigI.Int64())])
