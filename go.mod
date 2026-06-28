@@ -1,6 +1,6 @@
 module github.com/SUNET/sunet-cdn-manager
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
