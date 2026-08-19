@@ -1,6 +1,3 @@
-  if ({{ range $index, $domain := $.Domains }}{{if gt $index 0}} && {{end}}req.http.host != "{{$domain}}"{{end}}) {
-    return(synth(400,"Unknown Host header."));
-  }
   if (proxy.is_ssl()) {
     {{- if .HTTPSEnabled}}
     set req.http.X-Forwarded-Proto = "https";
