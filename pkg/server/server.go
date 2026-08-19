@@ -270,7 +270,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 		return cdnerrors.ErrUnprocessable
 	}
 
-	vcl, err := generateCompleteVcl(confTemplates, originGroups, origins, iSvc.Domains, iSvc.VCLTemplate)
+	vcl, err := generateCompleteVcl(confTemplates, originGroups, origins, iSvc.VCLTemplate)
 	if err != nil {
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
@@ -6578,7 +6578,6 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				confTemplates,
 				originGroups,
 				origins,
-				domains,
 				vclTemplate,
 			)
 			if err != nil {
@@ -7331,7 +7330,6 @@ type vclPreambleInput struct {
 type vclMacroInput struct {
 	DefaultOriginGroupName string
 	OriginGroups           []enrichedOriginGroup
-	Domains                []cdntypes.DomainString
 	DefaultForHTTPS        bool
 	DefaultForHTTP         bool
 	HTTPSEnabled           bool
@@ -7345,7 +7343,7 @@ type enrichedOriginGroup struct {
 	HTTPS bool
 }
 
-func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, domains []cdntypes.DomainString, vclTemplate string) (string, error) {
+func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, vclTemplate string) (string, error) {
 	if err := validateVCLMacros(vclTemplate); err != nil {
 		return "", cdnerrors.NewValidationError(err.Error())
 	}
@@ -7442,7 +7440,6 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	macroInput := vclMacroInput{
 		DefaultOriginGroupName: defaultOriginGroup,
 		OriginGroups:           referencedOriginGroups,
-		Domains:                domains,
 		DefaultForHTTPS:        defaultForHTTPS,
 		DefaultForHTTP:         defaultForHTTP,
 		HTTPSEnabled:           haProxyHTTPS,
@@ -9052,7 +9049,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, err
 			}
 
-			vcl, err := generateCompleteVcl(confTemplates, svc.OriginGroups, svc.Origins, svc.Domains, svc.VCLTemplate)
+			vcl, err := generateCompleteVcl(confTemplates, svc.OriginGroups, svc.Origins, svc.VCLTemplate)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
 				return nil, err
