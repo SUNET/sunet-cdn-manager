@@ -221,6 +221,71 @@ func jsonAddButtonVals(orgName string, serviceName string) string {
 	return string(b)
 }
 
+type addOriginButtonVals struct {
+	Org     string `json:"org"`
+	Service string `json:"service"`
+	Group   string `json:"group"`
+}
+
+// jsonAddOriginButtonVals is like jsonAddButtonVals but also pins the
+// "group" hx-vals parameter to a known value (used for the pinned default
+// origin group, whose index never changes and therefore does not need to be
+// computed dynamically at click time the way conditional group indices do).
+//
+// https://htmx.org/attributes/hx-vals/
+func jsonAddOriginButtonVals(orgName, serviceName, group string) string {
+	abv := addOriginButtonVals{
+		Org:     orgName,
+		Service: serviceName,
+		Group:   group,
+	}
+
+	b, err := json.Marshal(abv)
+	if err != nil {
+		// Should never happen
+		panic(err)
+	}
+
+	return string(b)
+}
+
+// originsForGroup returns the subset of origins belonging to groupID,
+// preserving the order they appear in origins.
+func originsForGroup(origins []cdntypes.Origin, groupID pgtype.UUID) []cdntypes.Origin {
+	out := []cdntypes.Origin{}
+	for _, o := range origins {
+		if o.OriginGroupID == groupID {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// conditionalOriginGroups filters groups (typically
+// ServiceVersionCloneData.OriginGroups, already ordered by Position) down to
+// the non-default (conditional) groups, preserving order.
+func conditionalOriginGroups(groups []cdntypes.OriginGroup) []cdntypes.OriginGroup {
+	out := []cdntypes.OriginGroup{}
+	for _, g := range groups {
+		if !g.DefaultGroup {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// defaultOriginGroupID returns the ID of the default origin group among
+// groups, or the zero value (which will not match any real origin group ID)
+// if there is none, e.g. when there is no clone data.
+func defaultOriginGroupID(groups []cdntypes.OriginGroup) pgtype.UUID {
+	for _, g := range groups {
+		if g.DefaultGroup {
+			return g.ID
+		}
+	}
+	return pgtype.UUID{}
+}
+
 // Make it easier to print pre-formatted text for use in the html template
 func tokenCurlCommand(tokenURL *url.URL) string {
 	return fmt.Sprintf(`curl -X POST %s \

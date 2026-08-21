@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"text/template"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -59,6 +58,8 @@ const (
 	// User that connects to the database
 	dbUser     = "cdn"
 	dbPassword = "cdn-password"
+
+	contentTypeJSON = "application/json"
 )
 
 var pgContainer *postgres.PostgresContainer
@@ -135,20 +136,6 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2', '(1000110000, 1000119999)' FROM orgs WHERE name='org3'",
 		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3', '(1000120000, 1000129999)' FROM orgs WHERE name='org3'",
 
-		// Service origin groups
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000001', id, true, 'default' FROM services WHERE name='org1-service1'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000002', id, true, 'default' FROM services WHERE name='org1-service2'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000003', id, true, 'default' FROM services WHERE name='org1-service3'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000004', id, true, 'default' FROM services WHERE name='org1-service4'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000005', id, true, 'default' FROM services WHERE name='org1-service5'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000006', id, true, 'default' FROM services WHERE name='org1-service6'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000007', id, true, 'default' FROM services WHERE name='org2-service1'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000008', id, true, 'default' FROM services WHERE name='org2-service2'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000009', id, true, 'default' FROM services WHERE name='org2-service3'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000010', id, true, 'default' FROM services WHERE name='org3-service1'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000011', id, true, 'default' FROM services WHERE name='org3-service2'",
-		"INSERT INTO service_origin_groups (id, service_id, default_group, name) SELECT '00000020-0000-0000-0000-000000000012', id, true, 'default' FROM services WHERE name='org3-service3'",
-
 		// Service versions
 		// org1, last version is active
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org1-service1'",
@@ -180,6 +167,17 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org3-service1'",
 		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000009', id, version_counter FROM services WHERE name='org3-service1'",
 
+		// Service origin groups (one default group per service version)
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000001', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000002', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000003', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000004', '00000004-0000-0000-0000-000000000004', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000005', '00000004-0000-0000-0000-000000000005', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000006', '00000004-0000-0000-0000-000000000006', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000007', '00000004-0000-0000-0000-000000000007', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000008', '00000004-0000-0000-0000-000000000008', true, 'default', 0)",
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000009', '00000004-0000-0000-0000-000000000009', true, 'default', 0)",
+
 		// Roles
 		"INSERT INTO roles (id, name, superuser) VALUES ('00000005-0000-0000-0000-000000000001', 'admin', TRUE)",
 		"INSERT INTO roles (id, name) VALUES ('00000005-0000-0000-0000-000000000002', 'user')",
@@ -203,15 +201,15 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 
 		// Origins
 		// org1-service1-version3
-		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
-		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000001', '198.51.100.11', 443, true)",
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000003', '198.51.100.10', 80, false)",
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000003', '198.51.100.11', 443, true)",
 		// org1-service1-version2
-		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000002', '00000020-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000002', '00000020-0000-0000-0000-000000000002', '198.51.100.10', 80, false)",
 		// org1-service1-version1
 		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000004', '00000004-0000-0000-0000-000000000001', '00000020-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
 
 		// org2-service1-version2
-		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000005', '00000004-0000-0000-0000-000000000005', '00000020-0000-0000-0000-000000000008', '198.51.100.20', 80, false)",
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000005', '00000004-0000-0000-0000-000000000005', '00000020-0000-0000-0000-000000000005', '198.51.100.20', 80, false)",
 
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
@@ -632,38 +630,12 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		return nil, nil, err
 	}
 
-	confTemplates := configTemplates{}
-
-	confTemplates.vclPreamble, err = template.ParseFS(templateFS, "templates/vcl-preamble.vcl")
+	confTemplates, err := newConfigTemplates()
 	if err != nil {
 		if dbPoolCreated {
 			tsi.dbPool.Close()
 		}
-		t.Fatalf("unable to create VCL preamble template: %v", err)
-	}
-
-	confTemplates.vclMacroRecv, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_recv.vcl")
-	if err != nil {
-		if dbPoolCreated {
-			tsi.dbPool.Close()
-		}
-		t.Fatalf("unable to create VCL macro vcl_recv template: %v", err)
-	}
-
-	confTemplates.vclMacroBackendResp, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_response.vcl")
-	if err != nil {
-		if dbPoolCreated {
-			tsi.dbPool.Close()
-		}
-		t.Fatalf("unable to create VCL macro vcl_backend_response template: %v", err)
-	}
-
-	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
-	if err != nil {
-		if dbPoolCreated {
-			tsi.dbPool.Close()
-		}
-		t.Fatalf("unable to create haproxy template: %v", err)
+		t.Fatalf("unable to create config templates: %v", err)
 	}
 
 	var argon2Mutex sync.Mutex
@@ -1220,7 +1192,7 @@ func TestPostUsers(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -1356,7 +1328,7 @@ func TestPutUser(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -1628,7 +1600,7 @@ func TestPutPassword(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -1693,7 +1665,7 @@ func testAuth(t *testing.T, ts *httptest.Server, username string, userID string,
 
 	req.SetBasicAuth(username, password)
 
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentTypeJSON)
 
 	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
 	if err != nil {
@@ -2009,7 +1981,7 @@ func createKeycloakAdminClient(t *testing.T, adminClient *http.Client, baseURL s
 	}
 	u.Path = path.Join("admin/realms", realm, "clients")
 
-	createResp, err := adminClient.Post(u.String(), "application/json", bodyReader)
+	createResp, err := adminClient.Post(u.String(), contentTypeJSON, bodyReader)
 	if err != nil {
 		return "", "", err
 	}
@@ -2077,7 +2049,7 @@ func sendKeycloakReq(t *testing.T, client *http.Client, method string, url strin
 		return nil, err
 	}
 	if reqBody != nil {
-		req.Header.Add("Content-Type", "application/json")
+		req.Header.Add("Content-Type", contentTypeJSON)
 	}
 
 	if queryParams != nil {
@@ -3585,7 +3557,7 @@ func TestPostOrganizations(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -4547,17 +4519,19 @@ func TestPostServiceVersion(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description     string
-		username        string
-		password        string
-		expectedStatus  int
-		newService      string
-		orgNameOrID     string
-		serviceNameOrID string
-		domains         []string
-		origins         []cdntypes.InputOrigin
-		active          bool
-		vclTemplateFile string
+		description        string
+		username           string
+		password           string
+		expectedStatus     int
+		newService         string
+		orgNameOrID        string
+		serviceNameOrID    string
+		domains            []string
+		conditionalGroups  []cdntypes.InputConditionalOriginGroup
+		defaultGroup       cdntypes.InputDefaultOriginGroup
+		active             bool
+		vclTemplateFile    string
+		assertOriginGroups bool
 	}{
 		{
 			description:     "successful superuser request with ID",
@@ -4566,19 +4540,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "198.51.100.20",
-					Port:        443,
-					TLS:         true,
-					VerifyTLS:   true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true, VerifyTLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusCreated,
@@ -4592,18 +4557,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "198.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusCreated,
@@ -4617,18 +4574,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"nonexistant.com"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "198.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4642,18 +4591,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.nu"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "198.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4667,18 +4608,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "198.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4692,18 +4625,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "org1-service1",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusCreated,
@@ -4717,18 +4642,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "does-not-exist",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4742,18 +4659,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"1.com", "2.com", "3.com", "4.com", "5.com", "6.com", "7.com", "8.com", "9.com", "10.com", "11.com"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4767,18 +4676,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        strings.Repeat("a", 254),
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: strings.Repeat("a", 254), Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4792,18 +4693,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{strings.Repeat("a", 254), "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4817,18 +4710,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: strings.Repeat("a", 64),
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4842,18 +4727,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusUnprocessableEntity,
@@ -4867,18 +4744,10 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusCreated,
@@ -4892,21 +4761,238 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
-			origins: []cdntypes.InputOrigin{
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.20",
-					Port:        443,
-					TLS:         true,
-				},
-				{
-					OriginGroup: "default",
-					Host:        "192.51.100.21",
-					Port:        80,
-					TLS:         false,
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusForbidden,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, missing default group",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			defaultGroup:    cdntypes.InputDefaultOriginGroup{},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, default group with zero origins",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			defaultGroup:    cdntypes.InputDefaultOriginGroup{},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, conditional group with empty condition",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, duplicate origin group names",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "default",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, identical conditions on two groups",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "api",
+					Condition: "req.url ~ \"^/api/\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+				{
+					Name:      "api2",
+					Condition: "req.url ~ \"^/api/\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.31", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, condition fails varnish compilation",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.nonexistent.field == true",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "successful superuser request with conditional origin group",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			// The group name starts with a letter and only contains
+			// [-a-z0-9], so it passes huma's request pattern validation,
+			// but it fails the DB's valid_name/is_valid_dns_label CHECK
+			// constraint since it is UUID-shaped (is_not_uuid()). This
+			// exercises insertServiceVersion's pgCheckViolation mapping to
+			// cdnerrors.ErrCheckViolation rather than a bare 500.
+			description:     "failed superuser request, conditional group name is UUID-shaped",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "abcdef01-2345-6789-abcd-ef0123456789",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.31", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
+			active:          true,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			// The same host:port pair is used in both the conditional
+			// group and the default group. Nothing at the Go validation
+			// level rejects this, so it reaches the DB and trips
+			// service_origins' UNIQUE(service_version_id, host, port)
+			// constraint, exercising insertServiceVersion's
+			// pgUniqueViolation mapping to cdnerrors.DuplicateOriginError
+			// rather than a bare 500.
+			description:     "failed superuser request, duplicate origin host:port across groups",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.77", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.77", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:  http.StatusUnprocessableEntity,
 			active:          true,
 			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
@@ -4915,16 +5001,18 @@ func TestPostServiceVersion(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			newServiceVersion := struct {
-				Org         string                 `json:"org"`
-				Active      bool                   `json:"active"`
-				Domains     []string               `json:"domains"`
-				Origins     []cdntypes.InputOrigin `json:"origins"`
-				VCLTemplate string                 `json:"vcl_template"`
+				Org                     string                                 `json:"org"`
+				Active                  bool                                   `json:"active"`
+				Domains                 []string                               `json:"domains"`
+				ConditionalOriginGroups []cdntypes.InputConditionalOriginGroup `json:"conditional_origin_groups,omitempty"`
+				DefaultOriginGroup      cdntypes.InputDefaultOriginGroup       `json:"default_origin_group"`
+				VCLTemplate             string                                 `json:"vcl_template"`
 			}{
-				Org:     test.orgNameOrID,
-				Active:  test.active,
-				Domains: test.domains,
-				Origins: test.origins,
+				Org:                     test.orgNameOrID,
+				Active:                  test.active,
+				Domains:                 test.domains,
+				ConditionalOriginGroups: test.conditionalGroups,
+				DefaultOriginGroup:      test.defaultGroup,
 			}
 
 			var vclTemplateContentBytes []byte
@@ -4972,6 +5060,119 @@ func TestPostServiceVersion(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.assertOriginGroups {
+				var createdVersion cdntypes.ServiceVersion
+				if err := json.Unmarshal(jsonData, &createdVersion); err != nil {
+					t.Fatalf("unable to unmarshal created service version: %s", err)
+				}
+
+				type storedOriginGroupRow struct {
+					name         string
+					defaultGroup bool
+					condition    *string
+					position     int64
+				}
+
+				rows, err := dbPool.Query(
+					ctx,
+					"SELECT name, default_group, condition, position FROM service_origin_groups WHERE service_version_id = $1 ORDER BY position",
+					createdVersion.ID,
+				)
+				if err != nil {
+					t.Fatalf("unable to query service_origin_groups: %s", err)
+				}
+
+				var stored []storedOriginGroupRow
+				for rows.Next() {
+					var row storedOriginGroupRow
+					if err := rows.Scan(&row.name, &row.defaultGroup, &row.condition, &row.position); err != nil {
+						t.Fatalf("unable to scan service_origin_groups row: %s", err)
+					}
+					stored = append(stored, row)
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatalf("error iterating service_origin_groups rows: %s", err)
+				}
+
+				// Build the expected rows from the submitted payload:
+				// conditional groups in list order at positions 0..n-1
+				// with their condition text, default group last with a
+				// NULL condition.
+				var expected []storedOriginGroupRow
+				for _, cg := range test.conditionalGroups {
+					expected = append(expected, storedOriginGroupRow{
+						name:         cg.Name,
+						defaultGroup: false,
+						condition:    &cg.Condition,
+						position:     int64(len(expected)),
+					})
+				}
+				expected = append(expected, storedOriginGroupRow{
+					name:         cdntypes.DefaultOriginGroupName,
+					defaultGroup: true,
+					condition:    nil,
+					position:     int64(len(expected)),
+				})
+
+				if len(stored) != len(expected) {
+					t.Fatalf("service_origin_groups row count mismatch: got %d, want %d (%+v)", len(stored), len(expected), stored)
+				}
+				for i, want := range expected {
+					got := stored[i]
+					if got.name != want.name || got.defaultGroup != want.defaultGroup || got.position != want.position {
+						t.Errorf("service_origin_groups row %d mismatch: got %+v, want name=%s default_group=%v position=%d", i, got, want.name, want.defaultGroup, want.position)
+					}
+					switch {
+					case want.condition == nil && got.condition != nil:
+						t.Errorf("service_origin_groups row %d: got condition %q, want NULL", i, *got.condition)
+					case want.condition != nil && got.condition == nil:
+						t.Errorf("service_origin_groups row %d: got NULL condition, want %q", i, *want.condition)
+					case want.condition != nil && got.condition != nil && *want.condition != *got.condition:
+						t.Errorf("service_origin_groups row %d: got condition %q, want %q", i, *got.condition, *want.condition)
+					}
+				}
+
+				// Additional API-side coverage: fetch the generated VCL for
+				// the created version and confirm the selection chain lines
+				// are present.
+				vclReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/service-versions/"+strconv.FormatInt(createdVersion.Version, 10)+"/vcl", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				vclValues := vclReq.URL.Query()
+				vclValues.Add("org", test.orgNameOrID)
+				vclReq.URL.RawQuery = vclValues.Encode()
+				vclReq.SetBasicAuth(test.username, test.password)
+
+				vclResp, err := http.DefaultClient.Do(vclReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer vclResp.Body.Close()
+
+				vclJSONData, err := io.ReadAll(vclResp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if vclResp.StatusCode != http.StatusOK {
+					t.Fatalf("GET service-versions/{version}/vcl unexpected status code: %d (%s)", vclResp.StatusCode, string(vclJSONData))
+				}
+
+				var vclResult cdntypes.ServiceVersionVCL
+				if err := json.Unmarshal(vclJSONData, &vclResult); err != nil {
+					t.Fatalf("unable to unmarshal service version VCL response: %s", err)
+				}
+
+				wantChainLine := `if (req.http.host == "example.com") { # origin group "beta" (1/1)`
+				wantElseLine := `} else { # default origin group "default"`
+				if !strings.Contains(vclResult.VCL, wantChainLine) {
+					t.Errorf("generated VCL missing chain line %q\n---\n%s", wantChainLine, vclResult.VCL)
+				}
+				if !strings.Contains(vclResult.VCL, wantElseLine) {
+					t.Errorf("generated VCL missing else line %q\n---\n%s", wantElseLine, vclResult.VCL)
+				}
+			}
 		})
 	}
 }
@@ -5108,237 +5309,6 @@ func TestActivateServiceVersion(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Fatalf("GET service versions unexpected status code: %d (%s)", resp.StatusCode, string(r))
-			}
-
-			jsonData, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			t.Logf("%s\n", jsonData)
-		})
-	}
-}
-
-func TestGetOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, testServerInput{})
-	if dbPool != nil {
-		defer dbPool.Close()
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Close()
-
-	tests := []struct {
-		description     string
-		username        string
-		password        string
-		expectedStatus  int
-		org             string
-		serviceNameOrID string
-		orgNameOrID     string
-	}{
-		{
-			description:     "successful superuser request with id",
-			username:        "admin",
-			password:        validAdminPassword,
-			expectedStatus:  http.StatusOK,
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "successful superuser request with name",
-			username:        "admin",
-			password:        validAdminPassword,
-			expectedStatus:  http.StatusOK,
-			serviceNameOrID: "org1-service1",
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "successful user request with id",
-			username:        "username1",
-			password:        validUserPassword,
-			expectedStatus:  http.StatusOK,
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "failed user request with id but wrong password",
-			username:        "username1",
-			password:        "password1-wrong",
-			expectedStatus:  http.StatusUnauthorized,
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "successful user request with name",
-			username:        "username1",
-			password:        validUserPassword,
-			expectedStatus:  http.StatusOK,
-			serviceNameOrID: "org1-service1",
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "failed user request not assigned to org",
-			username:        "username3-no-org",
-			password:        "password3",
-			expectedStatus:  http.StatusForbidden,
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-		},
-		{
-			description:     "failed user request name without org",
-			username:        "username1",
-			password:        validUserPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
-			serviceNameOrID: "org1-service1",
-		},
-		{
-			description:     "failed superuser request with name, missing org",
-			username:        "admin",
-			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
-			serviceNameOrID: "org1-service1",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if test.orgNameOrID != "" {
-				values := req.URL.Query()
-				values.Add("org", test.orgNameOrID)
-				req.URL.RawQuery = values.Encode()
-			}
-
-			req.SetBasicAuth(test.username, test.password)
-
-			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != test.expectedStatus {
-				r, err := io.ReadAll(resp.Body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Fatalf("GET origin groups unexpected status code: %d (%s)", resp.StatusCode, string(r))
-			}
-
-			jsonData, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			t.Logf("%s\n", jsonData)
-		})
-	}
-}
-
-func TestPostOriginGroups(t *testing.T) {
-	ts, dbPool, err := prepareServer(t, testServerInput{})
-	if dbPool != nil {
-		defer dbPool.Close()
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Close()
-
-	tests := []struct {
-		description     string
-		username        string
-		password        string
-		expectedStatus  int
-		orgNameOrID     string
-		serviceNameOrID string
-		name            string
-	}{
-		{
-			description:     "successful superuser request with ID",
-			username:        "admin",
-			password:        validAdminPassword,
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-			name:            "origin-group-new1",
-			expectedStatus:  http.StatusCreated,
-		},
-		{
-			description:     "successful superuser request with ID",
-			username:        "admin",
-			password:        validAdminPassword,
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-			name:            "origin-group-new2",
-			expectedStatus:  http.StatusCreated,
-		},
-		{
-			description:     "failed superuser request with invalid DNS label name",
-			username:        "admin",
-			password:        validAdminPassword,
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-			name:            "INVALID NAME",
-			expectedStatus:  http.StatusUnprocessableEntity,
-		},
-		{
-			// UUID starts with a letter to bypass Huma's DNS label pattern
-			// validation — this exercises the database CHECK constraint
-			description:     "failed superuser request with UUID name",
-			username:        "admin",
-			password:        validAdminPassword,
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-			name:            "abcdef01-2345-6789-abcd-ef0123456789",
-			expectedStatus:  http.StatusUnprocessableEntity,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			newOriginGroup := struct {
-				Name string `json:"name"`
-			}{
-				Name: test.name,
-			}
-
-			b, err := json.Marshal(newOriginGroup)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			t.Log(string(b))
-
-			r := bytes.NewReader(b)
-
-			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/origin-groups", r)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if test.orgNameOrID != "" {
-				values := req.URL.Query()
-				values.Add("org", test.orgNameOrID)
-				req.URL.RawQuery = values.Encode()
-			}
-
-			req.SetBasicAuth(test.username, test.password)
-
-			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != test.expectedStatus {
-				r, err := io.ReadAll(resp.Body)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Fatalf("POST origin group unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
 			jsonData, err := io.ReadAll(resp.Body)
@@ -5690,7 +5660,7 @@ func TestPostIPNetworks(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -5743,7 +5713,7 @@ func TestDeleteIPNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentTypeJSON)
 	req.SetBasicAuth("admin", validAdminPassword)
 
 	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
@@ -6211,7 +6181,7 @@ func TestPostCacheNodes(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -6846,7 +6816,7 @@ func TestPostL4LBNodes(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 
 			req.SetBasicAuth(test.username, test.password)
 
@@ -7416,7 +7386,7 @@ func TestPutCacheNode(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 			req.SetBasicAuth(test.username, test.password)
 
 			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
@@ -7668,7 +7638,7 @@ func TestPutL4LBNode(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 			req.SetBasicAuth(test.username, test.password)
 
 			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
@@ -7911,7 +7881,7 @@ func TestPutNodeGroup(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 			req.SetBasicAuth(test.username, test.password)
 
 			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
@@ -8792,7 +8762,7 @@ func TestPutOrganization(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentTypeJSON)
 			req.SetBasicAuth(test.username, test.password)
 
 			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
