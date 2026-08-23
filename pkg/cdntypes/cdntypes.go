@@ -14,6 +14,8 @@ const (
 	AuthLoginPath = "/auth/login"
 	// AuthLogoutPath is the HTTP path for the logout endpoint.
 	AuthLogoutPath = "/auth/logout"
+
+	DefaultOriginGroupName = "default"
 )
 
 // AuthData represents authentication data for a given user or org client credential.
@@ -116,37 +118,55 @@ type ServiceVersionConfig struct {
 }
 
 type ServiceVersionCloneData struct {
-	VCLTemplate string         `json:"vcl_template" doc:"The VCL template content"`
-	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	VCLTemplate  string         `json:"vcl_template" doc:"The VCL template content"`
+	Domains      []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	OriginGroups []OriginGroup  `json:"origin_groups" doc:"The origin groups of the cloned version"`
+	Origins      []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
 }
 
 // What data is expected when handling a request to add a service version
 type InputServiceVersion struct {
 	ServiceVersion
-	VCLTemplate string         `json:"vcl_template" doc:"The VCL template content" validate:"min=1,max=1048576"`
-	Domains     []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
-	Origins     []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	VCLTemplate             string                        `json:"vcl_template" doc:"The VCL template content" validate:"min=1,max=1048576"`
+	Domains                 []DomainString                `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
+	ConditionalOriginGroups []InputConditionalOriginGroup `json:"conditional_origin_groups" doc:"Ordered conditional origin groups; list order is selection priority" validate:"dive"`
+	DefaultOriginGroup      InputDefaultOriginGroup       `json:"default_origin_group" doc:"Fallback origin group used when no condition matches"`
 }
 
 type CreateServiceVersionOrigin struct {
-	OriginGroup     string `schema:"origin-group" validate:"gte=1,min=1,max=63"`
-	OriginHost      string `schema:"host" validate:"gte=1,min=1,max=253"`
-	OriginPort      int    `schema:"port" validate:"gte=1,min=1,max=65535"`
+	OriginHost      string `schema:"host" validate:"min=1,max=253"`
+	OriginPort      int    `schema:"port" validate:"gte=1,lte=65535"`
 	OriginTLS       bool   `schema:"tls"`
 	OriginVerifyTLS bool   `schema:"verify-tls"`
 }
 
-type CreateServiceVersionForm struct {
-	VCLTemplate string                       `schema:"vcl_template" validate:"min=1,max=1048576"`
-	Domains     []DomainString               `schema:"domains" validate:"dive,min=1,max=253"`
-	Origins     []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,dive"`
+type CreateServiceVersionConditionalGroup struct {
+	Name      string                       `schema:"name" validate:"min=1,max=63"`
+	Condition string                       `schema:"condition" validate:"min=1"`
+	Origins   []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,max=10,dive"`
 }
 
+type CreateServiceVersionDefaultGroup struct {
+	Origins []CreateServiceVersionOrigin `schema:"origins" validate:"min=1,max=10,dive"`
+}
+
+type CreateServiceVersionForm struct {
+	VCLTemplate       string                                 `schema:"vcl_template" validate:"min=1,max=1048576"`
+	Domains           []DomainString                         `schema:"domains" validate:"dive,min=1,max=253"`
+	ConditionalGroups []CreateServiceVersionConditionalGroup `schema:"conditional-origin-groups" validate:"max=10,dive"`
+	DefaultGroup      CreateServiceVersionDefaultGroup       `schema:"default-origin-group"`
+}
+
+// Field order matters: queries aggregating origin groups build
+// (id, default_group, name, condition, position) records that pgx
+// decodes into this struct positionally, so the fields must stay in
+// that order and new fields must be added to those records as well.
 type OriginGroup struct {
 	ID           pgtype.UUID `json:"id" doc:"ID of origin group"`
 	DefaultGroup bool        `json:"defaut_group" example:"true" doc:"If the group is the default"`
 	Name         string      `json:"name"`
+	Condition    *string     `json:"condition,omitempty" doc:"VCL condition selecting this group; nil for the default group and legacy groups"`
+	Position     int64       `json:"position" doc:"Selection chain position within the service version"`
 }
 
 type NodeGroup struct {
@@ -156,11 +176,20 @@ type NodeGroup struct {
 }
 
 type InputOrigin struct {
-	OriginGroup string `json:"origin_group" doc:"ID or name of origin group"`
-	Host        string `json:"host" minLength:"1" maxLength:"253"`
-	Port        int    `json:"port" minimum:"1" maximum:"65535"`
-	TLS         bool   `json:"tls"`
-	VerifyTLS   bool   `json:"verify_tls"`
+	Host      string `json:"host" minLength:"1" maxLength:"253"`
+	Port      int    `json:"port" minimum:"1" maximum:"65535"`
+	TLS       bool   `json:"tls"`
+	VerifyTLS bool   `json:"verify_tls"`
+}
+
+type InputConditionalOriginGroup struct {
+	Name      string        `json:"name" doc:"Name of origin group" minLength:"1" maxLength:"63" pattern:"^[a-z]([-a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS label" validate:"min=1,max=63"`
+	Condition string        `json:"condition" doc:"VCL boolean expression selecting this group" minLength:"1" validate:"min=1"`
+	Origins   []InputOrigin `json:"origins" doc:"Origins belonging to this group" minItems:"1" maxItems:"10" validate:"min=1,dive"`
+}
+
+type InputDefaultOriginGroup struct {
+	Origins []InputOrigin `json:"origins" doc:"Origins belonging to the default group" minItems:"1" maxItems:"10" validate:"min=1,dive"`
 }
 
 type Origin struct {

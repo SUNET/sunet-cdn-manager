@@ -28,6 +28,3 @@ curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-cache-node.json 
 
 # A cache node will be added in maintenance mode by default (can be overriden in JSON on creation), to disable maintenance mode:
 curl -k -i -s -u admin:$admin_password -X PUT -d @sample-json/disable-maintenance.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/cache-nodes/example-name-for-cache-node/maintenance
-
-# Add additional origin group, this is used to be able to select different backend groups from varnish VCL
-curl -k -i -s -u admin:$admin_password -X POST -d @sample-json/add-origin-group.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/services/service1/origin-groups?org=testorg'

@@ -564,43 +564,67 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 	</article>
 	<article>
 		<header>
-			<strong>Origins</strong>
+			<strong>Origin groups</strong>
 		</header>
-		if len(sv.Origins) == 0 {
-			<p>No origins configured</p>
+		if len(sv.OriginGroups) == 0 {
+			<p>No origin groups configured</p>
 		} else {
-			<table>
-				<thead>
-					<tr>
-						<th scope="col">Host</th>
-						<th scope="col">Port</th>
-						<th scope="col">TLS</th>
-						<th scope="col">Verify TLS</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, origin := range sv.Origins {
-						<tr>
-							<td>{ origin.Host }</td>
-							<td>{ strconv.Itoa(origin.Port) }</td>
-							<td>
-								if origin.TLS {
-									<span aria-hidden="true">✅ </span>Enabled
-								} else {
-									<span aria-hidden="true">❌ </span>Disabled
-								}
-							</td>
-							<td>
-								if origin.VerifyTLS {
-									<span aria-hidden="true">✅ </span>Enabled
-								} else {
-									<span aria-hidden="true">❌ </span>Disabled
-								}
-							</td>
-						</tr>
+			// Groups arrive ordered by position, so conditional groups are
+			// listed in the order their conditions are evaluated, with the
+			// default group last.
+			for _, originGroup := range sv.OriginGroups {
+				<section>
+					<h4>
+						{ originGroup.Name }
+						if originGroup.DefaultGroup {
+							<small>(default group — used when no condition matches)</small>
+						}
+					</h4>
+					if originGroup.Condition != nil {
+						<p>Condition:</p>
+						<pre class="vcl-preview"><code>{ *originGroup.Condition }</code></pre>
+					} else if !originGroup.DefaultGroup {
+						<p><em>No condition: this group is only reachable through manual backend references in the VCL template.</em></p>
 					}
-				</tbody>
-			</table>
+					{{ groupOrigins := originsForGroup(sv.Origins, originGroup.ID) }}
+					if len(groupOrigins) == 0 {
+						<p>No origins in this group</p>
+					} else {
+						<table>
+							<thead>
+								<tr>
+									<th scope="col">Host</th>
+									<th scope="col">Port</th>
+									<th scope="col">TLS</th>
+									<th scope="col">Verify TLS</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, origin := range groupOrigins {
+									<tr>
+										<td>{ origin.Host }</td>
+										<td>{ strconv.Itoa(origin.Port) }</td>
+										<td>
+											if origin.TLS {
+												<span aria-hidden="true">✅ </span>Enabled
+											} else {
+												<span aria-hidden="true">❌ </span>Disabled
+											}
+										</td>
+										<td>
+											if origin.VerifyTLS {
+												<span aria-hidden="true">✅ </span>Enabled
+											} else {
+												<span aria-hidden="true">❌ </span>Disabled
+											}
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					}
+				</section>
+			}
 		}
 	</article>
 	<article>
@@ -627,37 +651,21 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 	}
 }
 
-templ OriginFieldSet(orgName string, serviceName string, index int, numFields int, submittedOrigin *cdntypes.CreateServiceVersionOrigin, cloneOrigin cdntypes.Origin, originGroups []cdntypes.OriginGroup, htmxRequest bool) {
-	<article id={ fmt.Sprintf("article-%s", strconv.Itoa(index)) }>
+// OriginFieldSet renders the host/port/tls/verify-tls fields for a single
+// origin. namePrefix is the dotted path of the origin's containing group
+// (e.g. "conditional-origin-groups.0.origins" or
+// "default-origin-group.origins") and index is this origin's position
+// within that group. numFields is the total number of origins currently in
+// the group, used only to decide the initial (pre-JS) disabled state of the
+// "Remove origin" button, since a group must always keep at least one
+// origin (server-side validation requires min=1); after any add/remove this
+// is re-derived live by the manager:formchanged handler in
+// CreateServiceVersionContent.
+templ OriginFieldSet(namePrefix string, index int, numFields int, submittedOrigin *cdntypes.CreateServiceVersionOrigin, cloneOrigin cdntypes.Origin) {
+	<article class="origin-fieldset">
 		<fieldset>
 			<legend>Origin</legend>
-			<label for={ fmt.Sprintf("origins.%d.origin-group", index) }>
-				Origin group
-				<select id={ fmt.Sprintf("origins.%d.origin-group", index) } name={ fmt.Sprintf("origins.%d.origin-group", index) }>
-					{{
-						var originGroupSubmitMatch bool
-						var originGroupCloneMatch bool
-						for _, originGroup := range originGroups {
-							if submittedOrigin != nil && originGroup.Name == submittedOrigin.OriginGroup {
-								originGroupSubmitMatch = true
-							}
-							if originGroup.ID == cloneOrigin.OriginGroupID {
-								originGroupCloneMatch = true
-							}
-						}
-					}}
-					for _, originGroup := range originGroups {
-						if originGroupSubmitMatch {
-							<option value={ originGroup.Name } selected?={ originGroup.Name == submittedOrigin.OriginGroup }>{ originGroup.Name }</option>
-						} else if originGroupCloneMatch {
-							<option value={ originGroup.Name } selected?={ originGroup.ID == cloneOrigin.OriginGroupID }>{ originGroup.Name }</option>
-						} else {
-							<option value={ originGroup.Name } selected?={ originGroup.DefaultGroup }>{ originGroup.Name }</option>
-						}
-					}
-				</select>
-			</label>
-			<label for={ fmt.Sprintf("origins.%d.host", index) }>
+			<label for={ fmt.Sprintf("%s.%d.host", namePrefix, index) }>
 				{{
 					host := ""
 					if submittedOrigin != nil {
@@ -667,22 +675,21 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 					}
 				}}
 				Host
-				<input type="text" id={ fmt.Sprintf("origins.%d.host", index) } name={ fmt.Sprintf("origins.%d.host", index) } value={ host } required/>
+				<input type="text" id={ fmt.Sprintf("%s.%d.host", namePrefix, index) } name={ fmt.Sprintf("%s.%d.host", namePrefix, index) } value={ host } required/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.port", index) }>
+			<label for={ fmt.Sprintf("%s.%d.port", namePrefix, index) }>
 				{{
 					originPortStr := ""
 					if submittedOrigin != nil && submittedOrigin.OriginPort != 0 {
 						originPortStr = strconv.Itoa(submittedOrigin.OriginPort)
 					} else if cloneOrigin.Port != 0 {
 						originPortStr = strconv.Itoa(cloneOrigin.Port)
-
 					}
 				}}
 				Port
-				<input type="number" id={ fmt.Sprintf("origins.%d.port", index) } name={ fmt.Sprintf("origins.%d.port", index) } value={ originPortStr } min="1" max="65535" step="1" inputmode="numeric" required/>
+				<input type="number" id={ fmt.Sprintf("%s.%d.port", namePrefix, index) } name={ fmt.Sprintf("%s.%d.port", namePrefix, index) } value={ originPortStr } min="1" max="65535" step="1" inputmode="numeric" required/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.tls", index) }>
+			<label for={ fmt.Sprintf("%s.%d.tls", namePrefix, index) }>
 				{{
 					var tlsChecked bool
 					if submittedOrigin != nil {
@@ -692,9 +699,9 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 					}
 				}}
 				TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.tls", index) } name={ fmt.Sprintf("origins.%d.tls", index) } checked?={ tlsChecked }/>
+				<input type="checkbox" id={ fmt.Sprintf("%s.%d.tls", namePrefix, index) } name={ fmt.Sprintf("%s.%d.tls", namePrefix, index) } checked?={ tlsChecked }/>
 			</label>
-			<label for={ fmt.Sprintf("origins.%d.verify-tls", index) }>
+			<label for={ fmt.Sprintf("%s.%d.verify-tls", namePrefix, index) }>
 				{{
 					var verifyTLSChecked bool
 					if submittedOrigin != nil {
@@ -704,48 +711,218 @@ templ OriginFieldSet(orgName string, serviceName string, index int, numFields in
 					}
 				}}
 				Verify TLS
-				<input type="checkbox" id={ fmt.Sprintf("origins.%d.verify-tls", index) } name={ fmt.Sprintf("origins.%d.verify-tls", index) } checked?={ verifyTLSChecked }/>
+				<input type="checkbox" id={ fmt.Sprintf("%s.%d.verify-tls", namePrefix, index) } name={ fmt.Sprintf("%s.%d.verify-tls", namePrefix, index) } checked?={ verifyTLSChecked }/>
 			</label>
 		</fieldset>
-		@deleteOriginButton(strconv.Itoa(index), numFields == 1)
+		<button
+			type="button"
+			class="remove-origin-button"
+			disabled?={ numFields == 1 }
+			_="on click remove closest <article.origin-fieldset/> then send manager:formchanged to #origin-group-fieldsets"
+		>
+			Remove origin
+		</button>
 	</article>
-	if htmxRequest {
-		// If this function is called by http handler (e.g.
-		// because of a hx-get) we also need to replace the "add
-		// button" counter.
-		@addOriginButton(orgName, serviceName, strconv.Itoa(index+1), true)
-	}
 }
 
-templ addOriginButton(orgName string, serviceName string, index string, swap bool) {
+// addGroupOriginButton renders the "Add origin" button for a conditional
+// origin group. The group index is read from the enclosing
+// article.origin-group's data-group-index attribute at click time (rather
+// than baked in at render time) because that index can change afterwards
+// due to add/remove/move of other groups; manager:formchanged keeps
+// data-group-index in sync with DOM order.
+templ addGroupOriginButton(orgName string, serviceName string) {
 	<button
 		type="button"
-		id="add-origin-fieldset-button"
+		class="add-origin-button"
 		hx-get="/console/new-origin-fieldset"
+		hx-target="previous .group-origins"
 		hx-swap="beforeend"
-		hx-target="#origin-fieldsets"
-		name="next-origin-index"
 		hx-vals={ jsonAddButtonVals(orgName, serviceName) }
-		value={ index }
-		if swap {
-			hx-swap-oob="true"
-		}
+		hx-disabled-elt="this"
+		_="on htmx:configRequest(detail)
+			set detail.parameters['group'] to closest @data-group-index
+			set detail.parameters['next-origin-index'] to ((previous .group-origins from me).children.length)"
 	>
 		Add origin
 	</button>
 }
 
-templ deleteOriginButton(index string, disabled bool) {
+// addDefaultGroupOriginButton is the default-origin-group equivalent of
+// addGroupOriginButton. The default group's server-side identity ("default")
+// never changes, so its "group" hx-vals parameter can be a static value
+// instead of being computed at click time.
+templ addDefaultGroupOriginButton(orgName string, serviceName string) {
 	<button
 		type="button"
-		_="on click remove closest <article/> then send manager:originremoved to #origin-fieldsets"
-		disabled?={ disabled }
+		class="add-origin-button"
+		hx-get="/console/new-origin-fieldset"
+		hx-target="previous .group-origins"
+		hx-swap="beforeend"
+		hx-disabled-elt="this"
+		hx-vals={ jsonAddOriginButtonVals(orgName, serviceName, cdntypes.DefaultOriginGroupName) }
+		_="on htmx:configRequest(detail)
+			set detail.parameters['next-origin-index'] to ((previous .group-origins from me).children.length)"
 	>
-		Remove
+		Add origin
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, domains []cdntypes.Domain, originGroups []cdntypes.OriginGroup, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+// OriginGroupFieldSet renders one conditional origin group: its name,
+// condition expression and nested origins, plus move/remove controls.
+// isLast tells the initial (pre-JS) render whether to disable the "Move
+// down" button; like numFields on OriginFieldSet this is re-derived live by
+// manager:formchanged after any DOM change.
+templ OriginGroupFieldSet(orgName string, serviceName string, groupIndex int, isLast bool, submittedGroup *cdntypes.CreateServiceVersionConditionalGroup, cloneGroup *cdntypes.OriginGroup, cloneOrigins []cdntypes.Origin) {
+	{{ originsNamePrefix := fmt.Sprintf("conditional-origin-groups.%d.origins", groupIndex) }}
+	<article class="origin-group" data-group-index={ strconv.Itoa(groupIndex) }>
+		<fieldset>
+			<legend>Origin group</legend>
+			<label for={ fmt.Sprintf("conditional-origin-groups.%d.name", groupIndex) }>
+				{{
+					name := ""
+					if submittedGroup != nil {
+						name = submittedGroup.Name
+					} else if cloneGroup != nil {
+						name = cloneGroup.Name
+					}
+				}}
+				Name
+				<input type="text" id={ fmt.Sprintf("conditional-origin-groups.%d.name", groupIndex) } name={ fmt.Sprintf("conditional-origin-groups.%d.name", groupIndex) } value={ name } required maxlength="63"/>
+			</label>
+			<label for={ fmt.Sprintf("conditional-origin-groups.%d.condition", groupIndex) }>
+				{{
+					condition := ""
+					if submittedGroup != nil {
+						condition = submittedGroup.Condition
+					} else if cloneGroup != nil && cloneGroup.Condition != nil {
+						condition = *cloneGroup.Condition
+					}
+				}}
+				Condition (VCL boolean expression, e.g. req.url ~ "^/api/")
+				// Intentionally not `required`: editor.mjs hides this
+				// textarea behind a CodeMirror instance and syncs its value
+				// back into it on submit via a capture-phase listener. A
+				// hidden-but-required empty control fails native constraint
+				// validation un-focusably, silently aborting submit before
+				// that sync listener runs. Emptiness is instead enforced
+				// server-side, the same approach already used for
+				// #vcl_template.
+				<textarea
+					id={ fmt.Sprintf("conditional-origin-groups.%d.condition", groupIndex) }
+					name={ fmt.Sprintf("conditional-origin-groups.%d.condition", groupIndex) }
+					class="condition-editor"
+					rows="3"
+					spellcheck="false"
+				>{ condition }</textarea>
+			</label>
+			<div class="group-origins">
+				// Prefer submitted data over clone data since this can be
+				// modified contents based on a clone. Note a submitted group
+				// with zero origins is left empty here (not backfilled with
+				// a blank fieldset) since the form-level validator already
+				// rejects it and will show the resulting error; the user is
+				// meant to click "Add origin" to fix it up.
+				if submittedGroup != nil {
+					for i, submittedOrigin := range submittedGroup.Origins {
+						@OriginFieldSet(originsNamePrefix, i, len(submittedGroup.Origins), &submittedOrigin, cdntypes.Origin{})
+					}
+				} else if cloneGroup != nil {
+					if len(cloneOrigins) == 0 {
+						@OriginFieldSet(originsNamePrefix, 0, 1, nil, cdntypes.Origin{})
+					} else {
+						for i, cloneOrigin := range cloneOrigins {
+							@OriginFieldSet(originsNamePrefix, i, len(cloneOrigins), nil, cloneOrigin)
+						}
+					}
+				} else {
+					@OriginFieldSet(originsNamePrefix, 0, 1, nil, cdntypes.Origin{})
+				}
+			</div>
+			@addGroupOriginButton(orgName, serviceName)
+		</fieldset>
+		<button
+			type="button"
+			class="move-up-button"
+			disabled?={ groupIndex == 0 }
+			_="on click put closest <article.origin-group/> before previous <article.origin-group/> then send manager:formchanged to #origin-group-fieldsets"
+		>
+			Move up
+		</button>
+		<button
+			type="button"
+			class="move-down-button"
+			disabled?={ isLast }
+			_="on click put closest <article.origin-group/> after next <article.origin-group/> then send manager:formchanged to #origin-group-fieldsets"
+		>
+			Move down
+		</button>
+		<button
+			type="button"
+			class="remove-group-button"
+			_="on click
+			set grp to closest <article.origin-group/>
+			if window.__cdnEditorState
+				call window.__cdnEditorState.destroyEditorsIn(grp)
+			end
+			remove grp
+			send manager:formchanged to #origin-group-fieldsets"
+		>
+			Remove group
+		</button>
+	</article>
+}
+
+// DefaultOriginGroupFieldSet renders the pinned fallback origin group. It
+// has no name/condition inputs and no move/remove controls: it is always
+// present, always named "default" server-side, and always selected last.
+// Its own htmx:afterSwap handler forwards to #origin-group-fieldsets'
+// manager:formchanged listener since (unlike conditional groups) this
+// fieldset lives outside that container so it never participates in the
+// conditional-group renumbering.
+templ DefaultOriginGroupFieldSet(orgName string, serviceName string, submittedOrigins []cdntypes.CreateServiceVersionOrigin, cloneOrigins []cdntypes.Origin) {
+	<article id="default-origin-group-fieldset" _="on htmx:afterSwap send manager:formchanged to #origin-group-fieldsets">
+		<fieldset>
+			<legend>Default origin group (used when no condition matches)</legend>
+			<div class="group-origins">
+				if len(submittedOrigins) != 0 {
+					for i, submittedOrigin := range submittedOrigins {
+						@OriginFieldSet("default-origin-group.origins", i, len(submittedOrigins), &submittedOrigin, cdntypes.Origin{})
+					}
+				} else if len(cloneOrigins) != 0 {
+					for i, cloneOrigin := range cloneOrigins {
+						@OriginFieldSet("default-origin-group.origins", i, len(cloneOrigins), nil, cloneOrigin)
+					}
+				} else {
+					@OriginFieldSet("default-origin-group.origins", 0, 1, nil, cdntypes.Origin{})
+				}
+			</div>
+			@addDefaultGroupOriginButton(orgName, serviceName)
+		</fieldset>
+	</article>
+}
+
+// addOriginGroupButton renders the "Add origin group" button. Its "value"
+// (sent as the next-group-index request parameter, since the button has a
+// matching "name" attribute) is kept in sync live by the
+// manager:formchanged handler in CreateServiceVersionContent.
+templ addOriginGroupButton(orgName string, serviceName string, index string) {
+	<button
+		type="button"
+		id="add-origin-group-button"
+		hx-get="/console/new-origin-group-fieldset"
+		hx-swap="beforeend"
+		hx-target="#origin-group-fieldsets"
+		hx-disabled-elt="this"
+		name="next-group-index"
+		hx-vals={ jsonAddButtonVals(orgName, serviceName) }
+		value={ index }
+	>
+		Add origin group
+	</button>
+}
+
+templ CreateServiceVersionContent(serviceName string, orgName string, domains []cdntypes.Domain, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	if err != nil {
 		<article id="error-message" aria-label="Error" role="alert">
 			switch  {
@@ -756,12 +933,19 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 						<strong>Error:</strong> Invalid VCL data
 					</header>
 					<pre>{ errDetails }</pre>
+				case errors.Is(err, cdnerrors.ErrAlreadyExists):
+					<div><strong>Duplication error:</strong> { err.Error() }</div>
 				default:
 					<div><strong>Error:</strong> Service version creation failed</div>
 			}
 		</article>
 	}
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']" hx-boost="false">
+	// hx-history="false" keeps htmx from caching this page's DOM in its
+	// history snapshot: CodeMirror hides the textareas and mounts its own
+	// editor DOM at runtime, so a restored snapshot would show stale or
+	// broken editors. Back/forward re-requests the page from the server so
+	// the editors are rebuilt from fresh markup.
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']" hx-boost="false" hx-history="false">
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -796,59 +980,123 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 				}
 			</fieldset>
 		</article>
+		{{
+			conditionalCloneGroups := conditionalOriginGroups(cloneData.OriginGroups)
+			defaultCloneGroupID := defaultOriginGroupID(cloneData.OriginGroups)
+		}}
+		// The manager:formchanged handler below is the single source of
+		// truth keeping every "conditional-origin-groups.N..." and
+		// "...origins.M..." name (and id/for) attribute dense and in DOM
+		// order after any add/remove/move, and keeping the "Add origin
+		// group"/"Add origin" button counters and the move/remove disabled
+		// states in sync. It fires on every htmx swap inside this
+		// container (new group or new origin fieldsets) and is also sent
+		// explicitly by the move/remove buttons' click handlers (which
+		// mutate the DOM without an htmx swap).
+		//
+		// This matters because gorilla/schema does not require dense
+		// indices when decoding indexed form fields: given e.g. only
+		// "conditional-origin-groups.1.name" and
+		// "conditional-origin-groups.2.name" (index 0 missing), it
+		// silently produces a 3-element slice with a zero-value element at
+		// index 0, rather than erroring (verified against the vendored
+		// gorilla/schema v1.4.1 behavior). A zero-value group fails
+		// server-side validation (name/condition/origins all
+		// validate:"min=1"), so a renumbering bug here would surface as a
+		// rejected submission rather than silently-wrong data - but dense
+		// naming is still the invariant this handler exists to maintain.
 		<div
-			id="origin-fieldsets"
+			id="origin-group-fieldsets"
 			_="
-			on manager:originremoved
-				make a RegExp from '\\.\\d+\\.' called idRE
-				repeat for article in <#origin-fieldsets > article/> index i
-					set the article's id to `article-` + i
-					repeat in <[for]/> in the article
-						set its @for to (its @for).replace(idRE, `.${i}.`)
+			on manager:formchanged
+				make a RegExp from 'conditional-origin-groups\\.\\d+' called groupRE
+				set groupCount to (<#origin-group-fieldsets > article.origin-group/>).length
+				repeat for grp in <#origin-group-fieldsets > article.origin-group/> index gi
+					set grp's @data-group-index to gi
+					repeat in <[name]/> in grp
+						set its @name to (its @name).replace(groupRE, `conditional-origin-groups.${gi}`)
 					end
-					repeat in <[id]/> in the article
-						set its @id to (its @id).replace(idRE, `.${i}.`)
+					repeat in <[id]/> in grp
+						set its @id to (its @id).replace(groupRE, `conditional-origin-groups.${gi}`)
 					end
-					repeat in <[name]/> in the article
-						set its @name to (its @name).replace(idRE, `.${i}.`)
+					repeat in <[for]/> in grp
+						set its @for to (its @for).replace(groupRE, `conditional-origin-groups.${gi}`)
+					end
+					if gi == 0
+						repeat for btn in <button.move-up-button/> in grp
+							add @disabled to btn
+						end
+					else
+						repeat for btn in <button.move-up-button/> in grp
+							remove @disabled from btn
+						end
+					end
+					if gi == groupCount - 1
+						repeat for btn in <button.move-down-button/> in grp
+							add @disabled to btn
+						end
+					else
+						repeat for btn in <button.move-down-button/> in grp
+							remove @disabled from btn
+						end
 					end
 				end
-				set #add-origin-fieldset-button @value to (<#origin-fieldsets > article/>).length
-				if (<#origin-fieldsets > article/>).length == 1
-					add @disabled to <#article-0 > button/>
+				make a RegExp from 'origins\\.\\d+\\.' called originRE
+				repeat for container in <.group-origins/>
+					set originCount to (<article.origin-fieldset/> in container).length
+					repeat for org in <article.origin-fieldset/> in container index oi
+						repeat in <[name]/> in org
+							set its @name to (its @name).replace(originRE, `origins.${oi}.`)
+						end
+						repeat in <[id]/> in org
+							set its @id to (its @id).replace(originRE, `origins.${oi}.`)
+						end
+						repeat in <[for]/> in org
+							set its @for to (its @for).replace(originRE, `origins.${oi}.`)
+						end
+						if originCount == 1
+							repeat for btn in <button.remove-origin-button/> in org
+								add @disabled to btn
+							end
+						else
+							repeat for btn in <button.remove-origin-button/> in org
+								remove @disabled from btn
+							end
+						end
+					end
 				end
+				set #add-origin-group-button @value to groupCount
 			on htmx:afterSwap
-				if (<#origin-fieldsets > article/>).length > 1
-					remove @disabled from <#article-0 > button/>
-				end
+				send manager:formchanged to me
 			"
 		>
-			// Prefer submitted data over clone data since this can
-			// be modified contents based on a clone
-			if submittedData != nil && len(submittedData.Origins) != 0 {
-				for i, submittedOrigin := range submittedData.Origins {
-					@OriginFieldSet(orgName, serviceName, i, len(submittedData.Origins), &submittedOrigin, cdntypes.Origin{}, originGroups, false)
+			if submittedData != nil {
+				for i, submittedGroup := range submittedData.ConditionalGroups {
+					@OriginGroupFieldSet(orgName, serviceName, i, i == len(submittedData.ConditionalGroups)-1, &submittedGroup, nil, nil)
 				}
 			} else {
-				if len(cloneData.Origins) == 0 {
-					@OriginFieldSet(orgName, serviceName, 0, 1, nil, cdntypes.Origin{}, originGroups, false)
-				} else {
-					for i, cloneOrigin := range cloneData.Origins {
-						@OriginFieldSet(orgName, serviceName, i, len(cloneData.Origins), nil, cloneOrigin, originGroups, false)
-					}
+				for i, cloneGroup := range conditionalCloneGroups {
+					@OriginGroupFieldSet(orgName, serviceName, i, i == len(conditionalCloneGroups)-1, nil, &cloneGroup, originsForGroup(cloneData.Origins, cloneGroup.ID))
 				}
 			}
 		</div>
 		{{
-			var nextOriginIndexStr string
-			if len(cloneData.Origins) == 0 {
-				// If there is no clone data the next index is 1
-				nextOriginIndexStr = "1"
+			var nextGroupIndexStr string
+			if submittedData != nil {
+				nextGroupIndexStr = strconv.Itoa(len(submittedData.ConditionalGroups))
 			} else {
-				nextOriginIndexStr = strconv.Itoa(len(cloneData.Origins))
+				nextGroupIndexStr = strconv.Itoa(len(conditionalCloneGroups))
 			}
 		}}
-		@addOriginButton(orgName, serviceName, nextOriginIndexStr, false)
+		@addOriginGroupButton(orgName, serviceName, nextGroupIndexStr)
+		{{
+			var submittedDefaultOrigins []cdntypes.CreateServiceVersionOrigin
+			if submittedData != nil {
+				submittedDefaultOrigins = submittedData.DefaultGroup.Origins
+			}
+			cloneDefaultOrigins := originsForGroup(cloneData.Origins, defaultCloneGroupID)
+		}}
+		@DefaultOriginGroupFieldSet(orgName, serviceName, submittedDefaultOrigins, cloneDefaultOrigins)
 		{{
 			displayValue := vclTemplateValue
 			if submittedData != nil {
@@ -871,7 +1119,6 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 						spellcheck="false"
 						aria-describedby="vcl-hint"
 					>{ displayValue }</textarea>
-					<div id="editor"></div>
 				</div>
 			</fieldset>
 		</article>

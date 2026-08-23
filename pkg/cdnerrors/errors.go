@@ -8,33 +8,32 @@ import (
 
 // Errors that can be shared across the other packages
 var (
-	ErrDatabaseInitialized           = errors.New("database is already initialized")
-	ErrForbidden                     = errors.New("access to resource is not allowed")
-	ErrNotFound                      = errors.New("resource not found")
-	ErrUnprocessable                 = errors.New("resource not processable")
-	ErrAlreadyExists                 = errors.New("resource already exists")
-	ErrCheckViolation                = errors.New("invalid input data")
-	ErrExclutionViolation            = errors.New("conflicting data in database")
-	ErrBadPassword                   = errors.New("bad password")
-	ErrKeyCloakEmailUnverified       = errors.New("keycloak user email is not verified")
-	ErrKeyCloakUserExists            = errors.New("keycloak username already exists with other UUID")
-	ErrBadOldPassword                = errors.New("old password is invalid")
-	ErrUnableToParseNameOrID         = errors.New("unable to parse name or ID")
-	ErrInvalidFormData               = errors.New("invalid form data")
-	ErrServiceByNameNeedsOrg         = errors.New("looking up service by name requires org")
-	ErrOriginGroupByNameNeedsService = errors.New("looking up origin group by name requires service")
-	ErrServiceQuotaHit               = errors.New("not allowed to create more services")
-	ErrDomainQuotaHit                = errors.New("not allowed to create more domains")
-	ErrOrgClientTokenQuotaHit        = errors.New("not allowed to create more org client tokens")
-	ErrInvalidVCL                    = errors.New("VCL is invalid")
-	ErrUnknownDomain                 = errors.New("unknown domain name")
-	ErrReEncryptionMissingPassword   = errors.New("re-encryption needs at least two configured encryption passwords")
-	ErrReEncryptionFailed            = errors.New("re-encryption failed for at least one token")
-	ErrHasDependents                 = errors.New("resource has dependent resources")
-	ErrNotLocalUser                  = errors.New("operation is only available for local users")
-	ErrOldPasswordRequired           = errors.New("old password is required")
-	ErrSelfDelete                    = errors.New("users cannot delete themselves")
-	ErrNoServiceIPAddresses          = errors.New("no service IP addresses available for allocation")
+	ErrDatabaseInitialized         = errors.New("database is already initialized")
+	ErrForbidden                   = errors.New("access to resource is not allowed")
+	ErrNotFound                    = errors.New("resource not found")
+	ErrUnprocessable               = errors.New("resource not processable")
+	ErrAlreadyExists               = errors.New("resource already exists")
+	ErrCheckViolation              = errors.New("invalid input data")
+	ErrExclutionViolation          = errors.New("conflicting data in database")
+	ErrBadPassword                 = errors.New("bad password")
+	ErrKeyCloakEmailUnverified     = errors.New("keycloak user email is not verified")
+	ErrKeyCloakUserExists          = errors.New("keycloak username already exists with other UUID")
+	ErrBadOldPassword              = errors.New("old password is invalid")
+	ErrUnableToParseNameOrID       = errors.New("unable to parse name or ID")
+	ErrInvalidFormData             = errors.New("invalid form data")
+	ErrServiceByNameNeedsOrg       = errors.New("looking up service by name requires org")
+	ErrServiceQuotaHit             = errors.New("not allowed to create more services")
+	ErrDomainQuotaHit              = errors.New("not allowed to create more domains")
+	ErrOrgClientTokenQuotaHit      = errors.New("not allowed to create more org client tokens")
+	ErrInvalidVCL                  = errors.New("VCL is invalid")
+	ErrUnknownDomain               = errors.New("unknown domain name")
+	ErrReEncryptionMissingPassword = errors.New("re-encryption needs at least two configured encryption passwords")
+	ErrReEncryptionFailed          = errors.New("re-encryption failed for at least one token")
+	ErrHasDependents               = errors.New("resource has dependent resources")
+	ErrNotLocalUser                = errors.New("operation is only available for local users")
+	ErrOldPasswordRequired         = errors.New("old password is required")
+	ErrSelfDelete                  = errors.New("users cannot delete themselves")
+	ErrNoServiceIPAddresses        = errors.New("no service IP addresses available for allocation")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
@@ -71,6 +70,23 @@ func (e *AddressConflictError) Error() string {
 }
 
 func (e *AddressConflictError) Unwrap() error {
+	return ErrAlreadyExists
+}
+
+// DuplicateOriginError identifies as ErrAlreadyExists but indicates that a
+// service version's submitted origin data contains the same host:port pair
+// more than once (service_origins
+// UNIQUE(service_version_id, host, port)). Unlike a genuine
+// already-exists-in-the-database conflict this stems from the client's own
+// submitted data, so callers generally want to treat it like a 422 rather
+// than a 409.
+type DuplicateOriginError struct{}
+
+func (e *DuplicateOriginError) Error() string {
+	return "duplicate origin host/port present in service version"
+}
+
+func (e *DuplicateOriginError) Unwrap() error {
 	return ErrAlreadyExists
 }
 

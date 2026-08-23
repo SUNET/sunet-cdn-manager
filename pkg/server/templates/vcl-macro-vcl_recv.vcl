@@ -1,8 +1,8 @@
   if (proxy.is_ssl()) {
     {{- if .HTTPSEnabled}}
     set req.http.X-Forwarded-Proto = "https";
-    {{- if .DefaultForHTTPS}}
-    set req.backend_hint = {{$.DefaultOriginGroupName}}_https;
+    {{- if .HTTPSSelection}}
+{{.HTTPSSelection}}
     {{- end}}
     {{- else}}
     return(synth(400,"HTTPS request but no HTTPS origin available."));
@@ -10,8 +10,8 @@
   } else {
     {{- if .HTTPEnabled}}
     set req.http.X-Forwarded-Proto = "http";
-    {{- if $.DefaultForHTTP}}
-    set req.backend_hint = {{$.DefaultOriginGroupName}}_http;
+    {{- if .HTTPSelection}}
+{{.HTTPSelection}}
     {{- end}}
     {{- else}}
     return(synth(400,"HTTP request but no HTTP origin available."));

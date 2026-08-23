@@ -32,6 +32,13 @@ func (gl gooseLogger) Printf(format string, v ...any) {
 var embedMigrations embed.FS
 
 func Up(ctx context.Context, logger zerolog.Logger, pgConfig *pgxpool.Config) error {
+	return upTo(ctx, logger, pgConfig, goose.MaxVersion)
+}
+
+// upTo applies migrations up to and including the given version. Only used
+// by tests that need to seed data mid-migration-sequence; production
+// always migrates to the latest version via Up.
+func upTo(ctx context.Context, logger zerolog.Logger, pgConfig *pgxpool.Config, version int64) error {
 	gl := gooseLogger{logger: logger}
 	goose.SetLogger(gl)
 	goose.SetBaseFS(embedMigrations)
@@ -62,7 +69,7 @@ func Up(ctx context.Context, logger zerolog.Logger, pgConfig *pgxpool.Config) er
 
 	db := stdlib.OpenDBFromPool(dbPool)
 
-	if err := goose.UpContext(ctx, db, "files"); err != nil {
+	if err := goose.UpToContext(ctx, db, "files", version); err != nil {
 		return err
 	}
 
