@@ -54,15 +54,6 @@ func TestGenerateCompleteVclSelection(t *testing.T) {
 		testOrigin(testUUID(1), "10.0.2.2", 80, false),
 	}
 
-	legacyGroups := []cdntypes.OriginGroup{
-		testGroup(1, "default", true, nil, 0),
-		testGroup(4, "manual", false, nil, 1), // legacy: no condition
-	}
-	legacyOrigins := []cdntypes.Origin{
-		testOrigin(testUUID(1), "198.51.100.10", 443, true),
-		testOrigin(testUUID(4), "198.51.100.20", 443, true),
-	}
-
 	multilineGroups := []cdntypes.OriginGroup{
 		testGroup(2, "api", false, new("req.url ~ \"^/api/\" ||\n    req.url ~ \"^/graphql\""), 0),
 		testGroup(1, "default", true, nil, 1),
@@ -112,18 +103,6 @@ func TestGenerateCompleteVclSelection(t *testing.T) {
 			},
 		},
 		{
-			description: "legacy condition-less non-default group: backends only, no chain",
-			groups:      legacyGroups,
-			origins:     legacyOrigins,
-			contains: []string{
-				"backend manual_https {",
-				"set req.backend_hint = default_https;",
-			},
-			// See note above: bare "elseif" collides with the unrelated
-			// vcl_backend_response Vary-header logic.
-			notContains: []string{"# origin group", "# default origin group"},
-		},
-		{
 			description: "multiline condition retained as multiple lines",
 			groups:      multilineGroups,
 			origins:     multilineOrigins,
@@ -148,6 +127,43 @@ func TestGenerateCompleteVclSelection(t *testing.T) {
 				if strings.Contains(vcl, unwanted) {
 					t.Errorf("generated VCL unexpectedly contains %q\n---\n%s", unwanted, vcl)
 				}
+			}
+		})
+	}
+}
+
+func TestGenerateCompleteVclMissingCond(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	legacyGroups := []cdntypes.OriginGroup{
+		testGroup(1, "default", true, nil, 0),
+		testGroup(4, "manual", false, nil, 1), // legacy: no condition
+	}
+	legacyOrigins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 443, true),
+		testOrigin(testUUID(4), "198.51.100.20", 443, true),
+	}
+
+	tests := []struct {
+		description string
+		groups      []cdntypes.OriginGroup
+		origins     []cdntypes.Origin
+	}{
+		{
+			description: "non-default origin groups must have conditions",
+			groups:      legacyGroups,
+			origins:     legacyOrigins,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			_, err := generateCompleteVcl(confTemplates, test.groups, test.origins, cdntypes.DefaultVCLTemplate)
+			if err == nil {
+				t.Fatal("expected non-default origin group with a nil condition to error out")
 			}
 		})
 	}
