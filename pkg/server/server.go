@@ -362,9 +362,7 @@ func setupACME(logger zerolog.Logger, conf config.Config) *tls.Config {
 
 	// Enable DNS challenge
 	certmagic.DefaultACME.DNS01Solver = &certmagic.DNS01Solver{
-		DNSManager: certmagic.DNSManager{
-			DNSProvider: acmednsProvider,
-		},
+		DNSProvider: acmednsProvider,
 	}
 
 	if !conf.CertMagic.LetsEncryptProd {
@@ -1126,9 +1124,8 @@ func parseLimitedForm(w http.ResponseWriter, r *http.Request, maxSize int64) err
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
 	err := r.ParseForm()
 	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		if mbe, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			http.Error(w, mbe.Error(), http.StatusRequestEntityTooLarge)
 		} else {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		}
@@ -1224,10 +1221,8 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 			}
 
 			apiTokenData := components.APITokenData{
-				APITokenFormFields: components.APITokenFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
 			}
 
 			err = validate.Struct(formData)
@@ -1623,9 +1618,7 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			domainData := components.DomainData{
-				DomainFormFields: components.DomainFormFields{
-					FQDN: formData.FQDN,
-				},
+				FQDN: formData.FQDN,
 			}
 
 			err = validate.Struct(formData)
@@ -2478,8 +2471,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation):
 					errDetails := ""
-					var ve *cdnerrors.VCLValidationError
-					if errors.As(err, &ve) {
+					if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
 						errDetails = ve.Details
 					}
 					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, err, errDetails))
@@ -3157,8 +3149,7 @@ func addKeycloakUser(ctx context.Context, dbc *dbConn, subject, name string) (pg
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, "INSERT INTO users (display_name, role_id, auth_provider_id) VALUES ($1, (SELECT id from roles WHERE name=$2), (SELECT id FROM auth_providers WHERE name=$3)) RETURNING id", name, userRole, cdntypes.KeycloakAuthProvider).Scan(&userID)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 				if pgErr.Code == pgUniqueViolation {
 					return cdnerrors.ErrKeyCloakUserExists
 				}
@@ -3277,38 +3268,39 @@ type argon2Settings struct {
 // Keep in mind that if you change these values existing encryption keys
 // derived from these settings will not match anymore.
 func newArgon2DefaultSettings() argon2Settings {
-	argon2Settings := argon2Settings{}
-	// https://datatracker.ietf.org/doc/rfc9106/
-	// ===
-	// If much less memory is available, a uniformly safe option is
-	// Argon2id with t=3 iterations, p=4 lanes, m=2^(16) (64 MiB of
-	// RAM), 128-bit salt, and 256-bit tag size.  This is the SECOND
-	// RECOMMENDED option.
-	// [...]
-	// The Argon2id variant with t=1 and 2 GiB memory is the FIRST
-	// RECOMMENDED option and is suggested as a default setting for
-	// all environments.  This setting is secure against
-	// side-channel attacks and maximizes adversarial costs on
-	// dedicated brute-force hardware. The Argon2id variant with t=3
-	// and 64 MiB memory is the SECOND RECOMMENDED option and is
-	// suggested as a default setting for memory- constrained
-	// environments.
-	// ===
-	//
-	// Use the "SECOND RECOMMENDED" settings because we are
-	// probably running in a memory constrained container:
-	// t=3 iterations
-	argon2Settings.argonTime = uint32(3)
+	argon2Settings := argon2Settings{
+		// https://datatracker.ietf.org/doc/rfc9106/
+		// ===
+		// If much less memory is available, a uniformly safe option is
+		// Argon2id with t=3 iterations, p=4 lanes, m=2^(16) (64 MiB of
+		// RAM), 128-bit salt, and 256-bit tag size.  This is the SECOND
+		// RECOMMENDED option.
+		// [...]
+		// The Argon2id variant with t=1 and 2 GiB memory is the FIRST
+		// RECOMMENDED option and is suggested as a default setting for
+		// all environments.  This setting is secure against
+		// side-channel attacks and maximizes adversarial costs on
+		// dedicated brute-force hardware. The Argon2id variant with t=3
+		// and 64 MiB memory is the SECOND RECOMMENDED option and is
+		// suggested as a default setting for memory- constrained
+		// environments.
+		// ===
+		//
+		// Use the "SECOND RECOMMENDED" settings because we are
+		// probably running in a memory constrained container:
+		// t=3 iterations
+		argonTime: uint32(3),
 
-	// p=4 lanes
-	// const ArgonThreads = uint8(4)
-	argon2Settings.argonThreads = uint8(4)
+		// p=4 lanes
+		// const ArgonThreads = uint8(4)
+		argonThreads: uint8(4),
 
-	// m=2^(16) (64 MiB of RAM)
-	argon2Settings.argonMemory = uint32(64 * 1024)
+		// m=2^(16) (64 MiB of RAM)
+		argonMemory: uint32(64 * 1024),
 
-	// 256-bit tag size (== 32 bytes)
-	argon2Settings.argonTagSize = uint32(32)
+		// 256-bit tag size (== 32 bytes)
+		argonTagSize: uint32(32),
+	}
 	return argon2Settings
 }
 
@@ -4016,13 +4008,11 @@ func createCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nam
 	}
 
 	return cdntypes.CacheNode{
-		Node: cdntypes.Node{
-			Name:        name,
-			ID:          cacheNodeID,
-			Description: description,
-			Addresses:   addresses,
-			Maintenance: maintenance,
-		},
+		Name:        name,
+		ID:          cacheNodeID,
+		Description: description,
+		Addresses:   addresses,
+		Maintenance: maintenance,
 	}, nil
 }
 
@@ -4030,8 +4020,7 @@ func insertCacheNodeTx(ctx context.Context, tx pgx.Tx, name string, description 
 	var cacheNodeID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO cache_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&cacheNodeID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
@@ -4178,13 +4167,11 @@ func createL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, name
 	}
 
 	return cdntypes.L4LBNode{
-		Node: cdntypes.Node{
-			Name:        name,
-			ID:          l4lbNodeID,
-			Description: description,
-			Addresses:   addresses,
-			Maintenance: maintenance,
-		},
+		Name:        name,
+		ID:          l4lbNodeID,
+		Description: description,
+		Addresses:   addresses,
+		Maintenance: maintenance,
 	}, nil
 }
 
@@ -4192,8 +4179,7 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	var l4lbNodeID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO l4lb_nodes (name, description, maintenance) VALUES ($1, $2, $3) RETURNING id", name, description, maintenance).Scan(&l4lbNodeID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
@@ -4327,8 +4313,7 @@ func insertUserTx(ctx context.Context, tx pgx.Tx, displayName string, orgID *pgt
 	var userID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO users (display_name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", displayName, orgID, roleID, authProviderID).Scan(&userID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
@@ -4360,8 +4345,7 @@ func authProviderNameToIDTx(ctx context.Context, tx pgx.Tx, name string) (pgtype
 func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, displayName string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
 	_, err := tx.Exec(ctx, "UPDATE users SET display_name = $1, org_id = $2, role_id = $3 WHERE id = $4", displayName, orgID, roleID, userID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return cdnerrors.ErrAlreadyExists
@@ -5094,8 +5078,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 				logger.Err(cleanupErr).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
 			}
 		}
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrAlreadyExists
@@ -5107,13 +5090,11 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	}
 
 	nocd := cdntypes.NewOrgClientCredential{
-		OrgClientCredentialSafe: cdntypes.OrgClientCredentialSafe{
-			ID:          orgClientTokenID,
-			Name:        name,
-			OrgID:       orgID,
-			Description: description,
-			ClientID:    clientID,
-		},
+		ID:           orgClientTokenID,
+		Name:         name,
+		OrgID:        orgID,
+		Description:  description,
+		ClientID:     clientID,
 		ClientSecret: clientSecret,
 	}
 
@@ -5189,8 +5170,8 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		// We expect the last password in the encryption password list
 		// to be used for encrypting new values, so check the list
 		// backwards when doing decryption.
-		for i := len(clientCredAEADs) - 1; i >= 0; i-- {
-			registrationAccessToken, err = clientCredAEADs[i].Open(nil, nonce, ciphertext, orgClientCredentialID.Bytes[:])
+		for i, clientCredAEAD := range slices.Backward(clientCredAEADs) {
+			registrationAccessToken, err = clientCredAEAD.Open(nil, nonce, ciphertext, orgClientCredentialID.Bytes[:])
 			if err != nil {
 				logger.Debug().Err(err).Int("key_offset", i).Msg("deleteOrgClientCredential: unable to decrypt registration access token with offset")
 				continue
@@ -5397,8 +5378,7 @@ func insertOrg(ctx context.Context, dbc *dbConn, name string, serviceQuota, doma
 		strings.Join(cols, ", "), strings.Join(vals, ", "))
 	err := dbc.dbPool.QueryRow(dbCtx, query, args...).Scan(&o.ID, &o.Name, &o.ServiceQuota, &o.DomainQuota, &o.ClientTokenQuota)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return cdntypes.Org{}, cdnerrors.ErrAlreadyExists
@@ -5468,8 +5448,7 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 			&updatedOrg.ID, &updatedOrg.Name, &updatedOrg.ServiceQuota, &updatedOrg.DomainQuota, &updatedOrg.ClientTokenQuota,
 		)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 				switch pgErr.Code {
 				case pgUniqueViolation:
 					return cdnerrors.ErrAlreadyExists
@@ -5725,10 +5704,8 @@ func newOrgIdentifier(ctx context.Context, tx pgx.Tx, input string) (orgIdentifi
 	}
 
 	return orgIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name: name,
+		id:   id,
 	}, nil
 }
 
@@ -5760,10 +5737,8 @@ func newServiceIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrg
 	}
 
 	return serviceIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name:  name,
+		id:    id,
 		orgID: orgID,
 	}, nil
 }
@@ -5793,10 +5768,8 @@ func newRoleIdentifier(ctx context.Context, tx pgx.Tx, input string) (roleIdenti
 	}
 
 	return roleIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name: name,
+		id:   id,
 	}, nil
 }
 
@@ -5825,10 +5798,8 @@ func newCacheNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (cache
 	}
 
 	return cacheNodeIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name: name,
+		id:   id,
 	}, nil
 }
 
@@ -5857,10 +5828,8 @@ func newL4LBNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (l4lbNo
 	}
 
 	return l4lbNodeIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name: name,
+		id:   id,
 	}, nil
 }
 
@@ -5889,10 +5858,8 @@ func newNodeGroupIdentifier(ctx context.Context, tx pgx.Tx, input string) (nodeG
 	}
 
 	return nodeGroupIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name: name,
+		id:   id,
 	}, nil
 }
 
@@ -5956,10 +5923,8 @@ func newOrgClientCredentialIdentifier(ctx context.Context, tx pgx.Tx, input stri
 	}
 
 	return orgClientCredentialIdentifier{
-		resourceIdentifier: resourceIdentifier{
-			name: name,
-			id:   id,
-		},
+		name:  name,
+		id:    id,
 		orgID: orgID,
 	}, nil
 }
@@ -6138,8 +6103,7 @@ func insertNodeGroup(ctx context.Context, logger *zerolog.Logger, ad cdntypes.Au
 	})
 	if err != nil {
 		logger.Err(err).Msg("insertNodeGroup transaction failed")
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			if pgErr.Code == pgUniqueViolation {
 				return cdntypes.NodeGroup{}, cdnerrors.ErrAlreadyExists
 			}
@@ -6154,8 +6118,7 @@ func insertNodeGroupTx(ctx context.Context, tx pgx.Tx, name string, description 
 	var nodeGroupID pgtype.UUID
 	err := tx.QueryRow(ctx, "INSERT INTO node_groups (name, description) VALUES ($1, $2) returning id", name, description).Scan(&nodeGroupID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
@@ -6236,8 +6199,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	})
 	if err != nil {
 		logger.Err(err).Msg("insertDomain transaction failed")
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			if pgErr.Code == pgUniqueViolation {
 				return cdntypes.Domain{}, cdnerrors.ErrAlreadyExists
 			}
@@ -6331,8 +6293,7 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	})
 	if err != nil {
 		logger.Err(err).Msg("insertService transaction failed")
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
@@ -7315,8 +7276,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		// the cdnerrors sentinels the callers (API and console handlers)
 		// already switch on, instead of falling through to a generic
 		// wrapped error that turns into a 500.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				// Distinguish a duplicate host:port within the submitted
@@ -7776,8 +7736,7 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 
 	err := dbc.dbPool.QueryRow(dbCtx, "INSERT INTO ip_networks (network) VALUES ($1) RETURNING id", network).Scan(&id)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
 				return ipNetwork{}, cdnerrors.ErrAlreadyExists
@@ -9112,8 +9071,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service version")
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
-						var doe *cdnerrors.DuplicateOriginError
-						if errors.As(err, &doe) {
+						if doe, ok := errors.AsType[*cdnerrors.DuplicateOriginError](err); ok {
 							return nil, huma.Error422UnprocessableEntity(doe.Error())
 						}
 						return nil, huma.Error409Conflict("service version already exists")
@@ -9126,8 +9084,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					case errors.Is(err, cdnerrors.ErrUnknownDomain):
 						return nil, huma.Error422UnprocessableEntity("domain name(s) unknown or unverified")
 					case errors.Is(err, cdnerrors.ErrInvalidVCL):
-						var ve *cdnerrors.VCLValidationError
-						if errors.As(err, &ve) {
+						if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
 							return nil, huma.Error422UnprocessableEntity(ve.Details)
 						}
 						return nil, huma.Error422UnprocessableEntity("VCL validation failed without details")
@@ -11092,12 +11049,10 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			orgFormData := components.OrgFormData{
-				OrgFormFields: components.OrgFormFields{
-					Name:             formData.Name,
-					ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
-					DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
-					ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
-				},
+				Name:             formData.Name,
+				ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
+				DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
+				ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
 			}
 
 			err = validate.Struct(formData)
@@ -11217,12 +11172,10 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			formData := components.OrgFormData{
-				OrgFormFields: components.OrgFormFields{
-					Name:             org.Name,
-					ServiceQuota:     fmt.Sprintf("%d", org.ServiceQuota),
-					DomainQuota:      fmt.Sprintf("%d", org.DomainQuota),
-					ClientTokenQuota: fmt.Sprintf("%d", org.ClientTokenQuota),
-				},
+				Name:             org.Name,
+				ServiceQuota:     fmt.Sprintf("%d", org.ServiceQuota),
+				DomainQuota:      fmt.Sprintf("%d", org.DomainQuota),
+				ClientTokenQuota: fmt.Sprintf("%d", org.ClientTokenQuota),
 			}
 
 			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, formData))
@@ -11246,12 +11199,10 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			orgFormData := components.OrgFormData{
-				OrgFormFields: components.OrgFormFields{
-					Name:             formData.Name,
-					ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
-					DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
-					ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
-				},
+				Name:             formData.Name,
+				ServiceQuota:     fmt.Sprintf("%d", formData.ServiceQuota),
+				DomainQuota:      fmt.Sprintf("%d", formData.DomainQuota),
+				ClientTokenQuota: fmt.Sprintf("%d", formData.ClientTokenQuota),
 			}
 
 			err = validate.Struct(formData)
@@ -11471,11 +11422,9 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			nodeFormData := components.CacheNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-					Addresses:   formData.Addresses,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
+				Addresses:   formData.Addresses,
 			}
 
 			err = validate.Struct(formData)
@@ -11587,11 +11536,9 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			formData := components.CacheNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        cacheNode.Name,
-					Description: cacheNode.Description,
-					Addresses:   components.AddressesString(cacheNode.Node),
-				},
+				Name:        cacheNode.Name,
+				Description: cacheNode.Description,
+				Addresses:   components.AddressesString(cacheNode.Node),
 			}
 
 			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeNameOrID, formData))
@@ -11615,11 +11562,9 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			nodeFormData := components.CacheNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-					Addresses:   formData.Addresses,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
+				Addresses:   formData.Addresses,
 			}
 
 			err = validate.Struct(formData)
@@ -11987,11 +11932,9 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			nodeFormData := components.L4LBNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-					Addresses:   formData.Addresses,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
+				Addresses:   formData.Addresses,
 			}
 
 			err = validate.Struct(formData)
@@ -12103,11 +12046,9 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			formData := components.L4LBNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        l4lbNode.Name,
-					Description: l4lbNode.Description,
-					Addresses:   components.AddressesString(l4lbNode.Node),
-				},
+				Name:        l4lbNode.Name,
+				Description: l4lbNode.Description,
+				Addresses:   components.AddressesString(l4lbNode.Node),
 			}
 
 			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeNameOrID, formData))
@@ -12131,11 +12072,9 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			nodeFormData := components.L4LBNodeFormData{
-				NodeFormFields: components.NodeFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-					Addresses:   formData.Addresses,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
+				Addresses:   formData.Addresses,
 			}
 
 			err = validate.Struct(formData)
@@ -12496,10 +12435,8 @@ func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			groupFormData := components.NodeGroupFormData{
-				NodeGroupFormFields: components.NodeGroupFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
 			}
 
 			err = validate.Struct(formData)
@@ -12585,10 +12522,8 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			formData := components.NodeGroupFormData{
-				NodeGroupFormFields: components.NodeGroupFormFields{
-					Name:        nodeGroup.Name,
-					Description: nodeGroup.Description,
-				},
+				Name:        nodeGroup.Name,
+				Description: nodeGroup.Description,
 			}
 
 			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupNameOrID, formData))
@@ -12612,10 +12547,8 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			groupFormData := components.NodeGroupFormData{
-				NodeGroupFormFields: components.NodeGroupFormFields{
-					Name:        formData.Name,
-					Description: formData.Description,
-				},
+				Name:        formData.Name,
+				Description: formData.Description,
 			}
 
 			err = validate.Struct(formData)
@@ -12834,9 +12767,7 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			ipFormData := components.IPNetworkFormData{
-				IPNetworkFormFields: components.IPNetworkFormFields{
-					Network: formData.Network,
-				},
+				Network: formData.Network,
 			}
 
 			err = validate.Struct(formData)
@@ -13204,11 +13135,9 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			formData := components.UserFormData{
-				UserFormFields: components.UserFormFields{
-					DisplayName: userData.DisplayName,
-					Role:        userData.RoleName,
-					Org:         orgName,
-				},
+				DisplayName: userData.DisplayName,
+				Role:        userData.RoleName,
+				Org:         orgName,
 			}
 
 			renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
@@ -13352,11 +13281,9 @@ func consoleUserResetPasswordHandler(dbc *dbConn, argon2Mutex *sync.Mutex, login
 			}
 
 			formData := components.UserFormData{
-				UserFormFields: components.UserFormFields{
-					DisplayName: userData.DisplayName,
-					Role:        userData.RoleName,
-					Org:         orgName,
-				},
+				DisplayName: userData.DisplayName,
+				Role:        userData.RoleName,
+				Org:         orgName,
 			}
 
 			roles, rolesErr := selectRoles(ctx, dbc)
@@ -13700,8 +13627,7 @@ func updateCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cac
 		err = tx.QueryRow(dbCtx, "UPDATE cache_nodes SET name = $1, description = $2 WHERE id = $3 RETURNING maintenance",
 			name, description, cacheNodeIdent.id).Scan(&maintenance)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 				switch pgErr.Code {
 				case pgUniqueViolation:
 					return cdnerrors.ErrAlreadyExists
@@ -13730,13 +13656,11 @@ func updateCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cac
 		}
 
 		updatedNode = cdntypes.CacheNode{
-			Node: cdntypes.Node{
-				ID:          cacheNodeIdent.id,
-				Name:        name,
-				Description: description,
-				Addresses:   addresses,
-				Maintenance: maintenance,
-			},
+			ID:          cacheNodeIdent.id,
+			Name:        name,
+			Description: description,
+			Addresses:   addresses,
+			Maintenance: maintenance,
 		}
 
 		return nil
@@ -13773,8 +13697,7 @@ func updateL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lb
 		err = tx.QueryRow(dbCtx, "UPDATE l4lb_nodes SET name = $1, description = $2 WHERE id = $3 RETURNING maintenance",
 			name, description, l4lbNodeIdent.id).Scan(&maintenance)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 				switch pgErr.Code {
 				case pgUniqueViolation:
 					return cdnerrors.ErrAlreadyExists
@@ -13803,13 +13726,11 @@ func updateL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lb
 		}
 
 		updatedNode = cdntypes.L4LBNode{
-			Node: cdntypes.Node{
-				ID:          l4lbNodeIdent.id,
-				Name:        name,
-				Description: description,
-				Addresses:   addresses,
-				Maintenance: maintenance,
-			},
+			ID:          l4lbNodeIdent.id,
+			Name:        name,
+			Description: description,
+			Addresses:   addresses,
+			Maintenance: maintenance,
 		}
 
 		return nil
@@ -13845,8 +13766,7 @@ func updateNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nod
 		_, err = tx.Exec(dbCtx, "UPDATE node_groups SET name = $1, description = $2 WHERE id = $3",
 			name, description, nodeGroupIdent.id)
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 				switch pgErr.Code {
 				case pgUniqueViolation:
 					return cdnerrors.ErrAlreadyExists

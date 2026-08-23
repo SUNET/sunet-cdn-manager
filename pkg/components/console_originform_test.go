@@ -163,10 +163,8 @@ func TestServiceVersionContentGroupRender(t *testing.T) {
 	apiCondition := `req.url ~ "^/api/"`
 
 	sv := cdntypes.ServiceVersionConfig{
-		ServiceVersion: cdntypes.ServiceVersion{
-			Version: 3,
-			Active:  true,
-		},
+		Version: 3,
+		Active:  true,
 		OriginGroups: []cdntypes.OriginGroup{
 			{ID: apiGroupID, Name: "api", Condition: &apiCondition, Position: 0},
 			{ID: legacyGroupID, Name: "manual", Position: 1},

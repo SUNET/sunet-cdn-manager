@@ -183,8 +183,7 @@ type selectInputOption struct {
 // ipAllocationErrMsg extracts the user-facing message from an IPAllocationError,
 // bypassing any fmt.Errorf wrapping from intermediate functions.
 func ipAllocationErrMsg(err error) string {
-	var ipAllocErr *cdnerrors.IPAllocationError
-	if errors.As(err, &ipAllocErr) {
+	if ipAllocErr, ok := errors.AsType[*cdnerrors.IPAllocationError](err); ok {
 		return ipAllocErr.Error()
 	}
 	return cdnerrors.ErrNoServiceIPAddresses.Error()
