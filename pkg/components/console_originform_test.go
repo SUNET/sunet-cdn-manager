@@ -152,42 +152,9 @@ func TestCreateServiceVersionContentSubmittedRender(t *testing.T) {
 	}
 }
 
-// TestOriginGroupFieldSetLegacyCloneEmptyCondition checks that cloning a
-// legacy (condition-less) non-default origin group prefills an empty
-// condition editor rather than erroring or showing a nil-dereference.
-func TestOriginGroupFieldSetLegacyCloneEmptyCondition(t *testing.T) {
-	legacyGroupID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
-	legacyGroup := &cdntypes.OriginGroup{ID: legacyGroupID, DefaultGroup: false, Name: "legacy", Condition: nil, Position: 0}
-
-	html := render(t, OriginGroupFieldSet("myorg", "myservice", 0, true, nil, legacyGroup, nil))
-
-	if !strings.Contains(html, `name="conditional-origin-groups.0.condition"`) {
-		t.Fatalf("expected condition textarea to be rendered")
-	}
-	if !strings.Contains(html, `value="legacy"`) {
-		t.Errorf("expected legacy group name to be prefilled from clone data")
-	}
-	// The condition textarea content should be empty: find the textarea
-	// element and check nothing but whitespace sits between its tags.
-	start := strings.Index(html, `class="condition-editor"`)
-	if start == -1 {
-		t.Fatalf("condition-editor textarea not found")
-	}
-	openEnd := strings.Index(html[start:], ">")
-	closeStart := strings.Index(html[start:], "</textarea>")
-	if openEnd == -1 || closeStart == -1 || openEnd >= closeStart {
-		t.Fatalf("could not locate condition textarea boundaries")
-	}
-	content := html[start+openEnd+1 : start+closeStart]
-	if strings.TrimSpace(content) != "" {
-		t.Errorf("expected empty condition editor for legacy clone group, got %q", content)
-	}
-}
-
 // TestServiceVersionContentGroupRender checks that the version detail page
 // shows origin groups in position order with their conditions, marks the
-// default group, notes legacy condition-less groups, and nests each
-// group's origins under it.
+// default group and nests each group's origins under it.
 func TestServiceVersionContentGroupRender(t *testing.T) {
 	apiGroupID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 	legacyGroupID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
@@ -220,8 +187,6 @@ func TestServiceVersionContentGroupRender(t *testing.T) {
 		"req.url ~ &#34;^/api/&#34;",
 		// Default group marker.
 		"default group — used when no condition matches",
-		// Legacy condition-less group note.
-		"No condition: this group is only reachable through manual backend references",
 		// Each group's origin appears.
 		"10.0.0.1",
 		"10.0.1.1",

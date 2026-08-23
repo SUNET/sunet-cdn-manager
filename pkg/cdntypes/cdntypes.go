@@ -165,7 +165,7 @@ type OriginGroup struct {
 	ID           pgtype.UUID `json:"id" doc:"ID of origin group"`
 	DefaultGroup bool        `json:"defaut_group" example:"true" doc:"If the group is the default"`
 	Name         string      `json:"name"`
-	Condition    *string     `json:"condition,omitempty" doc:"VCL condition selecting this group; nil for the default group and legacy groups"`
+	Condition    *string     `json:"condition,omitempty" doc:"VCL condition selecting this group; nil for the default group"`
 	Position     int64       `json:"position" doc:"Selection chain position within the service version"`
 }
 

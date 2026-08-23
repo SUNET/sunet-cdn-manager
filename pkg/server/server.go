@@ -7530,9 +7530,8 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	}
 
 	// Partition the referenced groups for chain generation: conditional
-	// groups (position order) and the default group. Condition-less
-	// non-default groups are legacy: their backends exist but they are
-	// only reachable from hand-written user VCL.
+	// groups (position order) and the default group. All non-default
+	// groups must have a condition set, required by the database.
 	conditionalGroups := []enrichedOriginGroup{}
 	var defaultEnriched *enrichedOriginGroup
 	for i := range referencedOriginGroups {
@@ -7542,6 +7541,8 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 			defaultEnriched = &referencedOriginGroups[i]
 		case g.Condition != nil:
 			conditionalGroups = append(conditionalGroups, g)
+		default:
+			return "", fmt.Errorf("non-default origin group '%s' has no condition, this is unexpected", g.Name)
 		}
 	}
 	slices.SortStableFunc(conditionalGroups, func(a, b enrichedOriginGroup) int {

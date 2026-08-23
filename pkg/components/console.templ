@@ -583,8 +583,6 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 					if originGroup.Condition != nil {
 						<p>Condition:</p>
 						<pre class="vcl-preview"><code>{ *originGroup.Condition }</code></pre>
-					} else if !originGroup.DefaultGroup {
-						<p><em>No condition: this group is only reachable through manual backend references in the VCL template.</em></p>
 					}
 					{{ groupOrigins := originsForGroup(sv.Origins, originGroup.ID) }}
 					if len(groupOrigins) == 0 {
