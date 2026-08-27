@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"text/template"
 	"time"
+	"uuid"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
@@ -46,7 +47,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 	"github.com/gorilla/schema"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -5032,10 +5032,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		// case since we want to reuse our "id" value in the
 		// "client_id" used in keycloak (e.g. sunet-cdn-org-client-<uuid>) instead
 		// generate it ourselves here.
-		tokenUUID, err := uuid.NewRandom()
-		if err != nil {
-			return fmt.Errorf("unable to generate UUID: %w", err)
-		}
+		tokenUUID := uuid.NewV4()
 
 		clientID = fmt.Sprintf("sunet-cdn-org-client-%s", tokenUUID)
 
