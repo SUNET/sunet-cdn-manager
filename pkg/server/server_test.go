@@ -4933,6 +4933,193 @@ func TestPostServiceVersion(t *testing.T) {
 			assertOriginGroups: true,
 		},
 		{
+			description:     "successful superuser request with default origin group using ipv4-mapped ipv6 address",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "::ffff:192.51.100.20", Port: 443, TLS: true},
+					{Host: "::ffff:192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			description:     "successful superuser request with conditional origin group using ipv4-mapped ipv6 address",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "::ffff:192.51.100.20", Port: 443, TLS: true},
+						{Host: "::ffff:192.51.100.21", Port: 80, TLS: false},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.30", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			description:     "successful superuser request with conditional origin group using DNS domain",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "srv1.example.com", Port: 443, TLS: true},
+					{Host: "srv1.example.com", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			description:     "successful superuser request with default origin group using IDN DNS domain",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "srv1.räksmörgås.example.com", Port: 443, TLS: true},
+					{Host: "srv1.räksmörgås.example.com", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			description:     "successful superuser request with conditional origin group using IDN DNS domain",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "srv1.räksmörgås.example.com", Port: 443, TLS: true},
+						{Host: "srv1.räksmörgås.example.com", Port: 80, TLS: false},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.30", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: true,
+		},
+		{
+			description:     "failed superuser request with conditional origin group attempting config injection via default origin field",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.30", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "127.0.0.1:8080 resolvers mydns\nprogram scm_poc\n        command /usr/bin/touch /evidence/HAPROXY-CODE-EXECUTED\n        no option start-on-reload\n#", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusUnprocessableEntity,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: false,
+		},
+		{
+			description:     "failed superuser request with conditional origin group attempting config injection via conditional origin field",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "beta",
+					Condition: "req.http.host == \"example.com\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "127.0.0.1:8080 resolvers mydns\nprogram scm_poc\n        command /usr/bin/touch /evidence/HAPROXY-CODE-EXECUTED\n        no option start-on-reload\n#", Port: 80, TLS: false},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.30", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:     http.StatusUnprocessableEntity,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			assertOriginGroups: false,
+		},
+		{
 			// The group name starts with a letter and only contains
 			// [-a-z0-9], so it passes huma's request pattern validation,
 			// but it fails the DB's valid_name/is_valid_dns_label CHECK
@@ -4996,6 +5183,14 @@ func TestPostServiceVersion(t *testing.T) {
 			active:          true,
 			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
+	}
+
+	// This table needs to be updated as new variations on origin hosts are
+	// added above to verify expected canonicalization.
+	expectedCanonicalization := map[string]string{
+		"srv1.räksmörgås.example.com": "srv1.xn--rksmrgs-5wao1o.example.com",
+		"::ffff:192.51.100.20":        "192.51.100.20",
+		"::ffff:192.51.100.21":        "192.51.100.21",
 	}
 
 	for _, test := range tests {
@@ -5068,15 +5263,17 @@ func TestPostServiceVersion(t *testing.T) {
 				}
 
 				type storedOriginGroupRow struct {
+					id           pgtype.UUID
 					name         string
 					defaultGroup bool
 					condition    *string
 					position     int64
+					origins      []cdntypes.InputOrigin
 				}
 
 				rows, err := dbPool.Query(
 					ctx,
-					"SELECT name, default_group, condition, position FROM service_origin_groups WHERE service_version_id = $1 ORDER BY position",
+					"SELECT id, name, default_group, condition, position FROM service_origin_groups WHERE service_version_id = $1 ORDER BY position",
 					createdVersion.ID,
 				)
 				if err != nil {
@@ -5086,7 +5283,7 @@ func TestPostServiceVersion(t *testing.T) {
 				var stored []storedOriginGroupRow
 				for rows.Next() {
 					var row storedOriginGroupRow
-					if err := rows.Scan(&row.name, &row.defaultGroup, &row.condition, &row.position); err != nil {
+					if err := rows.Scan(&row.id, &row.name, &row.defaultGroup, &row.condition, &row.position); err != nil {
 						t.Fatalf("unable to scan service_origin_groups row: %s", err)
 					}
 					stored = append(stored, row)
@@ -5101,19 +5298,134 @@ func TestPostServiceVersion(t *testing.T) {
 				// NULL condition.
 				var expected []storedOriginGroupRow
 				for _, cg := range test.conditionalGroups {
-					expected = append(expected, storedOriginGroupRow{
+					sogr := storedOriginGroupRow{
 						name:         cg.Name,
 						defaultGroup: false,
 						condition:    &cg.Condition,
 						position:     int64(len(expected)),
-					})
+					}
+					for _, o := range cg.Origins {
+						origHost := o.Host
+						// Make sure the content in the
+						// database has been
+						// canonicalized to e.g.
+						// punycode for hostnames or
+						// unmapped ipv4 addresses.
+						o.Host, err = canonicalizeOriginHost(o.Host)
+						if err != nil {
+							t.Fatalf("conditional group: unable to canonicalize origin host '%s'", o.Host)
+						}
+						sogr.origins = append(sogr.origins, o)
+
+						if origHost != o.Host {
+							t.Logf("conditional origin group host updated by canonicalization: from: '%s' to: '%s'", origHost, o.Host)
+							expectedCanonRes, ok := expectedCanonicalization[origHost]
+							if !ok {
+								t.Fatalf("unable to look up expected canonicalization for conditional origin group host '%s'", origHost)
+							} else {
+								if o.Host != expectedCanonRes {
+									t.Fatalf("expected conditional origin host '%s' to be modified to '%s', got '%s'", origHost, expectedCanonRes, o.Host)
+								}
+							}
+						}
+					}
+
+					expected = append(expected, sogr)
 				}
-				expected = append(expected, storedOriginGroupRow{
+
+				sogr := storedOriginGroupRow{
 					name:         cdntypes.DefaultOriginGroupName,
 					defaultGroup: true,
 					condition:    nil,
 					position:     int64(len(expected)),
-				})
+				}
+				for _, o := range test.defaultGroup.Origins {
+					origHost := o.Host
+					// Make sure the content in the
+					// database has been canonicalized to
+					// e.g. punycode for hostnames or
+					// unmapped ipv4 addresses.
+					o.Host, err = canonicalizeOriginHost(o.Host)
+					if err != nil {
+						t.Fatalf("default group: unable to canonicalize origin host: '%s'", o.Host)
+					}
+					sogr.origins = append(sogr.origins, o)
+					if origHost != o.Host {
+						t.Logf("default origin group host updated by canonicalization: from: '%s' to: '%s'", origHost, o.Host)
+						expectedCanonRes, ok := expectedCanonicalization[origHost]
+						if !ok {
+							t.Fatalf("unable to look up expected canonicalization for default origin host '%s'", origHost)
+						} else {
+							if o.Host != expectedCanonRes {
+								t.Fatalf("expected default origin host '%s' to be modified to '%s', got '%s'", origHost, expectedCanonRes, o.Host)
+							}
+						}
+					}
+				}
+				expected = append(expected, sogr)
+
+				type storedOriginRow struct {
+					host string
+				}
+
+				if len(stored) != len(expected) {
+					t.Fatalf("service_origin_groups row count mismatch: got %d, want %d (%+v)", len(stored), len(expected), stored)
+				}
+				for i, want := range expected {
+					got := stored[i]
+					if got.name != want.name || got.defaultGroup != want.defaultGroup || got.position != want.position {
+						t.Errorf("service_origin_groups row %d mismatch: got %+v, want name=%s default_group=%v position=%d", i, got, want.name, want.defaultGroup, want.position)
+					}
+					switch {
+					case want.condition == nil && got.condition != nil:
+						t.Errorf("service_origin_groups row %d: got condition %q, want NULL", i, *got.condition)
+					case want.condition != nil && got.condition == nil:
+						t.Errorf("service_origin_groups row %d: got NULL condition, want %q", i, *want.condition)
+					case want.condition != nil && got.condition != nil && *want.condition != *got.condition:
+						t.Errorf("service_origin_groups row %d: got condition %q, want %q", i, *got.condition, *want.condition)
+					}
+
+					rows, err := dbPool.Query(
+						ctx,
+						"SELECT host FROM service_origins WHERE service_version_id = $1 AND origin_group_id = $2 ORDER BY host",
+						createdVersion.ID,
+						got.id,
+					)
+					if err != nil {
+						t.Fatalf("unable to query service_origins: %s", err)
+					}
+
+					var storedOrigins []storedOriginRow
+					for rows.Next() {
+						var row storedOriginRow
+						if err := rows.Scan(&row.host); err != nil {
+							t.Fatalf("unable to scan service_origins row: %s", err)
+						}
+						storedOrigins = append(storedOrigins, row)
+					}
+					if err := rows.Err(); err != nil {
+						t.Fatalf("error iterating service_origins rows: %s", err)
+					}
+
+					if len(want.origins) != len(storedOrigins) {
+						t.Fatalf("uneven origin count: got: %d, want: %d", len(want.origins), len(storedOrigins))
+					}
+
+					for _, wo := range want.origins {
+						hostFound := false
+						storedHosts := []string{}
+						for _, so := range storedOrigins {
+							storedHosts = append(storedHosts, so.host)
+							if so.host == wo.Host {
+								hostFound = true
+								break
+							}
+						}
+						if !hostFound {
+							t.Fatalf("did not find origin host: %s, available: %s", wo.Host, &storedHosts)
+						}
+					}
+				}
 
 				if len(stored) != len(expected) {
 					t.Fatalf("service_origin_groups row count mismatch: got %d, want %d (%+v)", len(stored), len(expected), stored)
