@@ -68,6 +68,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/net/idna"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -262,11 +263,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 		return cdnerrors.ErrUnprocessable
 	}
 
-	// Duplicate names must be rejected before generating VCL: two groups
-	// with the same name would produce duplicate backend definitions and
-	// surface as a confusing varnish compiler error instead of the
-	// targeted message.
-	if err := validateOriginGroupInput(iSvc.ConditionalOriginGroups); err != nil {
+	if err := validateOriginGroupInput(&iSvc.DefaultOriginGroup, iSvc.ConditionalOriginGroups); err != nil {
 		return err
 	}
 
@@ -6859,6 +6856,133 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	return serviceVersions, nil
 }
 
+var hostnameProfile = idna.New(
+	idna.MapForLookup(),
+	idna.VerifyDNSLength(true),
+	idna.BidiRule(),
+)
+
+func canonicalizeOriginHost(host string) (string, error) {
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		// This is not a valid IPv4 or IPv6 address,
+		// validate as a DNS hostname and if successful overwrite
+		// the value with the resulting punycode ASCII so we
+		// store the plain ASCII string instead of whatever
+		// international unicode characters might have been
+		// inputted by the user. It is the punycode ASCII
+		// version we want to use internally in configuration
+		// etc anyway.
+		a, err := hostnameProfile.ToASCII(host)
+		if err != nil {
+			return "", fmt.Errorf("canonicalizeOriginHost: origin host is neither an IPv4 address nor an IPv6 address nor a valid DNS hostname")
+		}
+		// This is valid domain name, make sure we store the plain punycode format.
+		return a, nil
+	}
+
+	// IPv6 addresses with zone indexes (e.g. the string after the percent
+	// sign in "fe80::1ff:fe23:4567:890a%eth2") are not allowed since it is
+	// not usable on global scoped addresses anyway and could be an
+	// opportunity for injecting weirdness in config file generation.
+	if a.Zone() != "" {
+		return "", fmt.Errorf("canonicalizeOriginHost: origin host must not include an IPv6 zone")
+	}
+
+	// This is valid IP address, verify it has no unexpected content.
+	// Convert potentially IPv4-mapped IPv6 addresses (e.g.
+	// ::ffff:127.0.0.1) to real IPv4 addresses so it is less ambiguous
+	// what we are dealing with.
+	a = a.Unmap()
+
+	// Keep in mind that these checks only helps people trying to
+	// input literal IP addresses as origins. There is nothing stopping
+	// someone from instead adding a DNS hostname that resolves to any of
+	// these addresses. These checks needs to be combined with network
+	// filtering on cache nodes to actually stop traffic from being able to
+	// reach local services.
+	if err := addressIsValid(a); err != nil {
+		return "", fmt.Errorf("canonicalizeOriginHost: %w", err)
+	}
+
+	return a.String(), nil
+}
+
+// Some special networks not matchable via existing netip functions like
+// IsMulticast or IsPrivate. We specifically skip adding test and documentation
+// prefixes here since those are usable for tests of the system etc. The main
+// goal is not be able to add addresses pointing to networks that might be
+// internally routable.
+var specialIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"),  // CGNAT, RFC 6598
+	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
+	netip.MustParsePrefix("192.88.99.0/24"), // 6to4 relay anycast
+	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking, RFC 2544
+	netip.MustParsePrefix("240.0.0.0/4"),    // reserved
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use translation
+	netip.MustParsePrefix("100::/64"),       // discard-only
+	netip.MustParsePrefix("5f00::/16"),      // SRv6, RFC 9602
+	netip.MustParsePrefix("fec0::/10"),      // deprecated site-local
+	netip.MustParsePrefix("2001:2::/48"),    // benchmarking, RFC 5180
+}
+
+func addressIsValid(a netip.Addr) error {
+	if a.IsLoopback() {
+		// There is probably no good reason for being able to
+		// target the cache nodes themselves locally.
+		return fmt.Errorf("addressIsValid: origin host must not be a loopback address")
+	}
+	if a.IsPrivate() {
+		// Since cache nodes can sit in different datacenters
+		// the routing for e.g. "10.0.0.1" can lead to
+		// different hosts for different cache nodes so let's not
+		// even try to support it.
+		return fmt.Errorf("addressIsValid: origin host must not be a private address")
+	}
+	if a.IsUnspecified() {
+		return fmt.Errorf("addressIsValid: origin host must not be an unspecified address")
+	}
+	if a.IsInterfaceLocalMulticast() {
+		return fmt.Errorf("addressIsValid: origin host must not be an interface-local multicast address")
+	}
+	if a.IsLinkLocalMulticast() {
+		return fmt.Errorf("addressIsValid: origin host must not be a link local multicast address")
+	}
+	if a.IsLinkLocalUnicast() {
+		return fmt.Errorf("addressIsValid: origin host must not be a link local unicast address")
+	}
+	if a.IsMulticast() {
+		return fmt.Errorf("addressIsValid: origin host must not be a multicast address")
+	}
+	if !a.IsGlobalUnicast() {
+		return fmt.Errorf("addressIsValid: origin host must be a global unicast address")
+	}
+
+	for _, specialPrefix := range specialIPPrefixes {
+		if specialPrefix.Contains(a) {
+			return fmt.Errorf("addressIsValid: origin host belongs to a special prefix: %s", specialPrefix)
+		}
+	}
+
+	return nil
+}
+
+func validateInputOrigins(origins []cdntypes.InputOrigin) error {
+	// Verify the origin host is either an IPv4 or IPv6 address or a valid
+	// DNS hostname, overwriting the origins host content if the hostname
+	// needs to be converted to punycode.
+	var err error
+	for i := range origins {
+		origins[i].Host, err = canonicalizeOriginHost(origins[i].Host)
+		if err != nil {
+			return fmt.Errorf("validateInputOrigins: origin %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 // validateOriginGroupInput rejects duplicate group names (across the
 // conditional groups and the default group) and duplicate conditions
 // (across the conditional groups) before any VCL is generated or rows are
@@ -6869,10 +6993,19 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 // if/elseif chain can never reach — almost certainly a copy-paste
 // mistake. Logically equivalent but textually different conditions are out of
 // scope.
-func validateOriginGroupInput(conditionalGroups []cdntypes.InputConditionalOriginGroup) error {
+func validateOriginGroupInput(defaultOriginGroup *cdntypes.InputDefaultOriginGroup, conditionalGroups []cdntypes.InputConditionalOriginGroup) error {
+	if defaultOriginGroup == nil {
+		panic("validateOriginGroupInput: defaultOriginGroup must not be nil")
+	}
+
+	err := validateInputOrigins(defaultOriginGroup.Origins)
+	if err != nil {
+		return cdnerrors.NewValidationError(fmt.Sprintf("default origin group has invalid origin: %s", err))
+	}
+
 	seenNames := map[string]struct{}{cdntypes.DefaultOriginGroupName: {}}
 	seenConditions := map[string]string{}
-	for _, group := range conditionalGroups {
+	for i, group := range conditionalGroups {
 		if _, ok := seenNames[group.Name]; ok {
 			return cdnerrors.NewValidationError(fmt.Sprintf("duplicate origin group name: %s", group.Name))
 		}
@@ -6882,7 +7015,13 @@ func validateOriginGroupInput(conditionalGroups []cdntypes.InputConditionalOrigi
 			return cdnerrors.NewValidationError(fmt.Sprintf("origin groups %s and %s have identical conditions, the later group would never be selected", firstName, group.Name))
 		}
 		seenConditions[group.Condition] = group.Name
+
+		err := validateInputOrigins(conditionalGroups[i].Origins)
+		if err != nil {
+			return cdnerrors.NewValidationError(fmt.Sprintf("origin group %s has invalid origin: %s", conditionalGroups[i].Name, err))
+		}
 	}
+
 	return nil
 }
 
@@ -7653,7 +7792,10 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 
 	addressStrings := []string{}
 
-	// HAProxy expects IPv6 addresses to be enclosed in []
+	// While HAProxy understands IPv6 addresses either with or without
+	// brackets we add brackets since this makes it easier to quickly see
+	// what is a port and what is part of the address when reading the
+	// config.
 	for _, addr := range serviceIPAddresses {
 		if addr.Unmap().Is4() {
 			addressStrings = append(addressStrings, addr.Unmap().String())
@@ -7661,6 +7803,16 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 			addressStrings = append(addressStrings, fmt.Sprintf("[%s]", addr.Unmap()))
 		} else {
 			return "", fmt.Errorf("address is neither IPv4 or IPv6")
+		}
+	}
+
+	// Do the same IPv6 bracketing for origins to be consistent
+	for i := range origins {
+		addr, err := netip.ParseAddr(origins[i].Host)
+		if err == nil {
+			if addr.Unmap().Is6() {
+				origins[i].Host = fmt.Sprintf("[%s]", addr.Unmap())
+			}
 		}
 	}
 
