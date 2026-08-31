@@ -205,6 +205,16 @@ func TestCanonicalizeOriginHost(t *testing.T) {
 			host:        "100.64.0.1",
 			errContains: "belongs to a special prefix",
 		},
+		{
+			description: "IPv4 with trailing dot should not be accepted",
+			host:        "198.51.100.1.",
+			errContains: "origin host is neither an IPv4 address nor an IPv6 address nor a valid DNS hostname",
+		},
+		{
+			description: "IPv6 with trailing dot should not be accepted",
+			host:        "2001:db8::1.",
+			errContains: "origin host is neither an IPv4 address nor an IPv6 address nor a valid DNS hostname",
+		},
 	}
 
 	for _, test := range tests {

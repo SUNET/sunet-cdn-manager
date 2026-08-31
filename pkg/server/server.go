@@ -1618,6 +1618,18 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 				FQDN: formData.FQDN,
 			}
 
+			formData.FQDN, err = canonicalizeDomain(formData.FQDN)
+			if err != nil {
+				domainData.Errors.FQDN = validationNotFQDN
+				logger.Err(err).Msg("unable to validate POST create-domain FQDN value")
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
+				if err != nil {
+					logger.Err(err).Msg("unable to render domain creation page in POST for invalid FQDN")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
 			err = validate.Struct(formData)
 			if err != nil {
 				validationErrors := err.(validator.ValidationErrors)
@@ -2713,7 +2725,7 @@ type createServiceForm struct {
 type createDomainForm struct {
 	// Domain name length validation needs to be kept in sync with the CHECK
 	// constraints in the domains table, see the migrations module.
-	FQDN string `schema:"fqdn" validate:"min=1,max=253,fqdn"`
+	FQDN string `schema:"fqdn" validate:"min=1,max=253"`
 }
 
 type createAPITokenForm struct {
@@ -6129,9 +6141,6 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	var domainID pgtype.UUID
 	var verificationToken string
 
-	// Cleanup any trailing "." in domain FQDN
-	fqdn = strings.TrimRight(fqdn, ".")
-
 	var orgIdent orgIdentifier
 	var err error
 
@@ -6141,6 +6150,11 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 
 	if orgNameOrID == nil {
 		return cdntypes.Domain{}, cdnerrors.ErrUnprocessable
+	}
+
+	fqdn, err = canonicalizeDomain(fqdn)
+	if err != nil {
+		return cdntypes.Domain{}, fmt.Errorf("insertDomain: %w", err)
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
@@ -6862,6 +6876,31 @@ var hostnameProfile = idna.New(
 	idna.BidiRule(),
 )
 
+func canonicalizeDomain(domain string) (string, error) {
+	// Make sure we have a valid domain name and in
+	// the case of an IDN domain update it to the
+	// equivalent punycode ASCII format.
+	var err error
+
+	// Cleanup a trailing "." in domain FQDN
+	domain = strings.TrimSuffix(domain, ".")
+
+	domain, err = hostnameProfile.ToASCII(domain)
+	if err != nil {
+		return "", fmt.Errorf("canonicalizeDomain: unable to do IDN domain parsing: %w", err)
+	}
+
+	// Verify we have not been passed some strange domain name like
+	// "127.0.0.1." which would pass ToASCII() without issue after the dot
+	// has been stripped above.
+	_, err = netip.ParseAddr(domain)
+	if err == nil {
+		return "", fmt.Errorf("canonicalizeDomain: domain looks like an IP address")
+	}
+
+	return domain, nil
+}
+
 func canonicalizeOriginHost(host string) (string, error) {
 	a, err := netip.ParseAddr(host)
 	if err != nil {
@@ -6873,7 +6912,7 @@ func canonicalizeOriginHost(host string) (string, error) {
 		// inputted by the user. It is the punycode ASCII
 		// version we want to use internally in configuration
 		// etc anyway.
-		a, err := hostnameProfile.ToASCII(host)
+		a, err := canonicalizeDomain(host)
 		if err != nil {
 			return "", fmt.Errorf("canonicalizeOriginHost: origin host is neither an IPv4 address nor an IPv6 address nor a valid DNS hostname")
 		}
@@ -8867,17 +8906,15 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			func(ctx context.Context, input *struct {
 				Org  string `query:"org" example:"1" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
 				Body struct {
-					FQDN string `json:"fqdn" example:"example.com" doc:"Domain FQDN" minLength:"1" maxLength:"253" pattern:"^[a-z]([-.a-z0-9]*[a-z0-9])?$" patternDescription:"valid DNS name"`
+					FQDN string `json:"fqdn" example:"example.com" doc:"Domain FQDN" minLength:"1" maxLength:"253"`
 				}
 			},
 			) (*orgDomainOutput, error) {
 				logger := zlog.Ctx(ctx)
+				var err error
 
-				// The regex used above is not really a good
-				// filter for valid domain names, do some extra
-				// validation
-				_, ok := dns.IsDomainName(input.Body.FQDN)
-				if !ok {
+				input.Body.FQDN, err = canonicalizeDomain(input.Body.FQDN)
+				if err != nil {
 					return nil, huma.Error422UnprocessableEntity("the DNS name is not valid")
 				}
 
