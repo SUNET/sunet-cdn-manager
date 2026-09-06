@@ -4278,12 +4278,13 @@ func TestPostDomains(t *testing.T) {
 	defer ts.Close()
 
 	tests := []struct {
-		description    string
-		username       string
-		password       string
-		expectedStatus int
-		newDomain      string
-		orgNameOrID    string
+		description         string
+		username            string
+		password            string
+		expectedStatus      int
+		newDomain           string
+		canonicalizedDomain string
+		orgNameOrID         string
 	}{
 		{
 			description:    "successful superuser request",
@@ -4292,6 +4293,24 @@ func TestPostDomains(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			newDomain:      "example.net",
 			orgNameOrID:    "org1",
+		},
+		{
+			description:         "successful superuser request with trailing dot",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusCreated,
+			newDomain:           "trailing.example.com.",
+			canonicalizedDomain: "trailing.example.com",
+			orgNameOrID:         "org1",
+		},
+		{
+			description:         "successful superuser request with IDN domain",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusCreated,
+			newDomain:           "räksmörgås.example.com",
+			canonicalizedDomain: "xn--rksmrgs-5wao1o.example.com",
+			orgNameOrID:         "org1",
 		},
 		{
 			description:    "failed superuser request with invalid DNS name",
@@ -4356,6 +4375,25 @@ func TestPostDomains(t *testing.T) {
 			jsonData, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)
+			}
+
+			if test.expectedStatus == http.StatusCreated {
+				resData := struct {
+					FQDN string `json:"fqdn"`
+				}{}
+				err := json.Unmarshal(jsonData, &resData)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				expectedDomain := test.newDomain
+				if test.canonicalizedDomain != "" {
+					expectedDomain = test.canonicalizedDomain
+				}
+
+				if resData.FQDN != expectedDomain {
+					t.Fatalf("unexpected fqdn in creation response, want: '%s', have: '%s'", expectedDomain, resData.FQDN)
+				}
 			}
 
 			t.Logf("%s\n", jsonData)
