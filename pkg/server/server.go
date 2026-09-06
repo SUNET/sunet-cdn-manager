@@ -2282,7 +2282,8 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 				FROM service_origin_groups
 				WHERE service_version_id = service_versions.id
 			) AS origin_groups,
-			service_vcls.vcl_template
+			service_vcls.vcl_template,
+			service_versions.description
 		FROM
 			services
 			JOIN service_versions ON services.id = service_versions.service_id
@@ -2475,7 +2476,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 				}
 				return
 			}
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate)
+			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation):
@@ -6834,14 +6835,15 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 
 		rows, err = tx.Query(
 			ctx,
-			"SELECT service_versions.id, service_versions.version, service_versions.active, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE service_id = $1 ORDER BY service_versions.version",
+			"SELECT service_versions.id, service_versions.version, service_versions.active, service_versions.description, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE service_id = $1 ORDER BY service_versions.version",
 			serviceIdent.id,
 		)
 		var id pgtype.UUID
 		var orgName string
 		var version int64
 		var active bool
-		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &orgName}, func() error {
+		var description string
+		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &description, &orgName}, func() error {
 			serviceVersions = append(
 				serviceVersions,
 				cdntypes.ServiceVersion{
@@ -6850,6 +6852,7 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 					ServiceName: serviceIdent.name,
 					Version:     version,
 					Active:      active,
+					Description: description,
 					OrgID:       serviceIdent.orgID,
 					OrgName:     orgName,
 				},
@@ -7172,6 +7175,7 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 			service_versions.id,
 			service_versions.version,
 			service_versions.active,
+			service_versions.description,
 			service_vcls.vcl_template,
 			(SELECT
 				array_agg(address ORDER BY address)
@@ -7225,6 +7229,7 @@ type serviceVersionInsertResult struct {
 	versionID     pgtype.UUID
 	version       int64
 	active        bool
+	description   string
 	domainIDs     []pgtype.UUID
 	originIDs     []pgtype.UUID
 	deactivatedID *pgtype.UUID
@@ -7261,7 +7266,7 @@ func deactivatePreviousServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceI
 	return deactivatedServiceVersionID, nil
 }
 
-func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string) (serviceVersionInsertResult, error) {
+func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string, description string) (serviceVersionInsertResult, error) {
 	var serviceVersionID pgtype.UUID
 	var versionCounter int64
 	var deactivatedServiceVersionID *pgtype.UUID
@@ -7285,10 +7290,11 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 
 	err = tx.QueryRow(
 		ctx,
-		"INSERT INTO service_versions (service_id, version, active) VALUES ($1, $2, $3) RETURNING id",
+		"INSERT INTO service_versions (service_id, version, active, description) VALUES ($1, $2, $3, $4) RETURNING id",
 		serviceIdent.id,
 		versionCounter,
 		active,
+		description,
 	).Scan(&serviceVersionID)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
@@ -7390,12 +7396,13 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 		deactivatedID: deactivatedServiceVersionID,
 		vclID:         serviceVclID,
 		active:        active,
+		description:   description,
 	}
 
 	return res, nil
 }
 
-func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string) (serviceVersionInsertResult, error) {
+func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string, description string) (serviceVersionInsertResult, error) {
 	// If neither a superuser or a normal user belonging to an org there
 	// is nothing further that is allowed
 	if !ad.Superuser {
@@ -7447,7 +7454,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			return fmt.Errorf("VCL validation failed: %w", err)
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, conditionalGroups, defaultGroup, active, vclTemplate)
+		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
@@ -9253,6 +9260,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					ConditionalOriginGroups []cdntypes.InputConditionalOriginGroup `json:"conditional_origin_groups,omitempty" doc:"Ordered conditional origin groups; list order is selection priority" maxItems:"10"`
 					DefaultOriginGroup      cdntypes.InputDefaultOriginGroup       `json:"default_origin_group" doc:"Fallback origin group used when no condition matches"`
 					Active                  bool                                   `json:"active,omitempty" doc:"If the submitted config should be activated or not"`
+					Description             string                                 `json:"description,omitempty" doc:"Description of the service version" maxLength:"512"`
 				}
 			},
 			) (*serviceVersionOutput, error) {
@@ -9263,7 +9271,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, errors.New("unable to read auth data from service version POST handler")
 				}
 
-				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.ConditionalOriginGroups, input.Body.DefaultOriginGroup, input.Body.Active, input.Body.VCLTemplate)
+				serviceVersionInsertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, input.Body.Org, input.Service, input.Body.Domains, input.Body.ConditionalOriginGroups, input.Body.DefaultOriginGroup, input.Body.Active, input.Body.VCLTemplate, input.Body.Description)
 				if err != nil {
 					switch {
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -9294,6 +9302,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				resp.Body.ID = serviceVersionInsertRes.versionID
 				resp.Body.Version = serviceVersionInsertRes.version
 				resp.Body.Active = serviceVersionInsertRes.active
+				resp.Body.Description = serviceVersionInsertRes.description
 				return resp, nil
 			},
 		)

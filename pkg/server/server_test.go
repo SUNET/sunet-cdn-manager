@@ -4570,6 +4570,7 @@ func TestPostServiceVersion(t *testing.T) {
 		active             bool
 		vclTemplateFile    string
 		assertOriginGroups bool
+		versionDescription string
 	}{
 		{
 			description:     "successful superuser request with ID",
@@ -4584,9 +4585,10 @@ func TestPostServiceVersion(t *testing.T) {
 					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
-			expectedStatus:  http.StatusCreated,
-			active:          true,
-			vclTemplateFile: "testdata/vcl/template1.vcl",
+			expectedStatus:     http.StatusCreated,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			versionDescription: "first version",
 		},
 		{
 			description:     "successful superuser request with ID",
@@ -4740,6 +4742,24 @@ func TestPostServiceVersion(t *testing.T) {
 			expectedStatus:  http.StatusUnprocessableEntity,
 			active:          true,
 			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "failed superuser request, too long description",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "192.51.100.20", Port: 443, TLS: true},
+					{Host: "192.51.100.21", Port: 80, TLS: false},
+				},
+			},
+			expectedStatus:     http.StatusUnprocessableEntity,
+			active:             true,
+			vclTemplateFile:    "testdata/vcl/template1.vcl",
+			versionDescription: strings.Repeat("a", 513),
 		},
 		{
 			description:     "failed superuser request with invalid service name (too long)",
@@ -5240,12 +5260,14 @@ func TestPostServiceVersion(t *testing.T) {
 				ConditionalOriginGroups []cdntypes.InputConditionalOriginGroup `json:"conditional_origin_groups,omitempty"`
 				DefaultOriginGroup      cdntypes.InputDefaultOriginGroup       `json:"default_origin_group"`
 				VCLTemplate             string                                 `json:"vcl_template"`
+				Description             string                                 `json:"description,omitempty"`
 			}{
 				Org:                     test.orgNameOrID,
 				Active:                  test.active,
 				Domains:                 test.domains,
 				ConditionalOriginGroups: test.conditionalGroups,
 				DefaultOriginGroup:      test.defaultGroup,
+				Description:             test.versionDescription,
 			}
 
 			var vclTemplateContentBytes []byte
@@ -5293,6 +5315,29 @@ func TestPostServiceVersion(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusCreated {
+				var createdVersion cdntypes.ServiceVersion
+				if err := json.Unmarshal(jsonData, &createdVersion); err != nil {
+					t.Fatalf("unable to unmarshal created service version: %s", err)
+				}
+				if createdVersion.Description != test.versionDescription {
+					t.Errorf("created service version description: got %q, want %q", createdVersion.Description, test.versionDescription)
+				}
+				var dbDescription string
+				err = dbPool.QueryRow(
+					ctx,
+					"SELECT description FROM service_versions WHERE id = $1",
+					createdVersion.ID,
+				).Scan(&dbDescription)
+				if err != nil {
+					t.Fatalf("unable to query service_versions for description: %s", err)
+				}
+
+				if test.versionDescription != dbDescription {
+					t.Fatalf("database does not contain expected description: want: %s, have: %s", test.versionDescription, dbDescription)
+				}
+			}
 
 			if test.assertOriginGroups {
 				var createdVersion cdntypes.ServiceVersion

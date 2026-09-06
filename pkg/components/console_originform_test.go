@@ -34,6 +34,7 @@ func TestCreateServiceVersionContentCloneRender(t *testing.T) {
 
 	cloneData := cdntypes.ServiceVersionCloneData{
 		VCLTemplate: "vcl-content",
+		Description: "cloned service version description",
 		Domains:     []cdntypes.DomainString{"example.com"},
 		OriginGroups: []cdntypes.OriginGroup{
 			{ID: apiGroupID, DefaultGroup: false, Name: "api", Condition: &condition, Position: 0},
@@ -50,6 +51,9 @@ func TestCreateServiceVersionContentCloneRender(t *testing.T) {
 	html := render(t, CreateServiceVersionContent("myservice", "myorg", domains, nil, "vcl-content", cloneData, nil, ""))
 
 	wantSubstrings := []string{
+		// The description, prefilled from clone data.
+		`name="description"`,
+		`value="cloned service version description"`,
 		// The conditional group itself.
 		`name="conditional-origin-groups.0.name"`,
 		`value="api"`,
@@ -104,6 +108,7 @@ func TestCreateServiceVersionContentCloneRender(t *testing.T) {
 func TestCreateServiceVersionContentSubmittedRender(t *testing.T) {
 	submitted := &cdntypes.CreateServiceVersionForm{
 		VCLTemplate: "vcl-content",
+		Description: "submitted description",
 		ConditionalGroups: []cdntypes.CreateServiceVersionConditionalGroup{
 			{
 				Name:      "static",
@@ -123,6 +128,7 @@ func TestCreateServiceVersionContentSubmittedRender(t *testing.T) {
 	// cloneData should be ignored entirely since submittedData != nil.
 	cloneID := pgtype.UUID{Bytes: [16]byte{9}, Valid: true}
 	cloneData := cdntypes.ServiceVersionCloneData{
+		Description: "should-not-appear-description",
 		OriginGroups: []cdntypes.OriginGroup{
 			{ID: cloneID, DefaultGroup: false, Name: "should-not-appear", Condition: nil, Position: 0},
 		},
@@ -140,6 +146,9 @@ func TestCreateServiceVersionContentSubmittedRender(t *testing.T) {
 	}
 	if strings.Contains(html, "192.0.2.1") {
 		t.Errorf("clone origin leaked through despite submittedData being set")
+	}
+	if !strings.Contains(html, `value="submitted description"`) {
+		t.Errorf("expected submitted description to be prefilled")
 	}
 	if !strings.Contains(html, `value="static"`) {
 		t.Errorf("expected submitted group name to be prefilled")
@@ -163,8 +172,9 @@ func TestServiceVersionContentGroupRender(t *testing.T) {
 	apiCondition := `req.url ~ "^/api/"`
 
 	sv := cdntypes.ServiceVersionConfig{
-		Version: 3,
-		Active:  true,
+		Version:     3,
+		Active:      true,
+		Description: "a test service version",
 		OriginGroups: []cdntypes.OriginGroup{
 			{ID: apiGroupID, Name: "api", Condition: &apiCondition, Position: 0},
 			{ID: legacyGroupID, Name: "manual", Position: 1},
@@ -181,6 +191,8 @@ func TestServiceVersionContentGroupRender(t *testing.T) {
 
 	wantSubstrings := []string{
 		"Origin groups",
+		// The version's description.
+		"a test service version",
 		// Condition rendered (HTML-escaped) for the conditional group.
 		"req.url ~ &#34;^/api/&#34;",
 		// Default group marker.

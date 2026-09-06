@@ -100,6 +100,7 @@ type ServiceVersion struct {
 	OrgName     string      `json:"org_name" doc:"Name of related organization"`
 	Version     int64       `json:"version" example:"1" doc:"Version of the service"`
 	Active      bool        `json:"active" example:"true" doc:"If the version is active"`
+	Description string      `json:"description" doc:"Description of the service version" maxLength:"512"`
 }
 
 type ServiceVersionVCL struct {
@@ -119,6 +120,7 @@ type ServiceVersionConfig struct {
 
 type ServiceVersionCloneData struct {
 	VCLTemplate  string         `json:"vcl_template" doc:"The VCL template content"`
+	Description  string         `json:"description" doc:"The description of the cloned service version"`
 	Domains      []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
 	OriginGroups []OriginGroup  `json:"origin_groups" doc:"The origin groups of the cloned version"`
 	Origins      []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
@@ -152,6 +154,7 @@ type CreateServiceVersionDefaultGroup struct {
 
 type CreateServiceVersionForm struct {
 	VCLTemplate       string                                 `schema:"vcl_template" validate:"min=1,max=1048576"`
+	Description       string                                 `schema:"description" validate:"max=512"`
 	Domains           []DomainString                         `schema:"domains" validate:"dive,min=1,max=253"`
 	ConditionalGroups []CreateServiceVersionConditionalGroup `schema:"conditional-origin-groups" validate:"max=10,dive"`
 	DefaultGroup      CreateServiceVersionDefaultGroup       `schema:"default-origin-group"`
