@@ -10,6 +10,7 @@ import (
 func TestCreateServiceVersionFormDecode(t *testing.T) {
 	form := url.Values{}
 	form.Set("vcl_template", "vcl-content")
+	form.Set("description", "my service version")
 	form.Add("domains", "example.com")
 	form.Set("conditional-origin-groups.0.name", "api")
 	form.Set("conditional-origin-groups.0.condition", `req.url ~ "^/api/"`)
@@ -30,6 +31,9 @@ func TestCreateServiceVersionFormDecode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if formData.Description != "my service version" {
+		t.Errorf("description not decoded: got %q", formData.Description)
+	}
 	if len(formData.ConditionalGroups) != 2 {
 		t.Fatalf("expected 2 conditional groups, got %d", len(formData.ConditionalGroups))
 	}

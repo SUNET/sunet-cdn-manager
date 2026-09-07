@@ -411,6 +411,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 				<tr>
 					<th>Version</th>
 					<th>Active</th>
+					<th>Description</th>
 					<th>Actions</th>
 				</tr>
 			</thead>
@@ -429,6 +430,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 								<span aria-hidden="true">❌ </span>No
 							}
 						</td>
+						<td>{ sv.Description }</td>
 						<td>
 							<button
 								type="button"
@@ -559,6 +561,10 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 						<span aria-hidden="true">❌ </span>No
 					}
 				</td>
+			</tr>
+			<tr>
+				<th scope="row">Description</th>
+				<td>{ sv.Description }</td>
 			</tr>
 		</table>
 	</article>
@@ -976,6 +982,18 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 						}
 					}
 				}
+			</fieldset>
+		</article>
+		{{
+			descriptionValue := cloneData.Description
+			if submittedData != nil {
+				descriptionValue = submittedData.Description
+			}
+		}}
+		<article>
+			<fieldset>
+				<legend>Description</legend>
+				<input type="text" id="description" name="description" aria-label="Description" placeholder="Enter a description..." value={ descriptionValue } maxlength="512"/>
 			</fieldset>
 		</article>
 		{{
