@@ -23,13 +23,16 @@ const (
 // credentials and OrgID/OrgName may be unset for users not currently members
 // of an organization.
 type AuthData struct {
-	Username  *string
-	UserID    *pgtype.UUID
-	OrgID     *pgtype.UUID
-	OrgName   *string
-	Superuser bool
-	RoleID    pgtype.UUID
-	RoleName  string
+	Username           *string
+	UserID             *pgtype.UUID
+	OrgID              *pgtype.UUID
+	OrgName            *string
+	Superuser          bool
+	RoleID             pgtype.UUID
+	RoleName           string
+	ClientCredName     *string
+	ClientCredID       *pgtype.UUID
+	ClientCredClientID *string
 }
 
 // Types that can be shared across the other packages

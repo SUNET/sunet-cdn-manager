@@ -2867,6 +2867,8 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 				return
 			}
 
+			addUserToRequestLog(logger, ad)
+
 			session := getSession(r, cookieStore)
 
 			target := consumePendingReturnTo(session)
@@ -3118,6 +3120,8 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 				return
 			}
 		}
+
+		addUserToRequestLog(logger, ad)
 
 		target := consumePendingReturnTo(session)
 
@@ -3591,13 +3595,16 @@ func jwtToAuthData(ctx context.Context, tx pgx.Tx, jwtToken jwt.Token) (cdntypes
 	}
 
 	return cdntypes.AuthData{
-		Username:  nil,
-		UserID:    nil,
-		OrgID:     &orgID,
-		OrgName:   &orgName,
-		RoleID:    roleID,
-		RoleName:  roleName,
-		Superuser: superuser,
+		Username:           nil,
+		UserID:             nil,
+		OrgID:              &orgID,
+		OrgName:            &orgName,
+		RoleID:             roleID,
+		RoleName:           roleName,
+		Superuser:          superuser,
+		ClientCredName:     &clientCredName,
+		ClientCredID:       &clientCredID,
+		ClientCredClientID: &clientID,
 	}, nil
 }
 
@@ -3643,9 +3650,35 @@ func authFromSession(logger *zerolog.Logger, session *sessions.Session, consoleS
 		return nil, err
 	}
 
-	logger.Info().Msg("using authentication data from session")
 	ad := adInt.(cdntypes.AuthData)
+	addUserToRequestLog(logger, ad)
+	logger.Info().Msg("using authentication data from session")
 	return &ad, nil
+}
+
+func addUserToRequestLog(logger *zerolog.Logger, ad cdntypes.AuthData) {
+	logger.UpdateContext(func(c zerolog.Context) zerolog.Context {
+		if ad.Username != nil {
+			c = c.Str("username", *ad.Username)
+		}
+		if ad.UserID != nil {
+			c = c.Str("user_id", ad.UserID.String())
+		}
+		if ad.OrgName != nil {
+			c = c.Str("org_name", *ad.OrgName)
+		}
+		if ad.ClientCredName != nil {
+			c = c.Str("client_cred_name", *ad.ClientCredName)
+		}
+		if ad.ClientCredID != nil {
+			c = c.Str("client_cred_id", ad.ClientCredID.String())
+		}
+		if ad.ClientCredClientID != nil {
+			c = c.Str("client_cred_client_id", *ad.ClientCredClientID)
+		}
+		c = c.Bool("superuser", ad.Superuser)
+		return c
+	})
 }
 
 func consoleAuthMiddleware(cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) func(next http.Handler) http.Handler {
@@ -8366,6 +8399,8 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, lo
 			sendHumaUnauthorized(logger, api, humaCtx)
 			return
 		}
+
+		addUserToRequestLog(logger, ad)
 
 		humaCtx = huma.WithValue(humaCtx, authDataKey{}, ad)
 
