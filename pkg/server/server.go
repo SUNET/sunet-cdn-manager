@@ -6956,14 +6956,6 @@ func canonicalizeOriginHost(host string) (string, error) {
 		return a, nil
 	}
 
-	// IPv6 addresses with zone indexes (e.g. the string after the percent
-	// sign in "fe80::1ff:fe23:4567:890a%eth2") are not allowed since it is
-	// not usable on global scoped addresses anyway and could be an
-	// opportunity for injecting weirdness in config file generation.
-	if a.Zone() != "" {
-		return "", fmt.Errorf("canonicalizeOriginHost: origin host must not include an IPv6 zone")
-	}
-
 	// This is valid IP address, verify it has no unexpected content.
 	// Convert potentially IPv4-mapped IPv6 addresses (e.g.
 	// ::ffff:127.0.0.1) to real IPv4 addresses so it is less ambiguous
@@ -7003,6 +6995,7 @@ var specialIPPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known prefix, RFC 6052
 	netip.MustParsePrefix("2001::/32"),      // Teredo
 	netip.MustParsePrefix("2002::/16"),      // 6to4
+	netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible IPv6 address, RFC 4291
 }
 
 // addressIsValid is supposed to control what origin hosts are allowed to be
@@ -7012,8 +7005,20 @@ var specialIPPrefixes = []netip.Prefix{
 // instead of a literal IP address where we do not know what the name resolves
 // to over time).
 func addressIsValid(a netip.Addr) error {
+	if !a.IsValid() {
+		return fmt.Errorf("addressIsValid: origin host must be an initialized address")
+	}
+
 	// Make sure a is unmapped
 	a = a.Unmap()
+
+	// IPv6 addresses with zone indexes (e.g. the string after the percent
+	// sign in "fe80::1ff:fe23:4567:890a%eth2") are not allowed since it is
+	// not usable on global scoped addresses anyway and could be an
+	// opportunity for injecting weirdness in config file generation.
+	if a.Zone() != "" {
+		return fmt.Errorf("addressIsValid: origin host must not include an IPv6 zone")
+	}
 
 	if a.IsLoopback() {
 		// There is probably no good reason for being able to
