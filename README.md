@@ -50,10 +50,13 @@ Initialize the sunet-cdn-manager realm and SATOSA IdP setup in keycloak:
 local-dev/keycloak/setup.sh
 ```
 
-This will output the OIDC Client ID and secret at the end, e.g.:
+This will output the OIDC Client ID and secret as well as admin client
+client_id and secret at the end, e.g.:
 ```
 server OIDC client_id: sunet-cdn-manager-server
-server OIDC client_secret: some-secret-string
+server OIDC client_secret: some-oidc-secret-string
+admin client client_id: sunet-cdn-manager-admin-client
+admin client client_secret: some-client-secret-string
 ```
 
 #### Configure sunet-cdn-manager
@@ -71,9 +74,10 @@ Take the client_secret that was outputted above and insert it into
 `sunet-cdn-manager-dev.toml`:
 ```
 [oidc]
-[...]
 client_secret = "some-secret-string"
-[...]
+
+[keycloak_client_admin]
+client_secret = "some-client-secret-string"
 ```
 
 #### Start complete infrastructure
@@ -120,7 +124,7 @@ admin_password=$(cat admin.password) ./local-dev/add-sample-entities.sh
 ```
 
 At this point you can log in to the system by browsing to
-https://manager.sunet-cdn.localhost:8444 choosing "Login with Keycloak" and
+https://manager.sunet-cdn.localhost:8444 choosing "Login with Swamid" and
 using user `testuser` and password `testuser`.
 
 After logging in as `testuser` for the first time assign it to the sample organization:

@@ -4,6 +4,12 @@ services:
     environment:
       - POSTGRES_PASSWORD=dev
       - POSTGRES_INITDB_ARGS=--data-checksums
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     ports:
       - "5432:5432"
     volumes:
@@ -33,7 +39,8 @@ services:
       - "8080:8080"
       - "8443:8443"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     command: "start-dev"
   sunet-vcl-validator:
     image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547"

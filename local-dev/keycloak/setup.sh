@@ -226,6 +226,45 @@ curl -iks -X POST \
 ]
 EOF
 
+# Create a client-scope with an audience mapper that assigns our custom
+# "sunet-cdn-manager" audience value. This client-scope is later assigned
+# to the API token clients we create so their access tokens carry an "aud"
+# the manager can verify.
+echo "Creating client scope 'sunet-cdn-manager-aud'"
+curl -ksi -X POST \
+	-H "Authorization: bearer $access_token" \
+	-H "Content-Type: application/json" \
+	-d @- \
+	"$base_url/admin/realms/$realm/client-scopes" <<EOF
+{
+  "protocol": "openid-connect",
+  "name": "sunet-cdn-manager-aud",
+  "description": "Assigned to client credentials used for authenticating to the SUNET CDN Manager API",
+  "type": "none",
+  "attributes": {
+    "display.on.consent.screen": "true",
+    "consent.screen.text": "",
+    "include.in.token.scope": "false",
+    "gui.order": ""
+  },
+  "protocolMappers": [
+    {
+      "name": "sunet-cdn-manager-aud",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.client.audience": "",
+        "included.custom.audience": "sunet-cdn-manager",
+        "id.token.claim": "false",
+        "access.token.claim": "true",
+        "lightweight.claim": "false",
+        "introspection.token.claim": "true"
+      }
+    }
+  ]
+}
+EOF
+
 # Find UUID for client registration policy that allows assigning our
 # custom client-scope that includes the audience mapper for new
 # clients at registration
