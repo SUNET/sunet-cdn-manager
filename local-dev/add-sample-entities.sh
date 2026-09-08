@@ -17,11 +17,14 @@ curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-domain.json -H "
 # Create a service in the org
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-service.json -H "content-type: application/json" 'https://manager.sunet-cdn.localhost:8444/api/v1/services'
 
-# Create a local "node-user-1" user with the "node" role used by nodes fetching config:
-curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-node-user.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users
+# Create a local "node-user-1" user with the "node" role used by nodes fetching config
+# (users are identified by UUID rather than name, so grab the generated ID from the response):
+node_user=$(curl -k -s -u admin:$admin_password -X POST -d @sample-json/add-node-user.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users)
+echo "$node_user"
+node_user_id=$(echo "$node_user" | jq -r .id)
 
 # Set a password for the user with "node" role:
-curl -k -i -u admin:$admin_password -X PUT -d @sample-json/set-node-user-password.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users/node-user-1/local-password
+curl -k -i -u admin:$admin_password -X PUT -d @sample-json/set-node-user-password.json -H "content-type: application/json" "https://manager.sunet-cdn.localhost:8444/api/v1/users/$node_user_id/local-password"
 
 # Add a cache node to the system:
 curl -k -i -u admin:$admin_password -X POST -d @sample-json/add-cache-node.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/cache-nodes
