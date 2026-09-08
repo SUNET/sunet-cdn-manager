@@ -346,7 +346,7 @@ templ APITokensContent(orgName string, orgClientCreds []cdntypes.OrgClientCreden
 	</div>
 }
 
-templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []string, errorMessage string) {
+templ ServicesContent(orgName string, services []ServiceEntry, superuser bool, serviceQuota int64, flashMessages []string, errorMessage string) {
 	@flashMessagesComponent(flashMessages)
 	if errorMessage != "" {
 		<span class="error-text" role="alert" aria-live="polite">{ errorMessage }</span>
@@ -357,10 +357,17 @@ templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []s
 			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } role="button">Create your first service</a>
 		</article>
 	} else {
+		<p class="quota-usage">
+			{ strconv.Itoa(len(services)) } of { strconv.FormatInt(serviceQuota, 10) } services used
+			if disabledServiceCount(services) > 0 {
+				({ strconv.Itoa(disabledServiceCount(services)) } disabled)
+			}
+		</p>
 		<table>
 			<thead>
 				<tr>
 					<th>Service</th>
+					<th>State</th>
 					<th>IP Addresses</th>
 					<th>Actions</th>
 				</tr>
@@ -369,6 +376,13 @@ templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []s
 				for _, service := range services {
 					<tr>
 						<td class="name"><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
+						<td class="state">
+							if service.DisabledAt == nil {
+								Enabled
+							} else {
+								Disabled { service.DisabledAt.Format("2006-01-02") }
+							}
+						</td>
 						<td class="addresses">
 							if len(service.IPAddresses) == 0 {
 								—
@@ -379,15 +393,31 @@ templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []s
 							}
 						</td>
 						<td class="actions">
-							<button
-								type="button"
-								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name))) }
-								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", service.Name) }
-								hx-disabled-elt="this"
-							>
-								Delete
-							</button>
+							if service.DisabledAt == nil {
+								<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/disable", service.OrgName, service.Name)) } role="button">Disable</a>
+							} else {
+								// Make POST link point to the service UUID. This is to protect against the page being stale.
+								// If using the name the worst case is the service was deleted from under us after the page was
+								// rendered and we would instead modify the replacement service.
+								<button
+									type="button"
+									hx-post={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/enable", service.OrgName, service.ID.String()))) }
+									hx-target="body"
+									hx-confirm={ fmt.Sprintf("Enable '%s'? The service starts again with an empty cache and may be briefly unavailable while cache nodes start.", service.Name) }
+									hx-disabled-elt="this"
+								>
+									Enable
+								</button>
+								if superuser {
+									<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/delete", service.OrgName, service.Name)) } role="button" class="destructive">Delete</a>
+								} else {
+									// Rendered greyed out rather than hidden: a missing
+									// button reads as an absent feature, a disabled one
+									// reads as a policy.
+									<button type="button" class="destructive" disabled aria-disabled="true" title="Deleting a service requires superuser access">Delete</button>
+									<small>Requires superuser access</small>
+								}
+							}
 						</td>
 					</tr>
 				}
@@ -396,6 +426,52 @@ templ ServicesContent(orgName string, services []ServiceEntry, flashMessages []s
 		<p>
 			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service", orgName)) } role="button">Create service</a>
 		</p>
+	}
+}
+
+templ DeleteServiceContent(orgName string, serviceName string, serviceID string, versionCount int64, ipAddresses []netip.Addr, uidRangeFirst int64, uidRangeLast int64, err error) {
+	<div>
+		<p>
+			You are about to <strong>permanently delete</strong> the disabled service
+			<strong>{ serviceName }</strong>. This cannot be undone.
+		</p>
+		<p>The following will be destroyed:</p>
+		<ul>
+			<li>{ strconv.FormatInt(versionCount, 10) } service version(s), with their origins, domain bindings and VCL</li>
+			if len(ipAddresses) > 0 {
+				<li>
+					These IP addresses, released for reallocation to other services:
+					for _, addr := range ipAddresses {
+						<div><code>{ addr.String() }</code></div>
+					}
+				</li>
+			}
+			<li>The UID range { strconv.FormatInt(uidRangeFirst, 10) }–{ strconv.FormatInt(uidRangeLast, 10) }</li>
+		</ul>
+		<p>Type the service name to confirm.</p>
+	</div>
+	// The action targets the service's immutable UUID, not its name. Service
+	// names are unique per org only at a given moment: deleting a service
+	// frees its name for reuse, so a stale copy of this page submitted after
+	// the service was deleted and a same-named replacement created would have
+	// deleted the replacement.
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/delete", orgName, serviceID)) } hx-disabled-elt="find button[type='submit']">
+		<label for="confirm-name">
+			Service name
+			<input type="text" id="confirm-name" name="confirm-name" autocomplete="off" required/>
+		</label>
+		<button type="submit" class="destructive">Delete service permanently</button>
+		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) } role="button" class="secondary">Cancel</a>
+	</form>
+	if err != nil {
+		switch  {
+			case errors.Is(err, cdnerrors.ErrConfirmNameMismatch):
+				<div class="error-text" role="alert">The service name did not match. Nothing was deleted.</div>
+			case errors.Is(err, cdnerrors.ErrServiceNotDisabled):
+				<div class="error-text" role="alert">This service must be disabled before it can be deleted. Disable it first, then delete it.</div>
+			default:
+				<div class="error-text" role="alert">Something went wrong and the service was not deleted.</div>
+		}
 	}
 }
 
@@ -1148,12 +1224,55 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, version 
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)) } hx-disabled-elt="find button[type='submit']">
 		<label for="confirmation">
 			Yes I am sure
-			<input type="checkbox" id="confirmation" name="confirmation"/>
+			<input type="checkbox" id="confirmation" name="confirmation" required/>
 		</label>
 		<button type="submit">Activate version</button>
+		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", orgName, serviceName)) } role="button" class="secondary">Cancel</a>
 	</form>
 	if err != nil {
 		<div>Service version activation failed</div>
+	}
+}
+
+templ DisableServiceContent(orgName string, serviceName string, serviceID string, ipAddresses []netip.Addr, err error) {
+	<div>
+		<p>
+			You are about to disable <strong>{ serviceName }</strong>.
+		</p>
+		<p>
+			This stops the service on all cache nodes, withdraws its address
+			announcements, and permanently clears its cache. It will return cold and
+			may be briefly unavailable while cache nodes start again.
+		</p>
+		<p>
+			Configuration, versions, IP addresses and UID range are all kept, and the
+			service still counts against your service quota. Disabling does not free
+			a slot for a new service. You can enable it again at any time.
+		</p>
+		if len(ipAddresses) > 0 {
+			<p>Addresses that stay reserved for this service:</p>
+			<ul>
+				for _, addr := range ipAddresses {
+					<li><code>{ addr.String() }</code></li>
+				}
+			</ul>
+		}
+	</div>
+	// Action keyed on the immutable id, a stale page must not be able to
+	// disable a same-named replacement version.
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/disable", orgName, serviceID)) } hx-disabled-elt="find button[type='submit']">
+		<label for="confirmation">
+			Yes, disable this service
+			<input type="checkbox" id="confirmation" name="confirmation" required/>
+		</label>
+		<button type="submit" class="destructive">Disable service</button>
+		// Cancel targets exactly where the handler already redirects an
+		// unconfirmed POST, so backing out is a deliberate affordance rather
+		// than "submit without ticking the box".
+		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services", orgName)) } role="button" class="secondary">Cancel</a>
+	</form>
+	if err != nil {
+		<div class="error-text" role="alert">Disabling the service failed</div>
 	}
 }
 

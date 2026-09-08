@@ -374,6 +374,20 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				id:           "00000006-0000-0000-0000-000000000009",
 				authProvider: "local",
 			},
+			{
+				// A non-superuser, org2 member with a console-login-capable
+				// (>= 15 char) password, used to prove that org1 actions are
+				// refused for someone outside org1. "username2" already
+				// exists for org2 but its short password only satisfies the
+				// HTTP Basic Auth API tests, not the console login forms
+				// stricter length validation.
+				name:         "username7",
+				password:     validUserPassword,
+				role:         "user",
+				orgName:      "org2",
+				id:           "00000006-0000-0000-0000-000000000010",
+				authProvider: "local",
+			},
 		}
 
 		for _, localUser := range localUsers {
@@ -3826,7 +3840,7 @@ func TestGetService(t *testing.T) {
 	}
 }
 
-func TestDeleteService(t *testing.T) {
+func TestGetServicesDisabledAt(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -3836,91 +3850,362 @@ func TestDeleteService(t *testing.T) {
 	}
 	defer ts.Close()
 
+	ctx := context.Background()
+
+	// Disable org1-service2 directly in the DB so this test only depends on
+	// the read path, not on the disable endpoint (added in task 2).
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services?org=org1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+	}
+
+	var services []cdntypes.Service
+	if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]cdntypes.Service{}
+	for _, s := range services {
+		byName[s.Name] = s
+	}
+
+	enabled, ok := byName["org1-service1"]
+	if !ok {
+		t.Fatal("org1-service1 missing from services list")
+	}
+	if enabled.DisabledAt != nil {
+		t.Errorf("org1-service1 should be enabled, got disabled_at=%v", enabled.DisabledAt)
+	}
+
+	disabled, ok := byName["org1-service2"]
+	if !ok {
+		t.Fatal("org1-service2 missing from services list")
+	}
+	if disabled.DisabledAt == nil {
+		t.Error("org1-service2 should report a disabled_at timestamp")
+	}
+
+	// Also exercise the all-services branch of selectServicesTx (superuser
+	// request with no "org" query parameter), which is a separate SQL
+	// string from the org-scoped branch checked above.
+	allReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allReq.SetBasicAuth("admin", validAdminPassword)
+
+	allResp, err := http.DefaultClient.Do(allReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer allResp.Body.Close()
+
+	if allResp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(allResp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", allResp.StatusCode, string(body))
+	}
+
+	var allServices []cdntypes.Service
+	if err := json.NewDecoder(allResp.Body).Decode(&allServices); err != nil {
+		t.Fatal(err)
+	}
+
+	allByName := map[string]cdntypes.Service{}
+	for _, s := range allServices {
+		allByName[s.Name] = s
+	}
+
+	allEnabled, ok := allByName["org1-service1"]
+	if !ok {
+		t.Fatal("org1-service1 missing from all-services list")
+	}
+	if allEnabled.DisabledAt != nil {
+		t.Errorf("org1-service1 should be enabled in all-services list, got disabled_at=%v", allEnabled.DisabledAt)
+	}
+
+	allDisabled, ok := allByName["org1-service2"]
+	if !ok {
+		t.Fatal("org1-service2 missing from all-services list")
+	}
+	if allDisabled.DisabledAt == nil {
+		t.Error("org1-service2 should report a disabled_at timestamp in all-services list")
+	}
+}
+
+func TestGetServiceDisabledAt(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/00000003-0000-0000-0000-000000000002", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+	}
+
+	var service cdntypes.Service
+	if err := json.NewDecoder(resp.Body).Decode(&service); err != nil {
+		t.Fatal(err)
+	}
+
+	if service.DisabledAt == nil {
+		t.Error("single-service GET should report a disabled_at timestamp")
+	}
+
+	// Also exercise the NULL (enabled) case of the same selectService query,
+	// using org1-service1 which is left enabled.
+	enabledReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/services/00000003-0000-0000-0000-000000000001", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabledReq.SetBasicAuth("admin", validAdminPassword)
+
+	enabledResp, err := http.DefaultClient.Do(enabledReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enabledResp.Body.Close()
+
+	if enabledResp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(enabledResp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", enabledResp.StatusCode, string(body))
+	}
+
+	var enabledService cdntypes.Service
+	if err := json.NewDecoder(enabledResp.Body).Decode(&enabledService); err != nil {
+		t.Fatal(err)
+	}
+
+	if enabledService.DisabledAt != nil {
+		t.Errorf("single-service GET for enabled service should report nil disabled_at, got %v", enabledService.DisabledAt)
+	}
+}
+
+func TestPutServiceDisabled(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
 	tests := []struct {
 		description     string
 		username        string
 		password        string
 		serviceNameOrID string
 		orgNameOrID     string
-		expectedStatus  int
+		// serviceID is the row to inspect afterwards, kept separate so the
+		// assertion does not have to guess whether serviceNameOrID was a
+		// name or a UUID.
+		serviceID      string
+		disabled       bool
+		expectedStatus int
+		expectDisabled bool
 	}{
 		{
-			description:     "successful superuser request with ID",
+			description:     "superuser disables by ID",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			serviceID:       "00000003-0000-0000-0000-000000000001",
+			disabled:        true,
 			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  true,
 		},
 		{
-			description:     "successful superuser request with name",
+			description:     "superuser enables by ID again",
 			username:        "admin",
 			password:        validAdminPassword,
-			serviceNameOrID: "org1-service2",
-			orgNameOrID:     "org1",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			serviceID:       "00000003-0000-0000-0000-000000000001",
+			disabled:        false,
 			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  false,
 		},
 		{
-			description:     "successful superuser request with name and org by id",
+			description:     "disable again after enable",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			serviceID:       "00000003-0000-0000-0000-000000000001",
+			disabled:        true,
+			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  true,
+		},
+		{
+			description:     "org member disables by name",
+			username:        "username1",
+			password:        validUserPassword,
+			serviceNameOrID: "org1-service2",
+			orgNameOrID:     "org1",
+			serviceID:       "00000003-0000-0000-0000-000000000002",
+			disabled:        true,
+			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  true,
+		},
+		{
+			description:     "org member enables by name",
+			username:        "username1",
+			password:        validUserPassword,
+			serviceNameOrID: "org1-service2",
+			orgNameOrID:     "org1",
+			serviceID:       "00000003-0000-0000-0000-000000000002",
+			disabled:        false,
+			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  false,
+		},
+		{
+			description:     "org member disables by name with org addressed by UUID",
+			username:        "username1",
+			password:        validUserPassword,
+			serviceNameOrID: "org1-service4",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceID:       "00000003-0000-0000-0000-000000000010",
+			disabled:        true,
+			expectedStatus:  http.StatusNoContent,
+			expectDisabled:  true,
+		},
+		{
+			description:     "non-member cannot disable another org's service",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000003",
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			disabled:        true,
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "user without org cannot disable",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000003",
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			disabled:        true,
+			expectedStatus:  http.StatusNotFound,
+		},
+		{
+			description:     "unresolvable org is unprocessable",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "org1-service3",
-			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
-			expectedStatus:  http.StatusNoContent,
+			orgNameOrID:     "no-such-org",
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			disabled:        true,
+			expectedStatus:  http.StatusUnprocessableEntity,
 		},
 		{
-			description:     "successful user request with ID",
-			username:        "username1",
-			password:        validUserPassword,
-			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
-			expectedStatus:  http.StatusNoContent,
-		},
-		{
-			description:     "successful user request with name",
-			username:        "username1",
-			password:        validUserPassword,
-			serviceNameOrID: "org1-service5",
-			orgNameOrID:     "org1",
-			expectedStatus:  http.StatusNoContent,
-		},
-		{
-			description:     "failed user request for service belonging to other org with ID",
-			username:        "username2",
-			password:        "password2",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000012",
+			description:     "unknown service ID is not found",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-0000000000ff",
+			disabled:        true,
 			expectedStatus:  http.StatusNotFound,
 		},
 		{
-			description:     "failed user request for service belonging to other org with name",
-			username:        "username2",
-			password:        "password2",
-			serviceNameOrID: "org1-service6",
-			orgNameOrID:     "org1",
-			expectedStatus:  http.StatusNotFound,
+			// ?org= is documented as required when the service is addressed by
+			// name.
+			description:     "name without org is unprocessable, not a server error",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "org1-service4",
+			disabled:        true,
+			expectedStatus:  http.StatusUnprocessableEntity,
 		},
-		{
-			description:     "failed user request not assigned to org with ID",
-			username:        "username3-no-org",
-			password:        "password3",
-			serviceNameOrID: "00000003-0000-0000-0000-000000000012",
-			expectedStatus:  http.StatusNotFound,
-		},
-		{
-			description:     "failed user request not assigned to org with name",
-			username:        "username3-no-org",
-			password:        "password3",
-			serviceNameOrID: "org1-service6",
-			orgNameOrID:     "org1",
-			expectedStatus:  http.StatusNotFound,
-		},
+	}
+
+	// disabledIDs returns every currently disabled service ID in a stable
+	// order so a refusal can be proven to have changed nothing at all rather
+	// than merely nothing about its own target row.
+	disabledIDs := func() []string {
+		t.Helper()
+		rows, err := dbPool.Query(ctx, "SELECT id::text FROM services WHERE disabled_at IS NOT NULL ORDER BY id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		ids := []string{}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return ids
 	}
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			if test.serviceNameOrID == "" {
-				t.Fatal("user needs service name or ID for service test")
-			}
+			before := disabledIDs()
 
-			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
+			body := fmt.Sprintf(`{"disabled": %t}`, test.disabled)
+
+			req, err := http.NewRequest(
+				http.MethodPut,
+				ts.URL+"/api/v1/services/"+test.serviceNameOrID+"/disabled",
+				strings.NewReader(body),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3931,6 +4216,7 @@ func TestDeleteService(t *testing.T) {
 				req.URL.RawQuery = values.Encode()
 			}
 
+			req.Header.Set("Content-Type", "application/json")
 			req.SetBasicAuth(test.username, test.password)
 
 			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
@@ -3940,19 +4226,593 @@ func TestDeleteService(t *testing.T) {
 			defer resp.Body.Close()
 
 			if resp.StatusCode != test.expectedStatus {
-				r, err := io.ReadAll(resp.Body)
-				if err != nil {
-					t.Fatal(err)
+				r, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
 				}
-				t.Fatalf("DELETE service by ID unexpected status code: %d (%s)", resp.StatusCode, string(r))
+				t.Fatalf("PUT service disabled unexpected status code: %d (%s)", resp.StatusCode, string(r))
 			}
 
-			jsonData, err := io.ReadAll(resp.Body)
+			// Every case checks the database, including the refusals: a
+			// handler that returned 404 while disabling the row anyway
+			// would otherwise pass.
+			if test.expectedStatus != http.StatusNoContent {
+				// A refusal must change nothing anywhere. Comparing the
+				// whole set of disabled rows against the pre-request
+				// snapshot works even for the unknown-ID case, where the
+				// target row does not exist to be selected. A per-row
+				// SELECT would hit pgx.ErrNoRows and abort the test
+				// instead of proving anything.
+				after := disabledIDs()
+				if !slices.Equal(before, after) {
+					t.Errorf("a refused request must not change any row's disabled_at: %v -> %v", before, after)
+				}
+				return
+			}
+
+			if test.serviceID == "" {
+				t.Fatal("a success case must name the serviceID to verify")
+			}
+
+			var disabledAt *time.Time
+			err = dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", test.serviceID).Scan(&disabledAt)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			t.Logf("%s\n", jsonData)
+			if test.expectDisabled && disabledAt == nil {
+				t.Error("expected service to be disabled")
+			}
+			if !test.expectDisabled && disabledAt != nil {
+				t.Errorf("expected service to be enabled, got disabled_at=%v", disabledAt)
+			}
+		})
+	}
+}
+
+// TestServiceDisableIsIdempotent proves that a repeated disable does not move
+// disabled_at forward. This is what the console renders as "Disabled <date>",
+// and what a future retention policy would key on, so a silently-resetting
+// timestamp would make both drift over time.
+func TestServiceDisableIsIdempotent(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const serviceID = "00000003-0000-0000-0000-000000000001"
+
+	disable := func() {
+		t.Helper()
+
+		req, err := http.NewRequest(
+			http.MethodPut,
+			ts.URL+"/api/v1/services/"+serviceID+"/disabled",
+			strings.NewReader(`{"disabled": true}`),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth("admin", validAdminPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNoContent {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+	}
+
+	readDisabledAt := func() *time.Time {
+		t.Helper()
+		var disabledAt *time.Time
+		err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", serviceID).Scan(&disabledAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return disabledAt
+	}
+
+	disable()
+	first := readDisabledAt()
+	if first == nil {
+		t.Fatal("expected service to be disabled after first disable")
+	}
+
+	disable()
+	second := readDisabledAt()
+	if second == nil {
+		t.Fatal("expected service to be disabled after second disable")
+	}
+
+	if !first.Equal(*second) {
+		t.Errorf("repeated disable moved disabled_at: %v -> %v", first, second)
+	}
+}
+
+// TestServiceDisableEnableRoundTrip pins the invariants that make a mistaken
+// disable recoverable: the same version stays active, and the IP addresses and
+// uid range are untouched.
+func TestServiceDisableEnableRoundTrip(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const serviceID = "00000003-0000-0000-0000-000000000001"
+
+	type snapshot struct {
+		activeVersion int64
+		addresses     []string
+		uidFirst      int64
+		uidLast       int64
+	}
+
+	takeSnapshot := func() snapshot {
+		t.Helper()
+		var s snapshot
+		err := dbPool.QueryRow(
+			ctx,
+			`SELECT
+			   (SELECT version FROM service_versions WHERE service_id = services.id AND active),
+			   (SELECT array_agg(address::text ORDER BY address) FROM service_ip_addresses WHERE service_id = services.id),
+			   lower(services.uid_range),
+			   upper(services.uid_range)-1
+			 FROM services WHERE id = $1`,
+			serviceID,
+		).Scan(&s.activeVersion, &s.addresses, &s.uidFirst, &s.uidLast)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	setDisabled := func(disabled bool) {
+		t.Helper()
+
+		req, err := http.NewRequest(
+			http.MethodPut,
+			ts.URL+"/api/v1/services/"+serviceID+"/disabled",
+			strings.NewReader(fmt.Sprintf(`{"disabled": %t}`, disabled)),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth("admin", validAdminPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNoContent {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+	}
+
+	before := takeSnapshot()
+
+	setDisabled(true)
+
+	// Everything except disabled_at must survive the disable.
+	during := takeSnapshot()
+	if during.activeVersion != before.activeVersion {
+		t.Errorf("active version changed on disable: %d -> %d", before.activeVersion, during.activeVersion)
+	}
+
+	setDisabled(false)
+
+	after := takeSnapshot()
+	if after.activeVersion != before.activeVersion {
+		t.Errorf("active version changed over the round trip: %d -> %d", before.activeVersion, after.activeVersion)
+	}
+	if !slices.Equal(after.addresses, before.addresses) {
+		t.Errorf("IP addresses changed over the round trip: %v -> %v", before.addresses, after.addresses)
+	}
+	if after.uidFirst != before.uidFirst || after.uidLast != before.uidLast {
+		t.Errorf("uid range changed over the round trip: %d-%d -> %d-%d", before.uidFirst, before.uidLast, after.uidFirst, after.uidLast)
+	}
+}
+
+func TestConsoleServicesQuotaLine(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+	resp, err := client.Get(ts.URL + "/console/org/org1/services") // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := doc.Text()
+
+	// org1 has 6 fixture services, one of which is now disabled, against a
+	// quota of 100. A tenant who hits the quota needs to see that a disabled
+	// service is holding a slot.
+	if !strings.Contains(text, "6 of 100 services used") {
+		t.Errorf("expected quota usage line, page text was: %s", text)
+	}
+	if !strings.Contains(text, "1 disabled") {
+		t.Errorf("expected disabled count in quota usage line, page text was: %s", text)
+	}
+}
+
+// TestDisabledServiceConsumesQuota verifies the a disabled service still
+// occupies a quota slot.
+func TestDisabledServiceConsumesQuota(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// org4 has no services and the default service_quota of 1.
+	createService := func(name string) int {
+		t.Helper()
+
+		body := fmt.Sprintf(`{"name": %q, "org": "org4"}`, name)
+
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/services", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth("admin", validAdminPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		return resp.StatusCode
+	}
+
+	if status := createService("org4-service1"); status != http.StatusCreated {
+		t.Fatalf("expected 201 creating the first service, got %d", status)
+	}
+
+	// Disabling it must NOT free the slot.
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE name = 'org4-service1'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status := createService("org4-service2"); status != http.StatusConflict {
+		t.Errorf("a disabled service must still consume its quota slot, expected 409, got %d", status)
+	}
+}
+
+func TestDeleteService(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// Pre-disable the services used by the cases that are expected to get
+	// past the disabled-state precondition.
+	for _, id := range []string{
+		"00000003-0000-0000-0000-000000000001",
+		"00000003-0000-0000-0000-000000000002",
+		"00000003-0000-0000-0000-000000000003",
+		"00000003-0000-0000-0000-000000000010",
+	} {
+		_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		description     string
+		username        string
+		password        string
+		serviceNameOrID string
+		orgNameOrID     string
+		confirm         string
+		expectedStatus  int
+		// serviceID is the row to check afterwards. Every case asserts the
+		// row's fate explicitly: gone when the delete was meant to succeed,
+		// still present when it was meant to be refused. Without this a
+		// handler that returned 409 while deleting anyway would pass.
+		serviceID     string
+		expectRowGone bool
+		// expectVersions is how many service_versions rows must still exist
+		// after a REFUSED delete, so a refusal is proven not to have
+		// cascaded. Only set where the fixture gives the target versions.
+		expectVersions int64
+	}{
+		{
+			description:     "superuser deletes disabled service by ID with confirmation",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			confirm:         "org1-service1",
+			expectedStatus:  http.StatusNoContent,
+			serviceID:       "00000003-0000-0000-0000-000000000001",
+			expectRowGone:   true,
+		},
+		{
+			description:     "superuser deletes disabled service by name with confirmation",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "org1-service2",
+			orgNameOrID:     "org1",
+			confirm:         "org1-service2",
+			expectedStatus:  http.StatusNoContent,
+			serviceID:       "00000003-0000-0000-0000-000000000002",
+			expectRowGone:   true,
+		},
+		{
+			description:     "missing confirmation is rejected",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000003",
+			confirm:         "",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			expectRowGone:   false,
+		},
+		{
+			description:     "wrong confirmation name is rejected",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000003",
+			confirm:         "org1-service9",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			expectRowGone:   false,
+		},
+		{
+			// Deliberately targets org2-service1 rather than an empty
+			// service: the fixture gives it three versions, so the
+			// cascade-survival assertion below has something real to
+			// check. A refusal that had already cascaded would be caught
+			// here and nowhere else.
+			description:     "enabled service cannot be deleted",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000004",
+			confirm:         "org2-service1",
+			expectedStatus:  http.StatusConflict,
+			serviceID:       "00000003-0000-0000-0000-000000000004",
+			expectRowGone:   false,
+			expectVersions:  3,
+		},
+		{
+			description:     "org member cannot delete their own disabled service",
+			username:        "username1",
+			password:        validUserPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
+			confirm:         "org1-service4",
+			expectedStatus:  http.StatusForbidden,
+			serviceID:       "00000003-0000-0000-0000-000000000010",
+			expectRowGone:   false,
+		},
+		{
+			description:     "non-member gets forbidden, not found, so existence does not leak",
+			username:        "username2",
+			password:        "password2",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
+			confirm:         "org1-service4",
+			expectedStatus:  http.StatusForbidden,
+			serviceID:       "00000003-0000-0000-0000-000000000010",
+			expectRowGone:   false,
+		},
+		{
+			description:     "user without org is forbidden",
+			username:        "username3-no-org",
+			password:        "password3",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000010",
+			confirm:         "org1-service4",
+			expectedStatus:  http.StatusForbidden,
+			serviceID:       "00000003-0000-0000-0000-000000000010",
+			expectRowGone:   false,
+		},
+		{
+			description:     "non-superuser is forbidden even for a service that does not exist",
+			username:        "username1",
+			password:        validUserPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-0000000000ff",
+			confirm:         "whatever",
+			expectedStatus:  http.StatusForbidden,
+			// No serviceID: this UUID matches no row, so there is nothing to assert.
+		},
+		{
+			description:     "superuser gets not-found for an unknown service",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "00000003-0000-0000-0000-0000000000ff",
+			confirm:         "whatever",
+			expectedStatus:  http.StatusNotFound,
+			// No serviceID: nothing to assert.
+		},
+		{
+			description:     "superuser gets unprocessable for an unresolvable org",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "org1-service3",
+			orgNameOrID:     "no-such-org",
+			confirm:         "org1-service3",
+			expectedStatus:  http.StatusUnprocessableEntity,
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			expectRowGone:   false,
+		},
+		{
+			// newOrgIdentifier is exercised by name in other tables, but
+			// this endpoint's own ?org=<...> parameter had never been
+			// exercised with a UUID rather than a name. org1-service3 is
+			// pre-disabled by this test's setup and, unlike org1-service1/2
+			// above, survives every case before this one untouched.
+			description:     "superuser deletes disabled service by name with org addressed by UUID",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "org1-service3",
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			confirm:         "org1-service3",
+			expectedStatus:  http.StatusNoContent,
+			serviceID:       "00000003-0000-0000-0000-000000000003",
+			expectRowGone:   true,
+		},
+		{
+			// The endpoint documents ?org= as required when the service is
+			// addressed by name. Without it the identifier lookup returns
+			// ErrServiceByNameNeedsOrg, which used to reach the generic error
+			// path and surface as a 500. No serviceID: the lookup fails on the
+			// missing org before it queries at all, so the name need not
+			// resolve and there is no row to assert.
+			description:     "name without org is unprocessable, not a server error",
+			username:        "admin",
+			password:        validAdminPassword,
+			serviceNameOrID: "org1-service4",
+			confirm:         "org1-service4",
+			expectedStatus:  http.StatusUnprocessableEntity,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/services/"+test.serviceNameOrID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			values := req.URL.Query()
+			if test.orgNameOrID != "" {
+				values.Add("org", test.orgNameOrID)
+			}
+			if test.confirm != "" {
+				values.Add("confirm", test.confirm)
+			}
+			req.URL.RawQuery = values.Encode()
+
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				r, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				t.Fatalf("DELETE service unexpected status code: %d (%s)", resp.StatusCode, string(r))
+			}
+
+			if test.serviceID == "" {
+				return
+			}
+
+			var count int64
+			err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = $1", test.serviceID).Scan(&count)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if test.expectRowGone && count != 0 {
+				t.Error("service row should have been deleted")
+			}
+			if !test.expectRowGone && count != 1 {
+				t.Errorf("service row must survive a refused delete, COUNT(*) = %d", count)
+			}
+
+			// The services row disappearing is not the whole story. The
+			// reason this operation needs guarding is that it also releases
+			// the service's IP addresses for reallocation and destroys every
+			// version with its origins, domain bindings and VCL — the part
+			// the spec calls "not easily reconstructed". Assert the cascade
+			// actually fired, and conversely that a refusal left it intact.
+			var ipCount, versionCount int64
+			err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM service_ip_addresses WHERE service_id = $1", test.serviceID).Scan(&ipCount)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM service_versions WHERE service_id = $1", test.serviceID).Scan(&versionCount)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if test.expectRowGone {
+				// The success cases target org1-service1 and org1-service2,
+				// the only two services the fixture gives IP addresses, so
+				// these assertions are not vacuous.
+				if ipCount != 0 {
+					t.Errorf("deleting a service must release its IP addresses, %d remain", ipCount)
+				}
+				if versionCount != 0 {
+					t.Errorf("deleting a service must remove its versions, %d remain", versionCount)
+				}
+			} else if test.expectVersions > 0 && versionCount != test.expectVersions {
+				t.Errorf("a refused delete must not cascade, expected %d versions got %d", test.expectVersions, versionCount)
+			}
 		})
 	}
 }
@@ -6455,6 +7315,289 @@ func TestGetL4LBNodeConfigs(t *testing.T) {
 
 			t.Logf("%s\n", jsonData)
 		})
+	}
+}
+
+func TestCacheNodeConfigExcludesDisabledService(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const (
+		org1ID         = "00000002-0000-0000-0000-000000000001"
+		org1Service1ID = "00000003-0000-0000-0000-000000000001"
+	)
+
+	getConfig := func() cdntypes.CacheNodeConfig {
+		t.Helper()
+
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/cache-node-configs/cache-node1", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("admin", validAdminPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+
+		var cnc cdntypes.CacheNodeConfig
+		if err := json.NewDecoder(resp.Body).Decode(&cnc); err != nil {
+			t.Fatal(err)
+		}
+		return cnc
+	}
+
+	// Baseline: org1-service1 is the only service satisfying every INNER JOIN
+	// in the cache node config query, so it must be present to begin with.
+	cnc := getConfig()
+	if _, ok := cnc.Orgs[org1ID].Services[org1Service1ID]; !ok {
+		t.Fatalf("expected org1-service1 in baseline cache node config, got orgs: %+v", cnc.Orgs)
+	}
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", org1Service1ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cnc = getConfig()
+
+	if _, ok := cnc.Orgs[org1ID].Services[org1Service1ID]; ok {
+		t.Error("disabled service must not appear in the cache node config")
+	}
+
+	// org1-service1 was org1's only config-eligible service, so the org must
+	// disappear entirely. The agent's orphaned-org cleanup branch depends on
+	// this: it removes the whole org directory when an org is absent.
+	if _, ok := cnc.Orgs[org1ID]; ok {
+		t.Error("org with no enabled config-eligible services must not appear in the cache node config")
+	}
+}
+
+func TestL4LBNodeConfigExcludesDisabledService(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const (
+		org1Service1ID = "00000003-0000-0000-0000-000000000001"
+		org2Service1ID = "00000003-0000-0000-0000-000000000004"
+	)
+
+	getConfig := func() cdntypes.L4LBNodeConfig {
+		t.Helper()
+
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/l4lb-node-configs/l4lb-node1", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("admin", validAdminPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+
+		var lnc cdntypes.L4LBNodeConfig
+		if err := json.NewDecoder(resp.Body).Decode(&lnc); err != nil {
+			t.Fatal(err)
+		}
+		return lnc
+	}
+
+	hasService := func(lnc cdntypes.L4LBNodeConfig, id string) bool {
+		for _, svc := range lnc.Services {
+			if svc.ServiceID.String() == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Baseline: the l4lb config selects on service_versions.active, so both
+	// org1-service1 and org2-service1 are present.
+	lnc := getConfig()
+	if !hasService(lnc, org1Service1ID) {
+		t.Fatalf("expected org1-service1 in baseline l4lb node config, got: %+v", lnc.Services)
+	}
+	if !hasService(lnc, org2Service1ID) {
+		t.Fatalf("expected org2-service1 in baseline l4lb node config, got: %+v", lnc.Services)
+	}
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", org1Service1ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lnc = getConfig()
+
+	if hasService(lnc, org1Service1ID) {
+		t.Error("disabled service must not appear in the l4lb node config")
+	}
+
+	// The other service's announcement must be untouched.
+	if !hasService(lnc, org2Service1ID) {
+		t.Error("disabling one service must not remove another service from the l4lb node config")
+	}
+}
+
+// TestCacheNodeConfigExcludesDisabledServiceNewVersion covers the spec's
+// "editing while disabled: allowed, just not deployed" rule. A brand new,
+// fully configured, active version on a disabled service must still be absent
+// from the config, because the filter keys off services.disabled_at and is
+// independent of version state.
+func TestCacheNodeConfigExcludesDisabledServiceNewVersion(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const (
+		org1ID         = "00000002-0000-0000-0000-000000000001"
+		org1Service1ID = "00000003-0000-0000-0000-000000000001"
+	)
+
+	vclTemplate, err := os.ReadFile("testdata/vcl/template1.vcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Disable the service, then build a complete new active version on it,
+	// mirroring how populateTestData wires a version up: origin group,
+	// origin, verified domain and VCL. The previously active version must be
+	// deactivated first because of the
+	// service_versions_active_only_1_true partial unique index.
+	stmts := []struct {
+		sql  string
+		args []any
+	}{
+		{"UPDATE services SET disabled_at = now() WHERE id = $1", []any{org1Service1ID}},
+		{"UPDATE service_versions SET active = false WHERE id = '00000004-0000-0000-0000-000000000003'", nil},
+		{"UPDATE services SET version_counter = version_counter + 1 WHERE id = $1", []any{org1Service1ID}},
+		{"INSERT INTO service_versions (id, service_id, version, active) SELECT '00000004-0000-0000-0000-0000000000f1', id, version_counter, TRUE FROM services WHERE id = $1", []any{org1Service1ID}},
+		{"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', true, 'default', 0)", nil},
+		{"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', '00000020-0000-0000-0000-0000000000f1', '198.51.100.10', 80, false)", nil},
+		{"INSERT INTO service_domains (id, service_version_id, domain_id) VALUES ('00000008-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', '00000015-0000-0000-0000-000000000001')", nil},
+		{"INSERT INTO service_vcls (id, service_version_id, vcl_template) VALUES ('00000007-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', $1)", []any{vclTemplate}},
+	}
+
+	for _, stmt := range stmts {
+		if _, err := dbPool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/cache-node-configs/cache-node1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+	}
+
+	var cnc cdntypes.CacheNodeConfig
+	if err := json.NewDecoder(resp.Body).Decode(&cnc); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := cnc.Orgs[org1ID].Services[org1Service1ID]; ok {
+		t.Error("a new active version on a disabled service must not be deployed")
+	}
+
+	// Without this second half the test could pass for the wrong reason: if the
+	// fixture SQL above failed to make the new version config-eligible (a
+	// missing origin, domain or VCL row), the service would be absent whether
+	// or not it was disabled, and the assertion would be vacuous. Re-enabling
+	// must bring the NEW version into the config, which proves the absence
+	// above was caused by disabled_at and nothing else.
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = NULL WHERE id = $1", org1Service1ID); err != nil {
+		t.Fatal(err)
+	}
+
+	reReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/cache-node-configs/cache-node1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reReq.SetBasicAuth("admin", validAdminPassword)
+
+	reResp, err := http.DefaultClient.Do(reReq) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reResp.Body.Close()
+
+	if reResp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(reResp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code after re-enable: %d (%s)", reResp.StatusCode, string(body))
+	}
+
+	var reEnabled cdntypes.CacheNodeConfig
+	if err := json.NewDecoder(reResp.Body).Decode(&reEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, ok := reEnabled.Orgs[org1ID].Services[org1Service1ID]
+	if !ok {
+		t.Fatal("re-enabled service should reappear in the cache node config; if it does not, the new version was never config-eligible and the assertion above proved nothing")
+	}
+
+	// The version counter started at 3, so the version built above is 4.
+	if _, ok := svc.ServiceVersions[4]; !ok {
+		t.Errorf("expected the newly created version 4 in the config, got versions %v", svc.ServiceVersions)
 	}
 }
 
@@ -8969,6 +10112,1205 @@ func TestConsoleServicesComponent(t *testing.T) {
 	}
 }
 
+func TestConsoleServiceDisableEnable(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	disabledAt := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = '00000003-0000-0000-0000-000000000001'").Scan(&at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	// The confirmation page must render, and must not be swallowed by the
+	// /org/{org}/services/{service}/{version} route.
+	t.Run("disable page renders", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service1/disable") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// The action is keyed on the immutable id, not the name it was
+		// reached by, so a stale page cannot disable a same-named
+		// replacement. See the delete equivalent for the full reasoning.
+		if doc.Find("form[action='/console/org/org1/services/00000003-0000-0000-0000-000000000001/disable']").Length() == 0 {
+			action, _ := doc.Find("form[method='post']").Attr("action")
+			t.Errorf("disable form action should be keyed on the service UUID, got %q", action)
+		}
+
+		// The page must state what is lost, so the operator is not
+		// guessing at the consequences.
+		if !strings.Contains(doc.Text(), "clears its cache") {
+			t.Error("disable page should say the cache is cleared")
+		}
+
+		// And what is NOT released. A tenant at their service quota might
+		// otherwise disable a service expecting the slot back, which is the
+		// opposite of what happens.
+		if !strings.Contains(doc.Text(), "still counts against your service quota") {
+			t.Error("disable page should say the service still consumes its quota slot")
+		}
+
+		// A Cancel affordance must exist, pointing where an unconfirmed POST
+		// already redirects. Without it, "submit without ticking the box" is
+		// the only way to back out, which reads as clicking through with no
+		// effect.
+		if doc.Find("a[href='/console/org/org1/services']").Length() == 0 {
+			t.Error("disable page should offer a Cancel link back to the services list")
+		}
+
+		// The requirement is enforced by `required` on the checkbox -- native
+		// form semantics, so it reaches keyboard and AT users rather than only
+		// blocking the pointer. An earlier version relied on CSS
+		// pointer-events, which left the button active in the accessibility
+		// tree and silently redirected keyboard users.
+		if doc.Find("input[type='checkbox']#confirmation[required]").Length() == 0 {
+			t.Error("the disable confirmation checkbox must be required, so the gate is not pointer-only")
+		}
+		// The id is also what the CSS :has() rule keys off for the matching
+		// visual state; no Go test can observe the CSS, so pin the id here.
+
+		// The button that commits the act must read as destructive. Asserted
+		// because the class was once applied to the services-row link but not
+		// to the button that actually does the work.
+		if doc.Find("button[type='submit'].destructive").Length() == 0 {
+			t.Error("the disable submit button should carry the destructive class")
+		}
+
+		// Rendering the confirmation page must not itself disable anything.
+		// The whole point of the two-step ceremony is that looking is free.
+		if at := disabledAt(); at != nil {
+			t.Errorf("GET of the disable page must not change disabled_at, got %v", at)
+		}
+	})
+
+	t.Run("disable POST disables the service", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		form := url.Values{"confirmation": {"on"}}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service1/disable",
+			strings.NewReader(form.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusFound {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected redirect (302), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		if disabledAt() == nil {
+			t.Error("service should be disabled after the POST")
+		}
+	})
+
+	t.Run("enable POST enables the service", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service1/enable",
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusFound {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected redirect (302), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		if at := disabledAt(); at != nil {
+			t.Errorf("service should be enabled after the POST, got disabled_at=%v", at)
+		}
+	})
+
+	// The handler treats an unticked confirmation checkbox as "cancel" and
+	// redirects without disabling. That branch must be proven not to disable.
+	t.Run("unticked confirmation does not disable", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		// No "confirmation" field at all: the checkbox was left unticked.
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service1/disable",
+			strings.NewReader(url.Values{}.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("expected redirect (302), got %d", resp.StatusCode)
+		}
+
+		if at := disabledAt(); at != nil {
+			t.Errorf("an unconfirmed disable must not change disabled_at, got %v", at)
+		}
+	})
+
+	t.Run("non-member cannot reach the disable page or enable", func(t *testing.T) {
+		// username7 belongs to org2, not org1. (username2 also belongs to
+		// org2, but its seeded password is too short to pass the console
+		// login form's validation, so it cannot be used to log in here.)
+		client, _ := consoleLogin(t, ts.URL, "username7", validUserPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service1/disable") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		// 200 with an in-page error, per this package's console convention.
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 with an in-page error on the disable page for a non-member, got %d", resp.StatusCode)
+		}
+		disableDoc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(disableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleNotAllowedDisableService) {
+			t.Errorf("expected the disable refusal to be explained in-page, got %q", got)
+		}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service1/enable",
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		enableResp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer enableResp.Body.Close()
+
+		// Enable is triggered by hx-post, and htmx discards non-2xx bodies,
+		// so a 403 here would swap nothing and leave the user with no
+		// explanation at all. 200 plus an in-page error is what reaches them.
+		if enableResp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 with an in-page error on enable for a non-member, got %d", enableResp.StatusCode)
+		}
+		enableDoc, err := goquery.NewDocumentFromReader(enableResp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(enableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleNotAllowedEnableService) {
+			t.Errorf("expected the enable refusal to be explained in-page, got %q", got)
+		}
+
+		if at := disabledAt(); at != nil {
+			t.Errorf("a refused request must not change disabled_at, got %v", at)
+		}
+	})
+
+	t.Run("services page shows disabled state", func(t *testing.T) {
+		_, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000001'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = NULL WHERE id = '00000003-0000-0000-0000-000000000001'")
+			if err != nil {
+				t.Error(err)
+			}
+		})
+
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Enable is a one-click mutation, so its URL must carry the immutable
+		// id rather than the reusable name.
+		if doc.Find("button[hx-post='/console/org/org1/services/00000003-0000-0000-0000-000000000001/enable']").Length() == 0 {
+			t.Error("expected an Enable action for the disabled service")
+		}
+
+		if doc.Find("a[href='/console/org/org1/services/org1-service1/disable']").Length() != 0 {
+			t.Error("disabled service should not offer a Disable action")
+		}
+	})
+
+	// A stale link, a typo, or a service another operator already deleted
+	// must render a readable in-page error, not a bare 500 -- the same
+	// treatment consoleServiceDeleteHandler already gives the same lookup
+	// failure.
+	t.Run("GET of the disable page for a missing service shows an in-page error", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/no-such-service/disable") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected a rendered page (200), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(doc.Text(), "Service not found") {
+			t.Errorf("expected an in-page 'Service not found' error, body was: %s", doc.Text())
+		}
+	})
+
+	// Same defect, org side: a nonexistent org in the URL must not 500 either.
+	t.Run("GET of the disable page for a missing org shows an in-page error", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/no-such-org/services/org1-service1/disable") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected a rendered page (200), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(doc.Text(), "Organization not found") {
+			t.Errorf("expected an in-page 'Organization not found' error, body was: %s", doc.Text())
+		}
+	})
+
+	// consoleServiceEnableHandler has the same defect class, but reaches it
+	// through setServiceDisabled rather than validateServiceName -- that
+	// function collapses a missing service into cdnerrors.ErrNotFound
+	// rather than a raw pgx.ErrNoRows, so it needs its own assertion.
+	t.Run("POST of enable for a missing service shows an in-page error", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/no-such-service/enable",
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected a rendered page (200), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(doc.Text(), "Service not found") {
+			t.Errorf("expected an in-page 'Service not found' error, body was: %s", doc.Text())
+		}
+	})
+}
+
+// TestConsoleServiceEnableStaleRowCannotHitReplacement is the enable
+// counterpart to the delete stale-form test. Enable is the more exposed of the
+// two: it is a single click straight from the services table, with no
+// confirmation page in between, so a table left open in a tab is all it takes.
+// A name-keyed request could bring online a same-named REPLACEMENT that
+// someone had deliberately left disabled.
+func TestConsoleServiceEnableStaleRowCannotHitReplacement(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	const originalID = "00000003-0000-0000-0000-000000000002"
+	const serviceName = "org1-service2"
+
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", originalID); err != nil {
+		t.Fatal(err)
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+	// 1. Tenant loads the services table while the original is disabled.
+	resp, err := client.Get(ts.URL + "/console/org/org1/services") // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableURL := ""
+	doc.Find("button[hx-post]").Each(func(_ int, sel *goquery.Selection) {
+		if v, ok := sel.Attr("hx-post"); ok && strings.HasSuffix(v, "/enable") {
+			enableURL = v
+		}
+	})
+	if enableURL == "" {
+		t.Fatal("no Enable action found for the disabled service")
+	}
+	// Non-fatal so a regression still demonstrates the consequence below.
+	if !strings.Contains(enableURL, originalID) {
+		t.Errorf("Enable action should be keyed on the service UUID, got %q", enableURL)
+	}
+
+	// 2. The original is deleted and a replacement takes its name, left
+	//    disabled on purpose.
+	if _, err := dbPool.Exec(ctx, "DELETE FROM services WHERE id = $1", originalID); err != nil {
+		t.Fatal(err)
+	}
+	var replacementID string
+	err = dbPool.QueryRow(
+		ctx,
+		`INSERT INTO services (org_id, name, uid_range, disabled_at)
+		 VALUES ('00000002-0000-0000-0000-000000000001', $1, '(1000910000, 1000919999)', now())
+		 RETURNING id::text`,
+		serviceName,
+	).Scan(&replacementID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Tenant clicks Enable on the stale row.
+	req, err := http.NewRequest(http.MethodPost, ts.URL+enableURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	enableResp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enableResp.Body.Close()
+
+	// The replacement was deliberately left disabled and must stay that way.
+	var disabledAt *time.Time
+	if err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", replacementID).Scan(&disabledAt); err != nil {
+		t.Fatal(err)
+	}
+	if disabledAt == nil {
+		t.Error("a stale Enable action must not bring a same-named replacement service online")
+	}
+}
+
+// TestConsoleServiceDeleteStaleFormCannotHitReplacement covers the
+// time-of-check/time-of-use window on the delete confirmation page.
+//
+// Service names are unique per org only at a given moment: deleting a service
+// frees its name for reuse. If an operator opened the confirmation page for
+// service X named "www", and X were then deleted and a replacement "www"
+// created and disabled before they submitted, a name-keyed form would have
+// resolved the REPLACEMENT and permanently deleted it -- while the page they
+// reviewed described X, down to its addresses and uid range. The form is
+// therefore keyed on the immutable UUID, which is never reused.
+func TestConsoleServiceDeleteStaleFormCannotHitReplacement(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// org1-service2 has no versions, so it is a clean delete target.
+	const originalID = "00000003-0000-0000-0000-000000000002"
+	const serviceName = "org1-service2"
+
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", originalID); err != nil {
+		t.Fatal(err)
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+	// 1. Operator opens the confirmation page for the original service.
+	resp, err := client.Get(ts.URL + "/console/org/org1/services/" + serviceName + "/delete") // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, ok := doc.Find("form[method='post']").Attr("action")
+	if !ok {
+		t.Fatal("delete confirmation form has no action")
+	}
+	// The action must carry the immutable id, not the reusable name.
+	// Deliberately t.Errorf rather than t.Fatalf: if this regresses, the rest
+	// of the test still runs and demonstrates the actual consequence -- the
+	// replacement service being deleted -- rather than stopping at the symptom.
+	if !strings.Contains(action, originalID) {
+		t.Errorf("form action should be keyed on the service UUID, got %q", action)
+	}
+
+	// 2. Meanwhile the original is deleted and a replacement takes its name.
+	if _, err := dbPool.Exec(ctx, "DELETE FROM services WHERE id = $1", originalID); err != nil {
+		t.Fatal(err)
+	}
+	var replacementID string
+	err = dbPool.QueryRow(
+		ctx,
+		`INSERT INTO services (org_id, name, uid_range, disabled_at)
+		 VALUES ('00000002-0000-0000-0000-000000000001', $1, '(1000900000, 1000909999)', now())
+		 RETURNING id::text`,
+		serviceName,
+	).Scan(&replacementID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementID == originalID {
+		t.Fatal("replacement must have a different UUID for this test to mean anything")
+	}
+
+	// 3. Operator submits the stale form, typing the name they were shown.
+	form := url.Values{"confirm-name": {serviceName}}
+	req, err := http.NewRequest(http.MethodPost, ts.URL+action, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	postResp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer postResp.Body.Close()
+
+	// The service that was reviewed no longer exists, so the submission must
+	// find nothing rather than fall through to the same-named replacement.
+	var replacementCount int64
+	if err := dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = $1", replacementID).Scan(&replacementCount); err != nil {
+		t.Fatal(err)
+	}
+	if replacementCount != 1 {
+		t.Error("a stale confirmation form must not delete the same-named replacement service")
+	}
+}
+
+// TestServiceUUIDIsConstrainedToSuppliedOrg pins that a UUID from one org
+// cannot be resolved while naming a different org.
+//
+// Without the constraint the UUID lookup ignored the supplied org, and a
+// superuser request naming org1 while passing an org2 service UUID mutated the
+// org2 service -- an org the request never mentioned. The console flows made it
+// worse: the delete page resolved the service by UUID to render its name,
+// version count, addresses and uid range, then the POST re-resolved by NAME
+// within the URL's org. With the same service name present in both orgs, the
+// page described one service while the POST acted on the other, and the typed
+// name confirmation matched both so it confirmed the wrong target.
+func TestServiceUUIDIsConstrainedToSuppliedOrg(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// org2-service1 lives in org2; the request below claims org1.
+	const org2Service1 = "00000003-0000-0000-0000-000000000004"
+
+	disabledAt := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", org2Service1).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	if at := disabledAt(); at != nil {
+		t.Fatalf("org2-service1 should start enabled, got disabled_at=%v", at)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPut,
+		ts.URL+"/api/v1/services/"+org2Service1+"/disabled?org=org1",
+		strings.NewReader(`{"disabled": true}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Superuser: the org-membership check inside setServiceDisabled is skipped
+	// for them, so nothing but the constrained lookup stops this.
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// A cross-org UUID must be indistinguishable from an unknown one, so the
+	// response does not reveal that it exists in another org.
+	if resp.StatusCode != http.StatusNotFound {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Errorf("expected 404 for a UUID outside the supplied org, got %d (%s)", resp.StatusCode, string(body))
+	}
+
+	// The assertion that actually matters: the service in the org the request
+	// never named must be untouched.
+	if at := disabledAt(); at != nil {
+		t.Errorf("a request naming org1 must not modify an org2 service, got disabled_at=%v", at)
+	}
+}
+
+// TestServiceIdentifierLocking proves the row lock each identifier helper
+// actually takes, rather than asserting the SQL text.
+//
+// It exists because resolving a service with FOR SHARE and then writing to the
+// row upgrades ShareLock to ExclusiveLock: two such transactions can both hold
+// the shared lock and then each wait for the other before its own upgrade,
+// which PostgreSQL breaks after deadlock_timeout by aborting one with SQLSTATE
+// 40P01. Every path that writes the services row must therefore resolve with
+// newServiceIdentifierForUpdate. If someone switches one of them back, the
+// exclusive-lock assertion below stops holding.
+func TestServiceIdentifierLocking(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// The shared test pool is deliberately capped at one connection, which
+	// cannot hold two concurrent transactions. Build a second pool against the
+	// same database for this test only.
+	cfg := dbPool.Config().Copy()
+	cfg.MaxConns = 3
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	const serviceID = "00000003-0000-0000-0000-000000000001"
+	noOrg := pgtype.UUID{}
+
+	// resolve runs one identifier lookup in its own transaction and reports
+	// how long it took and whether it failed, so "blocked" can be told apart
+	// from "failed instantly".
+	resolve := func(t *testing.T, forUpdate bool, timeout time.Duration) (time.Duration, error) {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if rbErr := tx.Rollback(context.Background()); rbErr != nil {
+				// Logged rather than failed: when a query is cancelled by its
+				// context deadline pgx closes the connection instead of
+				// reusing one with an in-flight query, which aborts the
+				// transaction server-side and makes Rollback report
+				// "conn closed". That is the expected path for the blocking
+				// subtest below. Anything else still shows up in the log.
+				t.Logf("rollback during cleanup: %v", rbErr)
+			}
+		})
+
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		start := time.Now()
+		if forUpdate {
+			_, err = newServiceIdentifierForUpdate(callCtx, tx, serviceID, noOrg)
+		} else {
+			_, err = newServiceIdentifier(callCtx, tx, serviceID, noOrg)
+		}
+		return time.Since(start), err
+	}
+
+	t.Run("exclusive lock blocks a second exclusive resolve", func(t *testing.T) {
+		// First holder takes FOR UPDATE and keeps it for the subtest.
+		if _, err := resolve(t, true, 5*time.Second); err != nil {
+			t.Fatalf("first exclusive resolve should succeed, got %v", err)
+		}
+
+		const timeout = 2 * time.Second
+		elapsed, err := resolve(t, true, timeout)
+		if err == nil {
+			t.Fatal("second exclusive resolve should have blocked on the first, but succeeded -- the lookup is not taking an exclusive lock")
+		}
+		// Must have blocked for the whole timeout rather than failing fast for
+		// some unrelated reason.
+		if elapsed < timeout-(200*time.Millisecond) {
+			t.Errorf("second resolve failed after only %v, so it did not block on the lock: %v", elapsed, err)
+		}
+	})
+
+	t.Run("shared lock does not block another shared resolve", func(t *testing.T) {
+		// Read-only paths must stay concurrent; making the helper exclusive
+		// for everyone would serialise them needlessly.
+		if _, err := resolve(t, false, 5*time.Second); err != nil {
+			t.Fatalf("first shared resolve should succeed, got %v", err)
+		}
+		elapsed, err := resolve(t, false, 2*time.Second)
+		if err != nil {
+			t.Errorf("a second shared resolve should not block, got %v after %v", err, elapsed)
+		}
+	})
+}
+
+// TestConsoleActivateServiceVersionPage covers the activate confirmation page,
+// which had no console-level test before. It shares the disable page's
+// confirmation shape -- an #confirmation checkbox gating the submit button via
+// CSS, plus a Cancel link -- so a change to one should not silently diverge
+// from the other.
+func TestConsoleActivateServiceVersionPage(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+	// org1-service1 version 1 exists and is not the active one.
+	resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service1/1/activate") // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if doc.Find("input[type='checkbox']#confirmation[required]").Length() == 0 {
+		t.Error("the activate confirmation checkbox must be required, so the gate is not pointer-only")
+	}
+	// Cancel points at the service page, which is where the handler already
+	// redirects an unconfirmed POST.
+	if doc.Find("a[href='/console/org/org1/services/org1-service1']").Length() == 0 {
+		t.Error("activate page should offer a Cancel link back to the service page")
+	}
+
+	// Deliberately NOT destructive: activating a version changes which config
+	// is live and is undone by activating the previous one, so it does not
+	// earn the colour reserved for disable and delete. Pinned so that
+	// reddening it later has to be a conscious choice rather than a tidy-up.
+	if doc.Find("button[type='submit'].destructive").Length() != 0 {
+		t.Error("activate is reversible and should not use the destructive styling")
+	}
+
+	// Rendering the page must not activate anything.
+	var active int64
+	err = dbPool.QueryRow(ctx, "SELECT version FROM service_versions WHERE service_id = '00000003-0000-0000-0000-000000000001' AND active").Scan(&active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != 3 {
+		t.Errorf("GET of the activate page must not change the active version, got %d", active)
+	}
+}
+
+func TestConsoleServiceDelete(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assertServiceRowCount lets every subtest — including the ones whose
+	// point is that nothing happened — verify the row's fate against the
+	// database rather than inferring it from an HTTP status.
+	assertServiceRowCount := func(t *testing.T, serviceID string, want int64) {
+		t.Helper()
+		var got int64
+		if err := dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = $1", serviceID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("service %s: expected COUNT(*) = %d, got %d", serviceID, want, got)
+		}
+	}
+
+	t.Run("tenant sees no delete action for a disabled service", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// No working link to the delete page.
+		if doc.Find("a[href='/console/org/org1/services/org1-service2/delete']").Length() != 0 {
+			t.Error("non-superuser must not get a working link to the delete page")
+		}
+
+		// But the affordance must still be visible and visibly unavailable:
+		// a greyed-out button, plus text saying why. A hidden button reads as
+		// a missing feature rather than a policy.
+		greyed := doc.Find("button[disabled]").FilterFunction(func(_ int, sel *goquery.Selection) bool {
+			return strings.TrimSpace(sel.Text()) == "Delete"
+		})
+		if greyed.Length() == 0 {
+			t.Error("non-superuser should see a disabled Delete button")
+		}
+		if _, ok := greyed.Attr("aria-disabled"); !ok {
+			t.Error("disabled Delete button should carry aria-disabled")
+		}
+		if !strings.Contains(doc.Text(), "Requires superuser access") {
+			t.Error("non-superuser should be told that deletion requires superuser access")
+		}
+
+		// Defence in depth: proves nothing happened to the row, not just
+		// that the HTTP response looked right.
+		assertServiceRowCount(t, "00000003-0000-0000-0000-000000000002", 1)
+	})
+
+	// Restores coverage deleted with the old DELETE route. A superuser
+	// following a stale link, mistyping a name, or racing another operator's
+	// deletion must get a readable page, not an opaque 500 — the same
+	// treatment the handler already gives a nonexistent org.
+	t.Run("nonexistent service shows an in-page error", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/no-such-service/delete") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected a rendered page (200), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(doc.Text(), "Service not found") {
+			t.Errorf("expected an in-page 'Service not found' error, body was: %s", doc.Text())
+		}
+	})
+
+	t.Run("tenant is forbidden from the delete page", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service2/delete") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		// 200 with an in-page error, matching every other console refusal in
+		// this package (see TestConsoleDeleteErrorRendering). A 403 would
+		// also be discarded unrendered by htmx on the htmx-driven paths.
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 with an in-page error for a non-superuser, got %d", resp.StatusCode)
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Assert on span.error-text, the element ConsoleErrorContent renders
+		// and the shared refusal table keys off, rather than on page text.
+		errorText := strings.TrimSpace(doc.Find("span.error-text").Text())
+		if !strings.Contains(errorText, consoleDeleteRequiresSuperuser) {
+			t.Errorf("expected the in-page error to explain the rule, got %q", errorText)
+		}
+		// The confirmation form must not be offered.
+		if doc.Find("input[name='confirm-name']").Length() != 0 {
+			t.Error("a non-superuser must not be shown the delete confirmation form")
+		}
+
+		// Defence in depth: proves nothing happened to the row, not just
+		// that the HTTP response looked right.
+		assertServiceRowCount(t, "00000003-0000-0000-0000-000000000002", 1)
+	})
+
+	t.Run("superuser delete page renders", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service2/delete") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if doc.Find("input[name='confirm-name']").Length() == 0 {
+			t.Error("delete page must have a confirm-name input")
+		}
+
+		// The page must list the addresses being released.
+		if !strings.Contains(doc.Text(), "192.0.2.2") {
+			t.Error("delete page should list the IP addresses being released")
+		}
+
+		// The most destructive button in the console must read as such. This
+		// assertion exists because the destructive styling was first applied
+		// only to the services-row Delete link, leaving the button that
+		// actually performs the deletion looking like "Create service".
+		if doc.Find("button[type='submit'].destructive").Length() == 0 {
+			t.Error("the permanent-delete submit button should carry the destructive class")
+		}
+
+		// Cancel must exist: this is the one confirmation page where backing
+		// out otherwise means using the browser's back button.
+		if doc.Find("a[href='/console/org/org1/services']").Length() == 0 {
+			t.Error("delete page should offer a Cancel link back to the services list")
+		}
+	})
+
+	t.Run("wrong name is rejected and the service survives", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		form := url.Values{"confirm-name": {"not-the-name"}}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service2/delete",
+			strings.NewReader(form.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected the page to re-render with an error (200), got %d", resp.StatusCode)
+		}
+
+		var count int64
+		err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = '00000003-0000-0000-0000-000000000002'").Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Error("service must survive a mismatched confirmation")
+		}
+	})
+
+	// deleteService refuses an enabled service (ErrServiceNotDisabled). The
+	// console reaches that branch too, and must not delete the row.
+	t.Run("enabled service is refused and survives", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		// org1-service3 is left enabled by this test.
+		form := url.Values{"confirm-name": {"org1-service3"}}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service3/delete",
+			strings.NewReader(form.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected the page to re-render with an error (200), got %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// The typed name was correct ("org1-service3"), so the refusal
+		// reason is ErrServiceNotDisabled, not a name mismatch. Asserting
+		// only the status code here would have missed the bug where the
+		// page told the operator they had mistyped a name they typed
+		// correctly.
+		if strings.Contains(string(body), "did not match") {
+			t.Errorf("refusal reason is that the service is enabled, not a name mismatch; body was: %s", string(body))
+		}
+		if !strings.Contains(string(body), "must be disabled") {
+			t.Errorf("expected the page to say the service must be disabled first, body was: %s", string(body))
+		}
+
+		var count int64
+		err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = '00000003-0000-0000-0000-000000000003'").Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Error("an enabled service must survive a delete attempt")
+		}
+	})
+
+	// Restores coverage for the GET branch: an enabled service must not
+	// render the confirmation form at all, since deleteService can never
+	// succeed against it. Before this fix the page rendered normally and
+	// asserted a false "disabled service" claim.
+	t.Run("GET of an enabled service shows the must-be-disabled error, not the confirm form", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/org1-service3/delete") // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected a rendered page (200), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if doc.Find("input[name='confirm-name']").Length() != 0 {
+			t.Error("an enabled service's delete GET must not render the confirm-name input")
+		}
+		if !strings.Contains(doc.Text(), "must be disabled") {
+			t.Errorf("expected an in-page 'must be disabled' error, body was: %s", doc.Text())
+		}
+	})
+
+	t.Run("correct name deletes the service", func(t *testing.T) {
+		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		form := url.Values{"confirm-name": {"org1-service2"}}
+
+		req, err := http.NewRequest(
+			http.MethodPost,
+			ts.URL+"/console/org/org1/services/org1-service2/delete",
+			strings.NewReader(form.Encode()),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusFound {
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			t.Fatalf("expected redirect (302), got %d (%s)", resp.StatusCode, string(body))
+		}
+
+		var count int64
+		err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM services WHERE id = '00000003-0000-0000-0000-000000000002'").Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Error("service should have been deleted")
+		}
+	})
+}
+
 func TestConsoleFormLimit(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
@@ -9358,15 +11700,6 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			expectedErrorMsg: "Domain not found",
 		},
 		{
-			description:      "delete nonexistent service shows in-page error",
-			username:         "admin",
-			password:         validAdminPassword,
-			method:           http.MethodDelete,
-			path:             "/console/org/org1/services/nonexistent-service",
-			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: "Service not found",
-		},
-		{
 			description:      "toggle maintenance on nonexistent cache node shows in-page error",
 			username:         "admin",
 			password:         validAdminPassword,
@@ -9434,15 +11767,6 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			expectedErrorMsg: consoleNotAllowedDeleteDomain,
 		},
 		{
-			description:      "org1 user deleting org2 service shows forbidden error",
-			username:         "username1",
-			password:         validUserPassword,
-			method:           http.MethodDelete,
-			path:             "/console/org/org2/services/org1-service1",
-			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: "Not allowed to delete service",
-		},
-		{
 			description:      "delete node group with assigned nodes shows conflict error",
 			username:         "admin",
 			password:         validAdminPassword,
@@ -9459,6 +11783,38 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			path:             "/console/superuser/ip-networks/00000000-0000-0000-0000-000000000099",
 			expectedStatus:   http.StatusOK,
 			expectedErrorMsg: consoleIPNetworkNotFound,
+		},
+		{
+			// Restores the coverage deleted with the old one-click service
+			// DELETE route, in this table's shape. The refusal reason
+			// changed -- deletion is now superuser-only rather than
+			// org-scoped -- so this case targets the caller's OWN org, to
+			// prove it is the superuser rule that refuses them.
+			description:      "org1 user reaching the service delete page shows forbidden error",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           http.MethodGet,
+			path:             "/console/org/org1/services/org1-service1/delete",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleDeleteRequiresSuperuser,
+		},
+		{
+			description:      "org1 user disabling an org2 service shows forbidden error",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           http.MethodGet,
+			path:             "/console/org/org2/services/org2-service1/disable",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNotAllowedDisableService,
+		},
+		{
+			description:      "org1 user enabling an org2 service shows forbidden error",
+			username:         "username1",
+			password:         validUserPassword,
+			method:           http.MethodPost,
+			path:             "/console/org/org2/services/org2-service1/enable",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: consoleNotAllowedEnableService,
 		},
 	}
 
