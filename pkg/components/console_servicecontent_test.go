@@ -14,11 +14,16 @@ import (
 // TestServiceContentDescriptionRender checks that the service version list
 // table shows each version's description.
 func TestServiceContentDescriptionRender(t *testing.T) {
+	var serviceID pgtype.UUID
+	if err := serviceID.Scan("6ba7b810-9dad-11d1-80b4-00c04fd430c8"); err != nil {
+		t.Fatal(err)
+	}
+
 	serviceVersions := []cdntypes.ServiceVersion{
 		{OrgName: "myorg", ServiceName: "myservice", Version: 1, Active: true, Description: "first version"},
 	}
 
-	html := render(t, ServiceContent("myorg", "myservice", serviceVersions))
+	html := render(t, ServiceContent("myorg", serviceID, serviceVersions))
 
 	if !strings.Contains(html, "first version") {
 		t.Errorf("rendered HTML missing version description\n--- HTML ---\n%s", html)
@@ -101,6 +106,33 @@ func TestBreadcrumbsNameServiceAddressedByID(t *testing.T) {
 	}
 }
 
+// TestBreadcrumbsNameServiceOnCreateVersionRoute covers the create-version
+// route, which takes a different branch of buildBreadcrumbs than the pages
+// above and so needs its own itemLabel handling.
+func TestBreadcrumbsNameServiceOnCreateVersionRoute(t *testing.T) {
+	const serviceUUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+	u, err := url.Parse("/console/org/myorg/create/service/version/" + serviceUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crumbs := buildBreadcrumbs(u, "myorg", "my-service")
+
+	last := crumbs[len(crumbs)-1]
+	if last.Label != "my-service" {
+		t.Errorf("breadcrumb label is %q, want the service name", last.Label)
+	}
+	if last.URL != "/console/org/myorg/services/"+serviceUUID {
+		t.Errorf("breadcrumb URL is %q, want the UUID-keyed service path", last.URL)
+	}
+	for _, c := range crumbs {
+		if c.Label == serviceUUID {
+			t.Errorf("a crumb displays the raw UUID as its label: %+v", c)
+		}
+	}
+}
+
 // TestBreadcrumbsFallBackToPathSegment checks that pages passing no itemLabel
 // -- the browsing pages, which stay name-keyed -- are unaffected.
 func TestBreadcrumbsFallBackToPathSegment(t *testing.T) {
@@ -114,5 +146,58 @@ func TestBreadcrumbsFallBackToPathSegment(t *testing.T) {
 	last := crumbs[len(crumbs)-1]
 	if last.Label != "my-service" {
 		t.Errorf("without an itemLabel the path segment should be shown, got %q", last.Label)
+	}
+}
+
+// TestServiceContentCreateVersionLinksUseTheServiceID checks that the links
+// which create a version address the service by UUID.
+//
+// This flow is one of the more important ones to refer to a UUID instead of a
+// name. The form behind these links takes minutes to fill in, there is no
+// confirmation step that could reveal a changed target, and the result is a
+// version silently attached to a service the user never saw (given that the
+// original one was deleted and another one put in its place with the same
+// name).
+func TestServiceContentCreateVersionLinksUseTheServiceID(t *testing.T) {
+	const uuid = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+	var serviceID pgtype.UUID
+	if err := serviceID.Scan(uuid); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rendered twice: with a version present (Create / Clone links) and with
+	// none (the "create your first version" empty state, which has no version
+	// row to take an ID from).
+	withVersions := render(t, ServiceContent("myorg", serviceID, []cdntypes.ServiceVersion{
+		{OrgName: "myorg", ServiceName: "trap-name", Version: 1, Description: "v1"},
+	}))
+	empty := render(t, ServiceContent("myorg", serviceID, nil))
+
+	for name, html := range map[string]string{"with versions": withVersions, "empty state": empty} {
+		if !strings.Contains(html, "/console/org/myorg/create/service/version/"+uuid) {
+			t.Errorf("%s: create-version link does not carry the service UUID\n--- HTML ---\n%s", name, html)
+		}
+		if strings.Contains(html, "/console/org/myorg/create/service/version/trap-name") {
+			t.Errorf("%s: create-version link still addresses the service by name\n--- HTML ---\n%s", name, html)
+		}
+	}
+
+	// The Clone link carries the source version alongside the service UUID.
+	if !strings.Contains(withVersions, "/console/org/myorg/create/service/version/"+uuid+"?clone-version=1") {
+		t.Errorf("clone link does not carry the service UUID\n--- HTML ---\n%s", withVersions)
+	}
+
+	// Activate is mutating too: it flips which version cache nodes serve.
+	if !strings.Contains(withVersions, "/console/org/myorg/services/"+uuid+"/1/activate") {
+		t.Errorf("activate link does not carry the service UUID\n--- HTML ---\n%s", withVersions)
+	}
+	if strings.Contains(withVersions, "/console/org/myorg/services/trap-name/1/activate") {
+		t.Errorf("activate link still addresses the service by name\n--- HTML ---\n%s", withVersions)
+	}
+
+	// The version detail link stays name-keyed: it is a browsing URL.
+	if !strings.Contains(withVersions, "/console/org/myorg/services/trap-name/1\"") {
+		t.Errorf("version detail link should still be name-keyed\n--- HTML ---\n%s", withVersions)
 	}
 }

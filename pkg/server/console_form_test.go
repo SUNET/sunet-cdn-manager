@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -8,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 )
@@ -231,5 +235,269 @@ func TestDeleteServiceNeedsDisabledPageNamesTheService(t *testing.T) {
 	}
 	if !slices.Contains(labels, "org1-service1") {
 		t.Errorf("breadcrumb does not name the service, labels were: %v", labels)
+	}
+}
+
+// createVersionValidator starts a VCL validator so create-version POSTs can
+// actually succeed. Without one every POST fails and any assertion about a
+// version NOT being created passes vacuously.
+func createVersionValidator(t *testing.T) *vclValidatorClient {
+	t.Helper()
+
+	req := testcontainers.ContainerRequest{
+		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547",
+		ExposedPorts: []string{"8888/tcp"},
+		WaitingFor:   wait.ForLog("starting server"),
+	}
+
+	ctx := context.Background()
+	validatorC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	// Not deferred: CleanupContainer registers t.Cleanup rather than
+	// terminating, and t is the parent test, so the container lives until
+	// that test ends rather than until this helper returns. Called before the
+	// error check on purpose, so a partially-created container is still torn
+	// down.
+	testcontainers.CleanupContainer(t, validatorC)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint, err := validatorC.PortEndpoint(ctx, "8888/tcp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := url.Parse("http://" + endpoint + "/validate-vcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return newVclValidator(u)
+}
+
+// createVersionForm is a minimally valid create-service-version submission for
+// org1, whose fixtures include the verified domain example.se.
+func createVersionForm() url.Values {
+	return url.Values{
+		"vcl_template":                        {cdntypes.DefaultVCLTemplate},
+		"description":                         {"version from a captured form"},
+		"domains":                             {"example.se"},
+		"default-origin-group.origins.0.host": {"192.0.2.10"},
+		"default-origin-group.origins.0.port": {"443"},
+		"default-origin-group.origins.0.tls":  {"on"},
+	}
+}
+
+// TestCreateServiceVersionFormSurvivesNameReuse covers the flow where a stale
+// reference is most costly, and covers it end to end rather than stopping at
+// the navigation link.
+//
+// The user opens the create-version form while the service exists, spends
+// minutes filling it in, and submits. Meanwhile the service is deleted and a
+// new one is created reusing the name. The captured form action must not
+// deposit the version on the replacement.
+//
+// The positive control matters: the same form body is first submitted against
+// a live service and asserted to create a version. Without it, a malformed
+// body would make the negative assertion pass for the wrong reason.
+func TestCreateServiceVersionFormSurvivesNameReuse(t *testing.T) {
+	const (
+		serviceName = "toctou-version-service"
+		firstID     = "00000003-0000-0000-0000-0000000000f3"
+		secondID    = "00000003-0000-0000-0000-0000000000f4"
+		controlName = "toctou-control-service"
+		controlID   = "00000003-0000-0000-0000-0000000000f5"
+	)
+
+	validator := createVersionValidator(t)
+
+	ts, dbPool, err := prepareServer(t, testServerInput{vclValidator: validator})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	for _, svc := range []struct {
+		id, name, uidRange string
+	}{
+		{firstID, serviceName, "'(1000920000, 1000929999)'"},
+		{controlID, controlName, "'(1000940000, 1000949999)'"},
+	} {
+		_, err = dbPool.Exec(ctx,
+			"INSERT INTO services (id, org_id, name, uid_range) SELECT $1, id, $2, "+svc.uidRange+" FROM orgs WHERE name='org1'",
+			svc.id, svc.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+	// formAction opens the create-version page for a service and returns the
+	// action of the form rendered there.
+	formAction := func(name string) string {
+		t.Helper()
+		resp, err := client.Get(ts.URL + "/console/org/org1/services/" + name) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		href := ""
+		doc.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+			if strings.Contains(strings.ToLower(a.Text()), "create your first version") {
+				href, _ = a.Attr("href")
+				return false
+			}
+			return true
+		})
+		if href == "" {
+			t.Fatalf("no create-version link on the page for %q", name)
+		}
+
+		formResp, err := client.Get(ts.URL + href) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer formResp.Body.Close()
+		if formResp.StatusCode != http.StatusOK {
+			t.Fatalf("create-version page for %q returned %d", name, formResp.StatusCode)
+		}
+
+		formDoc, err := goquery.NewDocumentFromReader(formResp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		action, ok := formDoc.Find("form[method='post']").First().Attr("action")
+		if !ok {
+			t.Fatalf("no form action on the create-version page for %q", name)
+		}
+		return action
+	}
+
+	submit := func(action string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, ts.URL+action, strings.NewReader(createVersionForm().Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		resp, err := client.Do(req) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	versionCount := func(serviceID string) int64 {
+		t.Helper()
+		var n int64
+		if err := dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM service_versions WHERE service_id = $1", serviceID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// Positive control: this exact form body does create a version.
+	controlAction := formAction(controlName)
+	submit(controlAction)
+	if got := versionCount(controlID); got != 1 {
+		t.Fatalf("control service has %d versions, want 1 -- the form body is not valid, so the negative case below would pass for the wrong reason", got)
+	}
+
+	// Now the real case. Open the form while the first service exists.
+	staleAction := formAction(serviceName)
+
+	if !strings.Contains(staleAction, firstID) {
+		t.Errorf("form action does not carry the service UUID: %q", staleAction)
+	}
+	if strings.Contains(staleAction, serviceName) {
+		t.Errorf("form action still addresses the service by name: %q", staleAction)
+	}
+
+	// The user is still typing. Meanwhile the service is replaced by a
+	// different one reusing the name.
+	if _, err := dbPool.Exec(ctx, "DELETE FROM services WHERE id = $1", firstID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = dbPool.Exec(ctx,
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT $1, id, $2, '(1000930000, 1000939999)' FROM orgs WHERE name='org1'",
+		secondID, serviceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// They submit the form they filled in.
+	submit(staleAction)
+
+	if got := versionCount(secondID); got != 0 {
+		t.Errorf("the replacement service received %d versions from a form opened against its deleted predecessor, want 0", got)
+	}
+}
+
+// TestActivateServiceVersionRequiresOrgMembership asserts that the response
+// carries no information about whether the named service exists: an existing
+// service and a made-up one must produce the same refusal. The service name
+// itself does appear in the breadcrumb, because that is built from the request
+// path. The caller supplied that string, so echoing it back reveals nothing.
+func TestActivateServiceVersionRequiresOrgMembership(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// username7 is an org2 member, present in the fixtures specifically to
+	// prove org1 actions are refused for someone outside org1.
+	client, _ := consoleLogin(t, ts.URL, "username7", validUserPassword)
+
+	get := func(path string) string {
+		t.Helper()
+		resp, err := client.Get(ts.URL + path) // #nosec G704
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+
+	existing := get("/console/org/org1/services/org1-service1/3/activate")
+	missing := get("/console/org/org1/services/no-such-service-here/3/activate")
+
+	for name, text := range map[string]string{"existing service": existing, "made-up service": missing} {
+		if strings.Contains(text, "about to activate") {
+			t.Errorf("%s: a non-member was shown the activate confirmation page", name)
+		}
+		if !strings.Contains(text, consoleNotAllowedActivateSV) {
+			t.Errorf("%s: expected the not-allowed message, got:\n%s", name, text)
+		}
+	}
+
+	// No oracle: the refusal must not distinguish the two.
+	if strings.Contains(existing, "version 3") != strings.Contains(missing, "version 3") {
+		t.Error("the refusal differs between an existing and a non-existent service")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
+	"github.com/jackc/pgx/v5/pgtype"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -481,11 +482,17 @@ templ DeleteServiceContent(orgName string, serviceName string, serviceID string,
 	}
 }
 
-templ ServiceContent(orgName string, serviceName string, serviceVersions []cdntypes.ServiceVersion) {
+// ServiceContent takes the service UUID rather than its name because the
+// create-version links below are mutating: a version created through them is
+// attached to whatever the path segment resolves to. Keying on the name means
+// a service deleted and recreated under that name while this page sits open
+// receives a version meant for its predecessor, silently. The form behind
+// these links takes minutes to fill in, so that window is wide.
+templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cdntypes.ServiceVersion) {
 	if len(serviceVersions) == 0 {
 		<article class="empty-state">
 			<p>No versions created yet</p>
-			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } role="button">Create your first version</a>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceID.String())) } role="button">Create your first version</a>
 		</article>
 	} else {
 		<table>
@@ -516,7 +523,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 						<td>
 							<button
 								type="button"
-								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, sv.ServiceName, sv.Version))) }
+								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, serviceID.String(), sv.Version))) }
 								hx-target="body"
 								disabled?={ sv.Active }
 								hx-disabled-elt="this"
@@ -525,7 +532,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 							</button>
 							<button
 								type="button"
-								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s?clone-version=%d", orgName, serviceName, sv.Version))) }
+								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s?clone-version=%d", orgName, serviceID.String(), sv.Version))) }
 								hx-target="body"
 								hx-push-url="true"
 							>
@@ -537,7 +544,7 @@ templ ServiceContent(orgName string, serviceName string, serviceVersions []cdnty
 			</tbody>
 		</table>
 		<p>
-			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } role="button">Create service version</a>
+			<a href={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceID.String())) } role="button">Create service version</a>
 		</p>
 	}
 }
@@ -1008,7 +1015,7 @@ templ addOriginGroupButton(orgName string, serviceName string, index string) {
 	</button>
 }
 
-templ CreateServiceVersionContent(serviceName string, orgName string, domains []cdntypes.Domain, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
+templ CreateServiceVersionContent(serviceName string, serviceID pgtype.UUID, orgName string, domains []cdntypes.Domain, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	if err != nil {
 		<article id="error-message" aria-label="Error" role="alert">
 			switch  {
@@ -1031,7 +1038,7 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 	// editor DOM at runtime, so a restored snapshot would show stale or
 	// broken editors. Back/forward re-requests the page from the server so
 	// the editors are rebuilt from fresh markup.
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceName)) } hx-disabled-elt="find button[type='submit']" hx-boost="false" hx-history="false">
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/service/version/%s", orgName, serviceID.String())) } hx-disabled-elt="find button[type='submit']" hx-boost="false" hx-history="false">
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
@@ -1225,9 +1232,9 @@ templ CreateServiceVersionContent(serviceName string, orgName string, domains []
 	<script defer src="/js/dist/codemirror/editor.bundle.min.js" onerror="document.getElementById('vcl-hint').textContent = 'Enhanced editor failed to load. Basic editing is still available.'"></script>
 }
 
-templ ActivateServiceVersionContent(orgName string, serviceName string, version int64, err error) {
+templ ActivateServiceVersionContent(orgName string, serviceName string, serviceID pgtype.UUID, version int64, err error) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
-	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceName, version)) } hx-disabled-elt="find button[type='submit']">
+	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceID.String(), version)) } hx-disabled-elt="find button[type='submit']">
 		<label for="confirmation">
 			Yes I am sure
 			<input type="checkbox" id="confirmation" name="confirmation" required/>
