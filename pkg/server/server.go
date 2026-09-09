@@ -1416,9 +1416,14 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			// If the service is not currently disabled it is not possible to delete
+			// If the service is not currently disabled it is not possible to delete.
+			//
+			// Reaching this means the page that produced the link is stale: the
+			// Delete link only renders for a disabled service, so the service
+			// was re-enabled in the meantime. The URL carries the service UUID,
+			// so pass the resolved name for the breadcrumb here too.
 			if disabledAt == nil {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ConsoleErrorContent(consoleDeleteNeedsDisabled))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ConsoleErrorContent(consoleDeleteNeedsDisabled), serviceIdent.name)
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render delete-service needs-disabled page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1426,7 +1431,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, nil))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, nil), serviceIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to render delete-service page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1461,7 +1466,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			_, err = deleteService(ctx, logger, dbc, orgIdent.name, serviceIdent.id.String(), formData.ConfirmName, ad)
 			if err != nil {
 				logger.Err(err).Msg("service deletion failed")
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, err))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, err), serviceIdent.name)
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render delete-service page on failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2783,7 +2788,7 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, nil))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, nil), serviceIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to render disable-service page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2820,7 +2825,7 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 			err = setServiceDisabled(ctx, ad, dbc, orgIdent.name, serviceIdent.id.String(), true)
 			if err != nil {
 				logger.Err(err).Msg("service disable failed")
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, err))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, err), serviceIdent.name)
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render disable-service page on failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

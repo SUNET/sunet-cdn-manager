@@ -401,16 +401,24 @@ func buildBreadcrumbs(u *url.URL, orgName string, itemLabel string) []Breadcrumb
 		if len(parts) >= 5 {
 			// Deeper than the section list, add section crumb
 			crumbs = append(crumbs, Breadcrumb{Label: sec.Label, URL: orgBase + "/" + sectionPath})
-			itemName := parts[4]
+			itemSegment := parts[4]
 
 			if len(parts) >= 6 {
-				// Deeper than the item, add item crumb
-				crumbs = append(crumbs, Breadcrumb{Label: itemName, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, itemName)})
+				// Deeper than the item, add item crumb. Pages that act on a
+				// service address it by UUID, so prefer the caller-supplied
+				// name over the raw path segment. The URL keeps the segment
+				// so the link still resolves. Mirrors what
+				// buildSuperuserBreadcrumbs already does for the user pages.
+				label := itemSegment
+				if itemLabel != "" {
+					label = itemLabel
+				}
+				crumbs = append(crumbs, Breadcrumb{Label: label, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, itemSegment)})
 
 				if len(parts) >= 7 {
-					// Deeper than sub-item (e.g. /services/test-service/3/activate)
+					// Deeper than sub-item (e.g. /services/{id}/3/activate)
 					subItem := parts[5]
-					crumbs = append(crumbs, Breadcrumb{Label: "Version " + subItem, URL: fmt.Sprintf("%s/%s/%s/%s", orgBase, sectionPath, itemName, subItem)})
+					crumbs = append(crumbs, Breadcrumb{Label: "Version " + subItem, URL: fmt.Sprintf("%s/%s/%s/%s", orgBase, sectionPath, itemSegment, subItem)})
 				}
 			}
 		}

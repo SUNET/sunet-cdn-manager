@@ -1,8 +1,13 @@
 package server
 
 import (
+	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/PuerkitoBio/goquery"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 )
@@ -164,4 +169,67 @@ func TestMapCreateServiceVersionForm(t *testing.T) {
 			t.Fatalf("unexpected error for valid DNS-label name: %s", err)
 		}
 	})
+}
+
+// TestDeleteServiceNeedsDisabledPageNamesTheService checks the stale-state
+// error path on the delete confirmation page.
+//
+// The Delete link only renders for a disabled service, so reaching the
+// "must be disabled first" page means the service was re-enabled after the
+// services list was rendered. That URL carries the service UUID, so the
+// handler has to supply the resolved name or the breadcrumb trail shows a
+// UUID to the user.
+func TestDeleteServiceNeedsDisabledPageNamesTheService(t *testing.T) {
+	const enabledServiceID = "00000003-0000-0000-0000-000000000001"
+
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Deleting a service is a superuser action.
+	client, _ := consoleLogin(t, ts.URL, "admin-with-org", validAdminPassword)
+
+	resp, err := client.Get(ts.URL + "/console/org/org1/services/" + enabledServiceID + "/delete") // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixture service is enabled, so this must be the needs-disabled page.
+	if !strings.Contains(doc.Text(), "must be disabled before it can be deleted") {
+		t.Fatalf("expected the needs-disabled page, got:\n%s", doc.Text())
+	}
+
+	crumbs := doc.Find("nav.breadcrumb a")
+	if crumbs.Length() == 0 {
+		t.Fatal("no breadcrumb links rendered")
+	}
+
+	var labels []string
+	crumbs.Each(func(_ int, a *goquery.Selection) {
+		labels = append(labels, strings.TrimSpace(a.Text()))
+	})
+
+	for _, label := range labels {
+		if label == enabledServiceID {
+			t.Errorf("breadcrumb shows the service UUID instead of its name: %v", labels)
+		}
+	}
+	if !slices.Contains(labels, "org1-service1") {
+		t.Errorf("breadcrumb does not name the service, labels were: %v", labels)
+	}
 }
