@@ -393,12 +393,18 @@ templ ServicesContent(orgName string, services []ServiceEntry, superuser bool, s
 							}
 						</td>
 						<td class="actions">
+							// Every action here addresses the service by UUID rather than by
+							// name, because this page can be stale: if the service is deleted
+							// and a new one created reusing the name after the page was
+							// rendered, a name-keyed link acts on the replacement instead.
+							//
+							// Disable and Delete lead to a confirmation page rather than acting
+							// directly, so they need the UUID just as much as the Enable POST
+							// does: reaching the wrong confirmation page is how the user is
+							// deceived into confirming the wrong thing.
 							if service.DisabledAt == nil {
-								<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/disable", service.OrgName, service.Name)) } role="button">Disable</a>
+								<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/disable", service.OrgName, service.ID.String())) } role="button">Disable</a>
 							} else {
-								// Make POST link point to the service UUID. This is to protect against the page being stale.
-								// If using the name the worst case is the service was deleted from under us after the page was
-								// rendered and we would instead modify the replacement service.
 								<button
 									type="button"
 									hx-post={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/enable", service.OrgName, service.ID.String()))) }
@@ -409,7 +415,7 @@ templ ServicesContent(orgName string, services []ServiceEntry, superuser bool, s
 									Enable
 								</button>
 								if superuser {
-									<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/delete", service.OrgName, service.Name)) } role="button" class="destructive">Delete</a>
+									<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/delete", service.OrgName, service.ID.String())) } role="button" class="destructive">Delete</a>
 								} else {
 									// Rendered greyed out rather than hidden: a missing
 									// button reads as an absent feature, a disabled one
