@@ -63,6 +63,19 @@ type ServiceEntry struct {
 	IPAddresses []netip.Addr
 }
 
+// disabledServiceCount counts how many of the rendered services are disabled,
+// so the services page can explain why a quota slot is occupied without an
+// extra database query.
+func disabledServiceCount(services []ServiceEntry) int {
+	count := 0
+	for _, s := range services {
+		if s.DisabledAt != nil {
+			count++
+		}
+	}
+	return count
+}
+
 type NodeFormFields struct {
 	Name        string
 	Description string

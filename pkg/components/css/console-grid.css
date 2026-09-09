@@ -168,6 +168,29 @@ tbody tr:hover td {
 	font-size: 0.875rem;
 }
 
+/*
+Confirmation forms (disable a service, activate a version) hinder their submit with
+a "yes I'm sure" checkbox. The requirement itself is enforced by `required` on
+that checkbox.
+*/
+form:has(#confirmation:not(:checked)) button[type="submit"] {
+	--pico-background-color: var(--pico-secondary-background);
+	--pico-border-color: var(--pico-secondary-background);
+	opacity: 0.5;
+}
+
+.destructive {
+	--pico-background-color: var(--destructive-background);
+	--pico-border-color: var(--destructive-background);
+	--pico-color: var(--destructive-color);
+}
+
+.destructive:is(:hover, :active, :focus) {
+	--pico-background-color: var(--destructive-hover-background);
+	--pico-border-color: var(--destructive-hover-background);
+	--pico-color: var(--destructive-color);
+}
+
 .vcl-label {
 	font-family: var(--pico-font-family-monospace, monospace);
 }

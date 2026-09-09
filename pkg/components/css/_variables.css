@@ -7,6 +7,14 @@
 	--flash-success-border: #2e7d32;
 	--flash-success-bg: #e8f5e9;
 	--error-color: #c62828;
+
+	/*
+	Destructive actions (like deleting a service) get their own colour so they are
+	not mistaken for the neutral action sitting beside them.
+	*/
+	--destructive-background: #c62828;
+	--destructive-color: #fff;
+	--destructive-hover-background: #a81f1f;
 }
 
 @media only screen and (prefers-color-scheme: dark) {
@@ -15,5 +23,8 @@
 		--flash-success-border: #66bb6a;
 		--flash-success-bg: #1b3d1e;
 		--error-color: #ef5350;
+		--destructive-background: #ef5350;
+		--destructive-color: #1c1c1c;
+		--destructive-hover-background: #f77874;
 	}
 }

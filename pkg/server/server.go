@@ -130,6 +130,7 @@ const (
 	l4lbNodeNotFound                 = "l4lb node not found"
 	nodeGroupNotFound                = "node group not found"
 	ipNetworkNotFound                = "ip network not found"
+	serviceNotFound                  = "service not found"
 	consoleAlreadyExists             = "already exists"
 	validationNotDNSLabel            = "not a valid DNS label"
 	validationNotFQDN                = "not a valid FQDN"
@@ -143,7 +144,12 @@ const (
 	consoleNotAllowedModifyL4LBNode  = "Not allowed to modify L4LB node"
 	consoleNotAllowedDeleteDomain    = "Not allowed to delete domain"
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
+	consoleNotAllowedDisableService  = "Not allowed to disable service"
+	consoleNotAllowedEnableService   = "Not allowed to enable service"
 	consoleOrgNotFound               = "Organization not found"
+	consoleDeleteRequiresSuperuser   = "Service deletion requires an operator. You can disable a service yourself, which takes it offline and clears its cache, but a disabled service keeps its IP addresses, UID range and quota slot. Only deletion releases those, and only an operator can delete. Contact an administrator if this service should be removed."
+	consoleServiceNotFound           = "Service not found"
+	consoleDeleteNeedsDisabled       = "This service must be disabled before it can be deleted. Disable it first, then delete it."
 	consoleNodeGroupNotFound         = "Node group not found"
 	consoleIPNetworksTitle           = "IP networks"
 	consoleIPNetworkNotFound         = "IP network not found"
@@ -416,12 +422,15 @@ const (
 	consoleMissingServiceQueryParam  = "missing 'service' query parameter"
 	unableToSetFlashMessage          = "unable to set flash message"
 	consoleServiceOrgRedirect        = "/console/org/%s/services/%s"
+	consoleServicesOrgRedirect       = "/console/org/%s/services"
 	consoleDomainListReRenderErr     = "domains console: unable to fetch domain list for re-render"
 	consoleAPITokenListReRenderErr   = "api-tokens console: unable to fetch API token list for re-render" // #nosec G101 -- Not a hardcoded credential
 	consoleCacheNodeListReRenderErr  = "cache nodes console: unable to fetch cache node list for re-render"
 	consoleNodeGroupsReRenderErr     = "cache nodes console: unable to fetch node groups for re-render"
 	consoleL4LBNodeListReRenderErr   = "l4lb nodes console: unable to fetch L4LB node list for re-render"
 	consoleL4LBNodeGroupsReRenderErr = "l4lb nodes console: unable to fetch node groups for re-render"
+	consoleServicesOrgRenderErr      = "unable to render services page with org error"
+	consoleServicesServiceRenderErr  = "unable to render services page with service error"
 	consoleDashboardRenderErr        = "unable to render dashboard error page"
 	consoleCreateAPITokenRenderErr   = "unable to render create api token error page"
 	consoleCreateDomainRenderErr     = "unable to render create domain error page"
@@ -1297,13 +1306,6 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
-		if !ok {
-			logger.Error().Msg(consoleMissingSessionData)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
@@ -1311,119 +1313,166 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		orgParam := chi.URLParam(r, "org")
-		if orgParam == "" {
-			logger.Error().Msg(consoleMissingOrgParam)
+		// Service deletion is a superuser action. Checked before any
+		// lookup so a non-superuser learns nothing about what exists.
+		//
+		// The org name comes from the caller's own auth data, never from the
+		// URL, so this branch cannot reveal whether the named org or service
+		// exists.
+		if !ad.Superuser {
+			logger.Error().Msg("consoleServiceDeleteHandler: service deletion requires a superuser")
+			userOrg := ""
+			if ad.OrgName != nil {
+				userOrg = *ad.OrgName
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Delete service", userOrg, components.ConsoleErrorContent(consoleDeleteRequiresSuperuser))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render delete-service forbidden page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 
-		// Check org membership before validating the org name in the DB,
-		// so non-superusers cannot probe for org existence via error messages.
-		if !ad.Superuser {
-			if !isOrgMember(ad, orgParam) {
-				logger.Error().Msg("consoleServiceDelete: user is not superuser and not member of the matching org")
-				userOrg := ""
-				if ad.OrgName != nil {
-					userOrg = *ad.OrgName
-				}
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", userOrg, components.ServicesContent(userOrg, nil, nil, "Not allowed to delete service"))
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to look up orgName")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
 				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render services page with auth error")
+					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 				return
 			}
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgParam)
-		if err != nil {
-			logger.Err(err).Msg("consoleServiceDeleteHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render services page with org error")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			} else {
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
-			logger.Error().Msg("console: missing service name in URL")
+			logger.Error().Msg(consoleMissingServicePath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 
-		_, err = deleteService(ctx, logger, dbc, orgIdent.name, serviceName, ad)
+		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
-			var errorMessage string
-			switch {
-			case errors.Is(err, cdnerrors.ErrNotFound):
-				logger.Err(err).Msg("services console: service not found")
-				errorMessage = "Service not found"
-			default:
-				logger.Err(err).Msg("services console: service deletion failed")
-				errorMessage = "Service deletion failed"
-			}
-			serviceEntries := []components.ServiceEntry{}
-			txErr := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-				services, sErr := selectServicesTx(ctx, tx, ad, orgIdent.name)
-				if sErr != nil {
-					return fmt.Errorf("database lookup failed: %w", sErr)
+			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to look up serviceName")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
-				orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
-				if sErr != nil {
-					return fmt.Errorf("database lookup failed for org service ips: %w", sErr)
-				}
-				for _, s := range services {
-					entry := components.ServiceEntry{Service: s}
-					if addrs, ok := orgServiceIPAddrs[s.ID]; ok {
-						for _, addr := range addrs {
-							entry.IPAddresses = append(entry.IPAddresses, addr.Address)
-						}
-					}
-					serviceEntries = append(serviceEntries, entry)
-				}
-				return nil
-			})
-			// Treat ErrForbidden as non-fatal: the user may lack access to this
-			// org's services, but we can still render the error message with an empty list.
-			if txErr != nil && !errors.Is(txErr, cdnerrors.ErrForbidden) {
-				logger.Err(txErr).Msg("services console: unable to fetch service list for re-render")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ServicesContent(orgIdent.name, serviceEntries, nil, errorMessage))
-			if renderErr != nil {
-				logger.Err(renderErr).Msg("unable to render services page with delete error")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-			return
-		}
-
-		session.AddFlash(fmt.Sprintf("Service '%s' deleted!", serviceName), flashMessageKeys.services)
-		err = session.Save(r, w)
-		if err != nil {
-			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
-			return
-		}
-
-		redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "services")
-		if err != nil {
-			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to create redirect URL")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		// Use StatusSeeOther (303) here to make htmx hx-delete AJAX
-		// request replace original DELETE method with GET when
-		// following the redirect.
-		validatedRedirect(redirectURL, w, r, http.StatusSeeOther)
+		title := "Delete service"
+
+		// Collect what deletion will destroy so the confirmation page can
+		// state it rather than asking a bare "are you sure".
+		var versionCount, uidRangeFirst, uidRangeLast int64
+		var disabledAt *time.Time
+		var ipAddresses []netip.Addr
+		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+			qErr := tx.QueryRow(
+				ctx,
+				`SELECT
+				   (SELECT COUNT(*) FROM service_versions WHERE service_id = services.id),
+				   lower(services.uid_range),
+				   upper(services.uid_range)-1,
+				   services.disabled_at
+				 FROM services WHERE id = $1`,
+				serviceIdent.id,
+			).Scan(&versionCount, &uidRangeFirst, &uidRangeLast, &disabledAt)
+			if qErr != nil {
+				return qErr
+			}
+
+			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
+			if sErr != nil {
+				return sErr
+			}
+			for _, addr := range orgServiceIPAddrs[serviceIdent.id] {
+				ipAddresses = append(ipAddresses, addr.Address)
+			}
+			return nil
+		})
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to collect service deletion details")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			// If the service is not currently disabled it is not possible to delete
+			if disabledAt == nil {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ConsoleErrorContent(consoleDeleteNeedsDisabled))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render delete-service needs-disabled page")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, nil))
+			if err != nil {
+				logger.Err(err).Msg("unable to render delete-service page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse delete-service POST form")
+				return
+			}
+
+			formData := deleteServiceForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST delete-service form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST delete-service form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			// Delete by the resolved UUID rather than the name.
+			// The name is what the user must type, but we would
+			// not want to mistakenly delete replacement service
+			// with the same name.
+			_, err = deleteService(ctx, logger, dbc, orgIdent.name, serviceIdent.id.String(), formData.ConfirmName, ad)
+			if err != nil {
+				logger.Err(err).Msg("service deletion failed")
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, err))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render delete-service page on failure")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			validatedRedirect(fmt.Sprintf(consoleServicesOrgRedirect, orgIdent.name), w, r, http.StatusFound)
+		default:
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -1454,6 +1503,7 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 		}
 
 		// Build view entries with IP addresses for each service
+		var serviceQuota int64
 		serviceEntries := []components.ServiceEntry{}
 		err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 			services, err := selectServicesTx(ctx, tx, ad, orgName)
@@ -1482,6 +1532,21 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 				}
 
 				serviceEntries = append(serviceEntries, entry)
+			}
+
+			// selectServicesTx above already enforces that the caller is
+			// either a superuser or a member of this org (returning
+			// cdnerrors.ErrForbidden otherwise, which aborts this
+			// transaction), so it is safe to resolve the org and read its
+			// service_quota here.
+			orgIdent, err := newOrgIdentifier(ctx, tx, orgName)
+			if err != nil {
+				return fmt.Errorf("database lookup failed for org identifier: %w", err)
+			}
+
+			err = tx.QueryRow(ctx, "SELECT service_quota FROM orgs WHERE id = $1", orgIdent.id).Scan(&serviceQuota)
+			if err != nil {
+				return fmt.Errorf("database lookup failed for org service quota: %w", err)
 			}
 
 			return nil
@@ -1518,7 +1583,7 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 		}
 		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, ad.Superuser, serviceQuota, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render services page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2625,6 +2690,230 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 	}
 }
 
+func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if !ad.Superuser && !isOrgMember(ad, orgName) {
+			logger.Error().Msg("consoleServiceDisableHandler: user is not superuser and not a member of the matching org")
+			// The org name comes from the callers own auth data, never the
+			// URL, so nothing about the named org or service is revealed.
+			userOrg := ""
+			if ad.OrgName != nil {
+				userOrg = *ad.OrgName
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Disable service", userOrg, components.ConsoleErrorContent(consoleNotAllowedDisableService))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render consoleServiceDisableHandler forbidden page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDisableHandler: unable to look up orgName")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		serviceName := chi.URLParam(r, "service")
+		if serviceName == "" {
+			logger.Error().Msg(consoleMissingServicePath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDisableHandler: unable to look up serviceName")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		title := "Disable service"
+
+		var ipAddresses []netip.Addr
+		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
+			if sErr != nil {
+				return sErr
+			}
+			for _, addr := range orgServiceIPAddrs[serviceIdent.id] {
+				ipAddresses = append(ipAddresses, addr.Address)
+			}
+			return nil
+		})
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceDisableHandler: unable to look up service IPs")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, nil))
+			if err != nil {
+				logger.Err(err).Msg("unable to render disable-service page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		case http.MethodPost:
+			if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+				logger.Err(err).Msg("unable to parse disable-service POST form")
+				return
+			}
+
+			formData := activateServiceVersionForm{}
+
+			err = schemaDecoder.Decode(&formData, r.PostForm)
+			if err != nil {
+				logger.Err(err).Msg("unable to decode POST disable-service form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			err = validate.Struct(formData)
+			if err != nil {
+				logger.Err(err).Msg("unable to validate POST disable-service form data")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+
+			if !formData.Confirmation {
+				validatedRedirect(fmt.Sprintf(consoleServicesOrgRedirect, orgIdent.name), w, r, http.StatusFound)
+				return
+			}
+
+			// Disable by the resolved id, not the name,
+			err = setServiceDisabled(ctx, ad, dbc, orgIdent.name, serviceIdent.id.String(), true)
+			if err != nil {
+				logger.Err(err).Msg("service disable failed")
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, err))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg("unable to render disable-service page on failure")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+
+			validatedRedirect(fmt.Sprintf(consoleServicesOrgRedirect, orgIdent.name), w, r, http.StatusFound)
+		default:
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func consoleServiceEnableHandler(dbc *dbConn) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if !ad.Superuser && !isOrgMember(ad, orgName) {
+			logger.Error().Msg("consoleServiceEnableHandler: user is not superuser and not a member of the matching org")
+			// The org name comes from the callers own auth data, never the
+			// URL, so nothing about the named org or service is revealed.
+			userOrg := ""
+			if ad.OrgName != nil {
+				userOrg = *ad.OrgName
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Enable service", userOrg, components.ConsoleErrorContent(consoleNotAllowedEnableService))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render consoleServiceEnableHandler forbidden page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleServiceEnableHandler: unable to look up orgName")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		// The services page emits the service's UUID here so we are
+		// not mistakenly targeting a name that has been reused for a
+		// replacement service.
+		serviceNameOrID := chi.URLParam(r, "service")
+		if serviceNameOrID == "" {
+			logger.Error().Msg(consoleMissingServicePath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		err = setServiceDisabled(ctx, ad, dbc, orgIdent.name, serviceNameOrID, false)
+		if err != nil {
+			logger.Err(err).Msg("service enable failed")
+			if errors.Is(err, cdnerrors.ErrNotFound) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		validatedRedirect(fmt.Sprintf(consoleServicesOrgRedirect, orgIdent.name), w, r, http.StatusFound)
+	}
+}
+
 func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component, itemLabel ...string) error {
 	availableOrgNames := []string{}
 	if !ad.Superuser {
@@ -2739,6 +3028,10 @@ type createAPITokenForm struct {
 
 type activateServiceVersionForm struct {
 	Confirmation bool `schema:"confirmation"`
+}
+
+type deleteServiceForm struct {
+	ConfirmName string `schema:"confirm-name"`
 }
 
 type createNodeForm struct {
@@ -3952,6 +4245,69 @@ func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbC
 	})
 	if err != nil {
 		return fmt.Errorf("setCacheNodeMaintenance: transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+// setServiceDisabled flips a service's disabled state. Disabling keeps the
+// row, its uid_range, IP addresses, versions and quota slot, but removes the
+// service from the cache-node and l4lb-node config endpoints, which makes the
+// agent tear down its containers, on-disk state and BGP announcements.
+func setServiceDisabled(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, disabled bool) error {
+	if !ad.Superuser && ad.OrgID == nil {
+		return cdnerrors.ErrNotFound
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		var orgID pgtype.UUID
+		if orgNameOrID != "" {
+			if !ad.Superuser && !isOrgMember(ad, orgNameOrID) {
+				return cdnerrors.ErrNotFound
+			}
+			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+			if err != nil {
+				return cdnerrors.ErrUnprocessable
+			}
+			orgID = orgIdent.id
+		}
+
+		// ForUpdate because this transaction goes on to UPDATE the services
+		// row resolving with a shared lock first would make two concurrent
+		// disable/enable requests for the same service deadlock on the
+		// lock upgrade.
+		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("setServiceDisabled: unable to look up service identifier: %w", err)
+		}
+
+		// A normal user can only modify a service belonging to the org
+		// they are a member of.
+		if !ad.Superuser && *ad.OrgID != serviceIdent.orgID {
+			return cdnerrors.ErrNotFound
+		}
+
+		if disabled {
+			// "AND disabled_at IS NULL" makes a repeated disable
+			// idempotent instead of moving the timestamp forward.
+			_, err = tx.Exec(dbCtx, "UPDATE services SET disabled_at = now() WHERE id = $1 AND disabled_at IS NULL", serviceIdent.id)
+		} else {
+			_, err = tx.Exec(dbCtx, "UPDATE services SET disabled_at = NULL WHERE id = $1", serviceIdent.id)
+		}
+		if err != nil {
+			return fmt.Errorf("unable to update disabled_at for service: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setServiceDisabled transaction failed: %w", err)
 	}
 
 	return nil
@@ -5615,12 +5971,12 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 
 	var rows pgx.Rows
 	if lookupOrg.Valid {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.disabled_at FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
 		}
 	} else {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.disabled_at FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for all services: %w", err)
 		}
@@ -5664,6 +6020,11 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 
 		s.Name = serviceIdent.name
 		s.ID = serviceIdent.id
+
+		err = tx.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", serviceIdent.id).Scan(&s.DisabledAt)
+		if err != nil {
+			return fmt.Errorf("selectService: unable to select disabled_at: %w", err)
+		}
 
 		return nil
 	})
@@ -5749,9 +6110,51 @@ func newOrgIdentifier(ctx context.Context, tx pgx.Tx, input string) (orgIdentifi
 	}, nil
 }
 
+// serviceRowLock selects the row lock taken while resolving a service
+// identifier.
+type serviceRowLock int
+
+const (
+	// serviceLockShare is for read-only paths. It stops the row being deleted
+	// or renamed under the transaction without blocking other readers.
+	serviceLockShare serviceRowLock = iota
+	// serviceLockUpdate is for transactions that go on to modify or delete the
+	// services row.
+	// Using FOR SHARE and then doing modifications upgrades ShareLock to
+	// ExclusiveLock on the same row. Two such transactions can both take the
+	// shared lock and then each wait for the other to release it before its
+	// own upgrade can proceed leading to a deadlock, which PostgreSQL breaks after
+	// deadlock_timeout by aborting one of them with SQLSTATE 40P01. Acquiring
+	// the exclusive lock up front makes the second transaction queue behind
+	// the first instead, so one waits and both succeed.
+	serviceLockUpdate
+)
+
 func newServiceIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
+	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, serviceLockShare)
+}
+
+// newServiceIdentifierForUpdate resolves a service the way
+// newServiceIdentifier does but takes an exclusive row lock, for callers that
+// will write to or delete the services row in the same transaction.
+func newServiceIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
+	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, serviceLockUpdate)
+}
+
+func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID, lock serviceRowLock) (serviceIdentifier, error) {
 	if input == "" {
 		return serviceIdentifier{}, errEmptyInputIdentifier
+	}
+
+	// Fully literal queries per lock mode rather than concatenating the lock
+	// clause, so nothing here can be mistaken for dynamic SQL.
+	byIDQuery := "SELECT id, name, org_id FROM services WHERE id = $1 FOR SHARE"
+	byIDInOrgQuery := "SELECT id, name, org_id FROM services WHERE id = $1 AND org_id = $2 FOR SHARE"
+	byNameQuery := "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE"
+	if lock == serviceLockUpdate {
+		byIDQuery = "SELECT id, name, org_id FROM services WHERE id = $1 FOR UPDATE"
+		byIDInOrgQuery = "SELECT id, name, org_id FROM services WHERE id = $1 AND org_id = $2 FOR UPDATE"
+		byNameQuery = "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR UPDATE"
 	}
 
 	var id, orgID pgtype.UUID
@@ -5760,17 +6163,37 @@ func newServiceIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrg
 	inputID := new(pgtype.UUID)
 	err := inputID.Scan(input)
 	if err == nil {
-		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM services WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
-		if err != nil {
-			return serviceIdentifier{}, err
+		// This is a valid UUID, treat it as an ID and collect the name
+		// (also verifying the id exists in the process).
+		//
+		// When the caller also supplies an org, the lookup is constrained to
+		// that org. A service UUID is globally unique, but resolving one
+		// outside the org the caller named lets the two disagree: callers that
+		// look a service up by ID and then act on it by name instead
+		// of UUID within the supplied org end up potentially
+		// describing one service and modifying another.
+		// Constraining here makes a cross-org UUID behave like an
+		// unknown one.
+		//
+		// Omitting the org stays supported: the API by-ID endpoints accept a
+		// UUID with no ?org= at all.
+		if inputOrgID.Valid {
+			err := tx.QueryRow(ctx, byIDInOrgQuery, *inputID, inputOrgID).Scan(&id, &name, &orgID)
+			if err != nil {
+				return serviceIdentifier{}, err
+			}
+		} else {
+			err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name, &orgID)
+			if err != nil {
+				return serviceIdentifier{}, err
+			}
 		}
 	} else {
 		if !inputOrgID.Valid {
 			return serviceIdentifier{}, cdnerrors.ErrServiceByNameNeedsOrg
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
+		err := tx.QueryRow(ctx, byNameQuery, input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return serviceIdentifier{}, err
 		}
@@ -6349,9 +6772,20 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	return serviceID, nil
 }
 
-func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (pgtype.UUID, error) {
-	if !ad.Superuser && ad.OrgID == nil {
-		return pgtype.UUID{}, cdnerrors.ErrNotFound
+// deleteService permanently removes a service and everything cascading from
+// it: its IP addresses (releasing them for reallocation), its uid_range, and
+// every version with its origins, domain bindings and VCL.
+//
+// Three preconditions guard it:
+// * It is superuser-only
+// * The service must already be disabled, which means the agent has already stopped its
+// containers, cleared its on-disk state and withdrawn its announcements, so
+// deletion only ever discards configuration for something already torn down.
+// * confirmName must equal the service name, so a tired superuser is less
+// likely to remove the wrong service by reflex.
+func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, orgNameOrID string, serviceNameOrID string, confirmName string, ad cdntypes.AuthData) (pgtype.UUID, error) {
+	if !ad.Superuser {
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
@@ -6369,7 +6803,9 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 			orgID = orgIdent.id
 		}
 
-		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgID)
+		// ForUpdate because this transaction goes on to DELETE the services
+		// row.
+		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -6377,10 +6813,19 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 			return fmt.Errorf("deleteService: unable to look up service identifier: %w", err)
 		}
 
-		// A normal user can only delete a service belonging to the
-		// same org they are a member of
-		if !ad.Superuser && *ad.OrgID != serviceIdent.orgID {
-			return cdnerrors.ErrNotFound
+		// Lock the row so the disabled check cannot race an enable.
+		var disabledAt *time.Time
+		err = tx.QueryRow(dbCtx, "SELECT disabled_at FROM services WHERE id = $1 FOR UPDATE", serviceIdent.id).Scan(&disabledAt)
+		if err != nil {
+			return fmt.Errorf("deleteService: unable to select disabled_at: %w", err)
+		}
+
+		if disabledAt == nil {
+			return cdnerrors.ErrServiceNotDisabled
+		}
+
+		if confirmName != serviceIdent.name {
+			return cdnerrors.ErrConfirmNameMismatch
 		}
 
 		err = tx.QueryRow(dbCtx, "DELETE FROM services WHERE id = $1 RETURNING id", serviceIdent.id).Scan(&serviceID)
@@ -6392,6 +6837,14 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 	})
 	if err != nil {
 		logger.Err(err).Msg("deleteService transaction failed")
+		switch {
+		case errors.Is(err, cdnerrors.ErrNotFound),
+			errors.Is(err, cdnerrors.ErrUnprocessable),
+			errors.Is(err, cdnerrors.ErrServiceNotDisabled),
+			errors.Is(err, cdnerrors.ErrConfirmNameMismatch),
+			errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+			return pgtype.UUID{}, err
+		}
 		return pgtype.UUID{}, fmt.Errorf("deleteService transaction failed: %w", err)
 	}
 
@@ -6481,6 +6934,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				FROM service_origin_groups
 				GROUP BY service_version_id
 			) AS agg_service_origin_groups ON agg_service_origin_groups.service_version_id = service_versions.id
+	       WHERE services.disabled_at IS NULL
 	       ORDER BY orgs.name`,
 	)
 	if err != nil {
@@ -6774,7 +7228,9 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 				WHERE service_origins.service_version_id = service_versions.id
 			) AS origin_tls_status
 			FROM service_versions
+			JOIN services ON services.id = service_versions.service_id
 			WHERE service_versions.active=true
+			AND services.disabled_at IS NULL
 			ORDER BY service_versions.service_id
 	`,
 		)
@@ -7461,7 +7917,15 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			return cdnerrors.ErrUnprocessable
 		}
 
-		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
+		// ForUpdate because insertServiceVersionTx below bumps
+		// services.version_counter in this same transaction.
+		//
+		// The exclusive lock is now held across the VCL validator round-trip
+		// noted below, so concurrent version creations for the same service
+		// serialise behind it rather than running in parallel. That is the
+		// intended trade: with a shared lock they ran in parallel only to have
+		// one abort with a deadlock error.
+		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("looking up service failed")
 			return cdnerrors.ErrUnprocessable
@@ -8170,7 +8634,11 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbc))
 		r.Get("/org/{org}/services", consoleServicesHandler(dbc))
 		r.Get("/org/{org}/services/{service}", consoleServiceHandler(dbc))
-		r.Delete("/org/{org}/services/{service}", consoleServiceDeleteHandler(dbc))
+		r.Get("/org/{org}/services/{service}/delete", consoleServiceDeleteHandler(dbc))
+		r.Post("/org/{org}/services/{service}/delete", consoleServiceDeleteHandler(dbc))
+		r.Get("/org/{org}/services/{service}/disable", consoleServiceDisableHandler(dbc))
+		r.Post("/org/{org}/services/{service}/disable", consoleServiceDisableHandler(dbc))
+		r.Post("/org/{org}/services/{service}/enable", consoleServiceEnableHandler(dbc))
 		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
 		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
 		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc))
@@ -9160,7 +9628,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 			services, err := selectService(ctx, dbc, input.Org, input.Service, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("service not found")
+					return nil, huma.Error404NotFound(serviceNotFound)
 				} else if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("access to this service is not allowed")
 				}
@@ -9175,8 +9643,9 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 		})
 
 		huma.Delete(api, "/v1/services/{service}", func(ctx context.Context, input *struct {
-			Service string `path:"service" example:"1" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
 			Org     string `query:"org" example:"my-org" doc:"Organization ID or name, required if service is supplied by name" minLength:"1" maxLength:"63"`
+			Confirm string `query:"confirm" example:"my-service" doc:"Must equal the service name; deletion is refused otherwise" minLength:"1" maxLength:"63"`
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
@@ -9186,14 +9655,55 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from service DELETE handler")
 			}
 
-			_, err := deleteService(ctx, logger, dbc, input.Org, input.Service, ad)
+			_, err := deleteService(ctx, logger, dbc, input.Org, input.Service, input.Confirm, ad)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("service not found")
-				} else if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden("access to this service is not allowed")
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden("service deletion requires an operator; disable the service instead")
+				case errors.Is(err, cdnerrors.ErrServiceNotDisabled):
+					return nil, huma.Error409Conflict("service must be disabled before it can be deleted")
+				case errors.Is(err, cdnerrors.ErrConfirmNameMismatch):
+					return nil, huma.Error422UnprocessableEntity("confirm must equal the service name")
+				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(serviceNotFound)
+				case errors.Is(err, cdnerrors.ErrUnprocessable):
+					return nil, huma.Error422UnprocessableEntity("unable to parse request to delete service")
 				}
 				logger.Err(err).Msg("unable to delete service")
+				return nil, err
+			}
+
+			return nil, nil
+		})
+
+		huma.Put(api, "/v1/services/{service}/disabled", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"my-org" doc:"Organization ID or name, required if service is supplied by name" minLength:"1" maxLength:"63"`
+			Body    struct {
+				Disabled bool `json:"disabled" example:"true" doc:"Disable the service, removing it from all node configs while keeping its configuration, IP addresses and quota slot"`
+			}
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service disabled PUT handler")
+			}
+
+			err := setServiceDisabled(ctx, ad, dbc, input.Org, input.Service, input.Body.Disabled)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(serviceNotFound)
+				case errors.Is(err, cdnerrors.ErrUnprocessable):
+					return nil, huma.Error422UnprocessableEntity("unable to parse request to set service disabled state")
+				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
+				}
+				logger.Err(err).Msg("unable to set service disabled state")
 				return nil, err
 			}
 
@@ -11985,6 +12495,12 @@ func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
+		if err := validate.Struct(formData); err != nil {
+			logger.Err(err).Msg("unable to validate cache node group form data")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
 		var groupErr error
 		if formData.NodeGroup == "" {
 			groupErr = unsetCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID)
@@ -12491,6 +13007,12 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		formData := nodeGroupAssignForm{}
 		if err := schemaDecoder.Decode(&formData, r.PostForm); err != nil {
 			logger.Err(err).Msg("unable to decode l4lb node group form data")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		if err := validate.Struct(formData); err != nil {
+			logger.Err(err).Msg("unable to validate l4lb node group form data")
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}

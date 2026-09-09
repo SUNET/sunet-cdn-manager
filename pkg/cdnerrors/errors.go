@@ -34,6 +34,8 @@ var (
 	ErrOldPasswordRequired         = errors.New("old password is required")
 	ErrSelfDelete                  = errors.New("users cannot delete themselves")
 	ErrNoServiceIPAddresses        = errors.New("no service IP addresses available for allocation")
+	ErrServiceNotDisabled          = errors.New("service must be disabled before it can be deleted")
+	ErrConfirmNameMismatch         = errors.New("confirmation name does not match resource name")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
