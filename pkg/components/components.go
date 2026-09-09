@@ -383,10 +383,18 @@ func buildBreadcrumbs(u *url.URL, orgName string, itemLabel string) []Breadcrumb
 			sec := sections[sectionPath]
 			crumbs = append(crumbs, Breadcrumb{Label: sec.Label, URL: orgBase + "/" + sectionPath})
 
-			// Handle nested create paths like /create/service/version/{service}
+			// Handle nested create paths like /create/service/version/{service}.
+			// That route addresses the service by UUID, so prefer the
+			// caller-supplied name over the raw path segment, the same way the
+			// section branch below does. The URL keeps the segment so the link
+			// still resolves.
 			if len(parts) >= 7 && parts[5] == "version" {
-				serviceName := parts[6]
-				crumbs = append(crumbs, Breadcrumb{Label: serviceName, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, serviceName)})
+				serviceSegment := parts[6]
+				label := serviceSegment
+				if itemLabel != "" {
+					label = itemLabel
+				}
+				crumbs = append(crumbs, Breadcrumb{Label: label, URL: fmt.Sprintf("%s/%s/%s", orgBase, sectionPath, serviceSegment)})
 			}
 		}
 

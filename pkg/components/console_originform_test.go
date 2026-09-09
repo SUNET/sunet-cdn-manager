@@ -13,6 +13,17 @@ import (
 
 // render is a small helper to render a templ.Component into a string for
 // substring assertions in the tests below.
+// testServiceID is a stand-in service UUID for component tests. The
+// create-version form action is keyed on the service ID, not its name.
+func testServiceID(t *testing.T) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	if err := id.Scan("6ba7b810-9dad-11d1-80b4-00c04fd430c8"); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func render(t *testing.T, c templ.Component) string {
 	t.Helper()
 	var buf bytes.Buffer
@@ -48,7 +59,7 @@ func TestCreateServiceVersionContentCloneRender(t *testing.T) {
 
 	domains := []cdntypes.Domain{{FQDN: "example.com", Verified: true}}
 
-	html := render(t, CreateServiceVersionContent("myservice", "myorg", domains, nil, "vcl-content", cloneData, nil, ""))
+	html := render(t, CreateServiceVersionContent("myservice", testServiceID(t), "myorg", domains, nil, "vcl-content", cloneData, nil, ""))
 
 	wantSubstrings := []string{
 		// The description, prefilled from clone data.
@@ -139,7 +150,7 @@ func TestCreateServiceVersionContentSubmittedRender(t *testing.T) {
 
 	domains := []cdntypes.Domain{{FQDN: "example.com", Verified: true}}
 
-	html := render(t, CreateServiceVersionContent("myservice", "myorg", domains, submitted, "", cloneData, nil, ""))
+	html := render(t, CreateServiceVersionContent("myservice", testServiceID(t), "myorg", domains, submitted, "", cloneData, nil, ""))
 
 	if strings.Contains(html, "should-not-appear") {
 		t.Errorf("clone data leaked through despite submittedData being set")

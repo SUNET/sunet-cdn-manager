@@ -146,6 +146,7 @@ const (
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
 	consoleNotAllowedDisableService  = "Not allowed to disable service"
 	consoleNotAllowedEnableService   = "Not allowed to enable service"
+	consoleNotAllowedActivateSV      = "Not allowed to activate service version"
 	consoleOrgNotFound               = "Organization not found"
 	consoleDeleteRequiresSuperuser   = "Service deletion requires an operator. You can disable a service yourself, which takes it offline and clears its cache, but a disabled service keeps its IP addresses, UID range and quota slot. Only deletion releases those, and only an operator can delete. Contact an administrator if this service should be removed."
 	consoleServiceNotFound           = "Service not found"
@@ -431,6 +432,7 @@ const (
 	consoleL4LBNodeGroupsReRenderErr = "l4lb nodes console: unable to fetch node groups for re-render"
 	consoleServicesOrgRenderErr      = "unable to render services page with org error"
 	consoleServicesServiceRenderErr  = "unable to render services page with service error"
+	consoleServiceRenderErr          = "unable to render service error page"
 	consoleDashboardRenderErr        = "unable to render dashboard error page"
 	consoleCreateAPITokenRenderErr   = "unable to render create api token error page"
 	consoleCreateDomainRenderErr     = "unable to render create domain error page"
@@ -2202,7 +2204,7 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		serviceVersions, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
+		serviceVersions, serviceIdent, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
 		if err != nil {
 			logger.Err(err).Msg("console: unable to select service versions")
 			switch {
@@ -2213,13 +2215,13 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 				}
 				err := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
 				if err != nil {
-					logger.Err(err).Msg("unable to render service error page")
+					logger.Err(err).Msg(consoleServiceRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 			case errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent("Service not found"))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleServiceNotFound))
 				if err != nil {
-					logger.Err(err).Msg("unable to render service error page")
+					logger.Err(err).Msg(consoleServiceRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 			default:
@@ -2228,7 +2230,16 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceName, serviceVersions))
+		// ServiceContent renders create-version, clone and activate links,
+		// which address the service by UUID. Use the identifier
+		// selectServiceVersions resolved rather than looking the name up
+		// again: its FOR SHARE lock is released when that transaction
+		// commits, so a second lookup could land on a different service that
+		// has since taken the name -- which is the very substitution these
+		// links exist to prevent. It is valid even when the version list is
+		// empty, which is exactly the case a second lookup would have been
+		// needed for.
+		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceIdent.id, serviceVersions), serviceIdent.name)
 		if err != nil {
 			logger.Err(err).Msg("unable to render service page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2466,6 +2477,19 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
 			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up serviceName failed")
+			// A create-version link that no longer resolves is the expected
+			// outcome of following a stale one: the service it named is gone.
+			// That deserves a page rather than a bare 500. selectDomains
+			// above has already refused callers outside this org, so naming
+			// the miss here reveals nothing.
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -2484,7 +2508,11 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 				}
 
 				err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-					cloneData, err = getServiceVersionCloneData(ctx, tx, ad, orgName, serviceName, cloneVersion)
+					// Resolved identifiers, not the raw path params: the
+					// handler already pinned the service above, and
+					// re-resolving the name here could pick a different
+					// service that has since taken the name.
+					cloneData, err = getServiceVersionCloneData(ctx, tx, ad, orgIdent.name, serviceIdent.id.String(), cloneVersion)
 					if err != nil {
 						return err
 					}
@@ -2500,7 +2528,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 				}
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, domains, nil, vclTemplateValue, cloneData, nil, ""))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceIdent.name, serviceIdent.id, orgIdent.name, domains, nil, vclTemplateValue, cloneData, nil, ""), serviceIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to render create service version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2525,7 +2553,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST create-service-version form data")
 
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, serviceIdent.id, orgIdent.name, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""), serviceIdent.name)
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after validation failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2538,7 +2566,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			if err != nil {
 				logger.Err(err).Msg("unable to map POST create-service-version form data")
 
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, orgIdent.name, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceVersionContent(serviceIdent.name, serviceIdent.id, orgIdent.name, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrInvalidFormData, ""), serviceIdent.name)
 				if err != nil {
 					logger.Err(err).Msg("unable to render service creation page after form mapping failure")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2546,7 +2574,12 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 				}
 				return
 			}
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgName, serviceName, formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
+			// Attach the version by the service UUID resolved above rather
+			// than by re-resolving the name. Otherwise this insert and the
+			// page the user filled in are two independent name lookups that
+			// can disagree, and the version lands on a service the user
+			// never saw.
+			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgIdent.name, serviceIdent.id.String(), formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation):
@@ -2554,7 +2587,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 					if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
 						errDetails = ve.Details
 					}
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceName, orgName, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, err, errDetails))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.CreateServiceVersionContent(serviceIdent.name, serviceIdent.id, orgIdent.name, domains, &formData, "", cdntypes.ServiceVersionCloneData{}, err, errDetails), serviceIdent.name)
 					if err != nil {
 						logger.Err(err).Msg("unable to render service version creation page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2581,6 +2614,15 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
+		title := "Activate service version"
+
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
 		orgName := chi.URLParam(r, "org")
 		if orgName == "" {
 			logger.Error().Msg(consoleMissingOrgParam)
@@ -2588,9 +2630,37 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
+		// Checked before any lookup, the way the disable and delete handlers
+		// do it, so a non-member learns nothing about what exists in another
+		// org.
+		if !ad.Superuser && !isOrgMember(ad, orgName) {
+			logger.Error().Msg("consoleActivateServiceVersionHandler: user is not superuser and not a member of the matching org")
+			// The org name comes from the caller's own auth data, never the
+			// URL, so this branch cannot reveal whether the named org or
+			// service exists.
+			userOrg := ""
+			if ad.OrgName != nil {
+				userOrg = *ad.OrgName
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, userOrg, components.ConsoleErrorContent(consoleNotAllowedActivateSV))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render consoleActivateServiceVersionHandler forbidden page")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
 		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up orgName failed")
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -2605,6 +2675,16 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
 		if err != nil {
 			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up serviceName failed")
+			// The activate link carries the service UUID, so a miss here is
+			// the expected outcome of following a stale one.
+			if errors.Is(err, pgx.ErrNoRows) {
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
+				if renderErr != nil {
+					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+				return
+			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -2623,18 +2703,9 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		title := "Activate service version"
-
-		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
-		if !ok {
-			logger.Error().Msg(consoleMissingAuthData)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, nil))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, nil), serviceIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to render activate-service-version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2658,7 +2729,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST activate-service form data")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, cdnerrors.ErrInvalidFormData))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, cdnerrors.ErrInvalidFormData), serviceIdent.name)
 				if err != nil {
 					logger.Err(err).Msg("unable to render service version activation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2673,10 +2744,13 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			if formData.Confirmation {
-				err := activateServiceVersion(ctx, logger, ad, dbc, orgIdent.name, serviceIdent.name, version)
+				// Activate by the resolved UUID rather than re-resolving the
+				// name, so this and the confirmation page the user just saw
+				// cannot end up describing different services.
+				err := activateServiceVersion(ctx, logger, ad, dbc, orgIdent.name, serviceIdent.id.String(), version)
 				if err != nil {
 					logger.Err(err).Msg("service version activation failed")
-					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, version, err))
+					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, err), serviceIdent.name)
 					if err != nil {
 						logger.Err(err).Msg("unable to render activate-service-version page on activation failure")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -7299,10 +7373,18 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 	return lnc, nil
 }
 
-func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, error) {
+// selectServiceVersions returns a service's versions along with the service
+// identifier it resolved to get them. Callers that go on to build URLs or
+// act on the service must use that identifier rather than resolving the name
+// a second time: the FOR SHARE lock taken here is released when this
+// transaction commits, so a second lookup can land on a different service
+// that has since taken the name. The returned slice may be empty, but the
+// identifier is always valid when err is nil.
+func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, serviceIdentifier, error) {
 	var rows pgx.Rows
 
 	var err error
+	var resolvedService serviceIdentifier
 	serviceVersions := []cdntypes.ServiceVersion{}
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var serviceIdent serviceIdentifier
@@ -7326,6 +7408,8 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
 			return cdnerrors.ErrForbidden
 		}
+
+		resolvedService = serviceIdent
 
 		rows, err = tx.Query(
 			ctx,
@@ -7361,10 +7445,10 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("selectServiceVersions: transaction failed: %w", err)
+		return nil, serviceIdentifier{}, fmt.Errorf("selectServiceVersions: transaction failed: %w", err)
 	}
 
-	return serviceVersions, nil
+	return serviceVersions, resolvedService, nil
 }
 
 var hostnameProfile = idna.New(
@@ -9778,7 +9862,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
 
-			serviceVersions, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
+			serviceVersions, _, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
