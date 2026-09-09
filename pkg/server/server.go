@@ -4310,7 +4310,7 @@ func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbC
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		cacheNodeIdent, err := newCacheNodeIdentifierForUpdate(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse cache node ID for maintenance: %w", err)
 		}
@@ -4401,14 +4401,19 @@ func setCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, c
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
-		if err != nil {
-			return fmt.Errorf("unable to parse cacheNodeIdent node ID for node-group: %w", err)
-		}
-
+		// Resolve the node group before the cache node. deleteNodeGroup locks
+		// the node_groups row and then, inside its DELETE, takes FOR KEY SHARE
+		// on the cache_nodes rows referencing it. Taking these two locks in the
+		// other order would let each transaction hold what the other waits for,
+		// which PostgreSQL breaks by aborting one with SQLSTATE 40P01.
 		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse nodeGroupIdent group ID for cache node-group: %w", err)
+		}
+
+		cacheNodeIdent, err := newCacheNodeIdentifierForUpdate(dbCtx, tx, cacheNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse cacheNodeIdent node ID for node-group: %w", err)
 		}
 
 		_, err = tx.Exec(dbCtx, "UPDATE cache_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, cacheNodeIdent.id)
@@ -4533,7 +4538,7 @@ func setL4LBNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbCo
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		l4lbNodeIdent, err := newL4LBNodeIdentifierForUpdate(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for maintenance: %w", err)
 		}
@@ -4561,14 +4566,16 @@ func setL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, l4
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
-		if err != nil {
-			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for node-group: %w", err)
-		}
-
+		// Resolve the node group before the l4lb node, for the lock ordering
+		// reason spelled out in setCacheNodeGroup.
 		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			return fmt.Errorf("unable to parse nodeGroupIdent group ID for l4lb node-group: %w", err)
+		}
+
+		l4lbNodeIdent, err := newL4LBNodeIdentifierForUpdate(dbCtx, tx, l4lbNodeNameOrID)
+		if err != nil {
+			return fmt.Errorf("unable to parse l4lbNodeIdent node ID for node-group: %w", err)
 		}
 
 		_, err = tx.Exec(dbCtx, "UPDATE l4lb_nodes SET node_group_id = $1 WHERE id = $2", nodeGroupIdent.id, l4lbNodeIdent.id)
@@ -4847,15 +4854,12 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 
 	var u user
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		var currentDisplayName string
-		err := tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR SHARE", userID).Scan(&currentDisplayName)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("unable to look up user for PUT: %w", err)
-		}
-
+		// Resolve the role and org before locking the users row. deleteOrg
+		// locks the orgs row and then, inside its DELETE, takes FOR KEY SHARE
+		// on the users rows referencing it. Locking the user first and then
+		// waiting for the org would let each transaction hold what the other
+		// waits for, which PostgreSQL breaks by aborting one with SQLSTATE
+		// 40P01.
 		roleIdent, err := newRoleIdentifier(dbCtx, tx, role)
 		if err != nil {
 			return fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
@@ -4869,6 +4873,18 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 				return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
 			}
 			orgID = &orgIdent.id
+		}
+
+		var currentDisplayName string
+		// FOR UPDATE rather than FOR SHARE: this transaction goes on to write
+		// this very row, and taking the shared lock first would mean upgrading
+		// it. See the lockUpdate const for why that deadlocks.
+		err = tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentDisplayName)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
+			return fmt.Errorf("unable to look up user for PUT: %w", err)
 		}
 
 		// Non-local users (e.g. Keycloak) cannot be renamed — their
@@ -5070,7 +5086,7 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 
 	var domainID pgtype.UUID
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		domainIdent, err := newDomainIdentifier(dbCtx, tx, domainFQDNOrID)
+		domainIdent, err := newDomainIdentifierForUpdate(dbCtx, tx, domainFQDNOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -5472,7 +5488,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		orgIdent, err := newOrgIdentifierForUpdate(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -5487,8 +5503,10 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 
 		var clientTokenQuota int64
 		// Verify we are not hitting the limit of how many client tokens the
-		// org allows, do "FOR UPDATE" to lock out any concurrently
-		// running function until we are done with counting rows.
+		// org allows. The exclusive lock that locks out any concurrently
+		// running function until we are done with counting rows was already
+		// taken when the org identifier was resolved; naming it again here
+		// keeps the guarantee visible at the point it is relied on.
 		err = tx.QueryRow(dbCtx, "SELECT client_token_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&clientTokenQuota)
 		if err != nil {
 			return err
@@ -5601,7 +5619,7 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 			orgID = orgIdent.id
 		}
 
-		orgClientCredentialIdent, err := newOrgClientCredentialIdentifier(dbCtx, tx, orgClientCredentialNameOrID, orgID)
+		orgClientCredentialIdent, err := newOrgClientCredentialIdentifierForUpdate(dbCtx, tx, orgClientCredentialNameOrID, orgID)
 		if err != nil {
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
@@ -5909,7 +5927,7 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 
 	var updatedOrg cdntypes.Org
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		orgIdent, err := newOrgIdentifierForUpdate(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -5955,7 +5973,7 @@ func deleteOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		orgIdent, err := newOrgIdentifierForUpdate(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -6159,10 +6177,67 @@ type orgClientCredentialIdentifier struct {
 
 var errEmptyInputIdentifier = errors.New("input identifier is empty")
 
+// rowLock selects the row lock taken while resolving a resource identifier.
+//
+// The helpers below append a static lock clause to queries with no outside
+// input, so safe from SQL injection.
+type rowLock int
+
+const (
+	// lockShare is for read-only paths. It stops the row being deleted
+	// or renamed under the transaction without blocking other readers.
+	lockShare rowLock = iota
+	// lockUpdate is for transactions that go on to modify or delete the
+	// row they resolved.
+	// Using FOR SHARE and then doing modifications upgrades ShareLock to
+	// ExclusiveLock on the same row. Two such transactions can both take the
+	// shared lock and then each wait for the other to release it before its
+	// own upgrade can proceed leading to a deadlock, which PostgreSQL breaks after
+	// deadlock_timeout by aborting one of them with SQLSTATE 40P01. Acquiring
+	// the exclusive lock up front makes the second transaction queue behind
+	// the first instead, so one waits and both succeed.
+	//
+	// A transaction that writes only rows in other tables referencing the row
+	// it resolved does not need this. The foreign key check takes FOR KEY
+	// SHARE, which is weaker than the shared lock already held, so there is no
+	// upgrade to deadlock over.
+	lockUpdate
+)
+
+// clause returns the row lock clause to append to a lookup query.
+//
+// The base queries stay literal and stay next to the function that runs them;
+// only this suffix is shared, so the lock mode is decided in one place rather
+// than restated per query. rowLock has two values, so the complete set of
+// queries any helper can build is fixed at compile time. There is no outside
+// input of any kind on this path.
+func (l rowLock) clause() string {
+	if l == lockUpdate {
+		return " FOR UPDATE"
+	}
+
+	return " FOR SHARE"
+}
+
 func newOrgIdentifier(ctx context.Context, tx pgx.Tx, input string) (orgIdentifier, error) {
+	return newOrgIdentifierWithLock(ctx, tx, input, lockShare)
+}
+
+// newOrgIdentifierForUpdate resolves an org the way newOrgIdentifier does but
+// takes an exclusive row lock, for callers that will write to or delete the
+// orgs row in the same transaction, or that lock it to serialise a quota
+// check.
+func newOrgIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (orgIdentifier, error) {
+	return newOrgIdentifierWithLock(ctx, tx, input, lockUpdate)
+}
+
+func newOrgIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock rowLock) (orgIdentifier, error) {
 	if input == "" {
 		return orgIdentifier{}, errEmptyInputIdentifier
 	}
+
+	byIDQuery := "SELECT id, name FROM orgs WHERE id = $1" + lock.clause()
+	byNameQuery := "SELECT id, name FROM orgs WHERE name = $1" + lock.clause()
 
 	var id pgtype.UUID
 	var name string
@@ -6171,13 +6246,13 @@ func newOrgIdentifier(ctx context.Context, tx pgx.Tx, input string) (orgIdentifi
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM orgs WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
 			return orgIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM orgs WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
 			return orgIdentifier{}, err
 		}
@@ -6189,52 +6264,25 @@ func newOrgIdentifier(ctx context.Context, tx pgx.Tx, input string) (orgIdentifi
 	}, nil
 }
 
-// serviceRowLock selects the row lock taken while resolving a service
-// identifier.
-type serviceRowLock int
-
-const (
-	// serviceLockShare is for read-only paths. It stops the row being deleted
-	// or renamed under the transaction without blocking other readers.
-	serviceLockShare serviceRowLock = iota
-	// serviceLockUpdate is for transactions that go on to modify or delete the
-	// services row.
-	// Using FOR SHARE and then doing modifications upgrades ShareLock to
-	// ExclusiveLock on the same row. Two such transactions can both take the
-	// shared lock and then each wait for the other to release it before its
-	// own upgrade can proceed leading to a deadlock, which PostgreSQL breaks after
-	// deadlock_timeout by aborting one of them with SQLSTATE 40P01. Acquiring
-	// the exclusive lock up front makes the second transaction queue behind
-	// the first instead, so one waits and both succeed.
-	serviceLockUpdate
-)
-
 func newServiceIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
-	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, serviceLockShare)
+	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, lockShare)
 }
 
 // newServiceIdentifierForUpdate resolves a service the way
 // newServiceIdentifier does but takes an exclusive row lock, for callers that
 // will write to or delete the services row in the same transaction.
 func newServiceIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
-	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, serviceLockUpdate)
+	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, lockUpdate)
 }
 
-func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID, lock serviceRowLock) (serviceIdentifier, error) {
+func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID, lock rowLock) (serviceIdentifier, error) {
 	if input == "" {
 		return serviceIdentifier{}, errEmptyInputIdentifier
 	}
 
-	// Fully literal queries per lock mode rather than concatenating the lock
-	// clause, so nothing here can be mistaken for dynamic SQL.
-	byIDQuery := "SELECT id, name, org_id FROM services WHERE id = $1 FOR SHARE"
-	byIDInOrgQuery := "SELECT id, name, org_id FROM services WHERE id = $1 AND org_id = $2 FOR SHARE"
-	byNameQuery := "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR SHARE"
-	if lock == serviceLockUpdate {
-		byIDQuery = "SELECT id, name, org_id FROM services WHERE id = $1 FOR UPDATE"
-		byIDInOrgQuery = "SELECT id, name, org_id FROM services WHERE id = $1 AND org_id = $2 FOR UPDATE"
-		byNameQuery = "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2 FOR UPDATE"
-	}
+	byIDQuery := "SELECT id, name, org_id FROM services WHERE id = $1" + lock.clause()
+	byIDInOrgQuery := "SELECT id, name, org_id FROM services WHERE id = $1 AND org_id = $2" + lock.clause()
+	byNameQuery := "SELECT id, name, org_id FROM services WHERE name = $1 and org_id = $2" + lock.clause()
 
 	var id, orgID pgtype.UUID
 	var name string
@@ -6285,6 +6333,9 @@ func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, 
 	}, nil
 }
 
+// newRoleIdentifier has no exclusive variant: no caller writes the roles row,
+// they only reference it from a users or credentials row they are writing, and
+// that foreign key check takes a weaker lock than the shared one held here.
 func newRoleIdentifier(ctx context.Context, tx pgx.Tx, input string) (roleIdentifier, error) {
 	if input == "" {
 		return roleIdentifier{}, errEmptyInputIdentifier
@@ -6316,9 +6367,23 @@ func newRoleIdentifier(ctx context.Context, tx pgx.Tx, input string) (roleIdenti
 }
 
 func newCacheNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (cacheNodeIdentifier, error) {
+	return newCacheNodeIdentifierWithLock(ctx, tx, input, lockShare)
+}
+
+// newCacheNodeIdentifierForUpdate resolves a cache node the way
+// newCacheNodeIdentifier does but takes an exclusive row lock, for callers
+// that will write to or delete the cache_nodes row in the same transaction.
+func newCacheNodeIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (cacheNodeIdentifier, error) {
+	return newCacheNodeIdentifierWithLock(ctx, tx, input, lockUpdate)
+}
+
+func newCacheNodeIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock rowLock) (cacheNodeIdentifier, error) {
 	if input == "" {
 		return cacheNodeIdentifier{}, errEmptyInputIdentifier
 	}
+
+	byIDQuery := "SELECT id, name FROM cache_nodes WHERE id = $1" + lock.clause()
+	byNameQuery := "SELECT id, name FROM cache_nodes WHERE name = $1" + lock.clause()
 
 	var id pgtype.UUID
 	var name string
@@ -6327,13 +6392,13 @@ func newCacheNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (cache
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM cache_nodes WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
 			return cacheNodeIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (cache node names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM cache_nodes WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
 			return cacheNodeIdentifier{}, err
 		}
@@ -6346,9 +6411,23 @@ func newCacheNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (cache
 }
 
 func newL4LBNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (l4lbNodeIdentifier, error) {
+	return newL4LBNodeIdentifierWithLock(ctx, tx, input, lockShare)
+}
+
+// newL4LBNodeIdentifierForUpdate resolves an l4lb node the way
+// newL4LBNodeIdentifier does but takes an exclusive row lock, for callers that
+// will write to or delete the l4lb_nodes row in the same transaction.
+func newL4LBNodeIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (l4lbNodeIdentifier, error) {
+	return newL4LBNodeIdentifierWithLock(ctx, tx, input, lockUpdate)
+}
+
+func newL4LBNodeIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock rowLock) (l4lbNodeIdentifier, error) {
 	if input == "" {
 		return l4lbNodeIdentifier{}, errEmptyInputIdentifier
 	}
+
+	byIDQuery := "SELECT id, name FROM l4lb_nodes WHERE id = $1" + lock.clause()
+	byNameQuery := "SELECT id, name FROM l4lb_nodes WHERE name = $1" + lock.clause()
 
 	var id pgtype.UUID
 	var name string
@@ -6357,13 +6436,13 @@ func newL4LBNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (l4lbNo
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM l4lb_nodes WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
 			return l4lbNodeIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (l4lb node names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM l4lb_nodes WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
 			return l4lbNodeIdentifier{}, err
 		}
@@ -6376,9 +6455,26 @@ func newL4LBNodeIdentifier(ctx context.Context, tx pgx.Tx, input string) (l4lbNo
 }
 
 func newNodeGroupIdentifier(ctx context.Context, tx pgx.Tx, input string) (nodeGroupIdentifier, error) {
+	return newNodeGroupIdentifierWithLock(ctx, tx, input, lockShare)
+}
+
+// newNodeGroupIdentifierForUpdate resolves a node group the way
+// newNodeGroupIdentifier does but takes an exclusive row lock, for callers
+// that will write to or delete the node_groups row in the same transaction.
+// Callers that only point a node at the group keep using the shared variant:
+// the foreign key check on the node write takes a weaker lock than the shared
+// one, so there is no upgrade.
+func newNodeGroupIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (nodeGroupIdentifier, error) {
+	return newNodeGroupIdentifierWithLock(ctx, tx, input, lockUpdate)
+}
+
+func newNodeGroupIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock rowLock) (nodeGroupIdentifier, error) {
 	if input == "" {
 		return nodeGroupIdentifier{}, errEmptyInputIdentifier
 	}
+
+	byIDQuery := "SELECT id, name FROM node_groups WHERE id = $1" + lock.clause()
+	byNameQuery := "SELECT id, name FROM node_groups WHERE name = $1" + lock.clause()
 
 	var id pgtype.UUID
 	var name string
@@ -6387,13 +6483,13 @@ func newNodeGroupIdentifier(ctx context.Context, tx pgx.Tx, input string) (nodeG
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM node_groups WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
 			return nodeGroupIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (node group names are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, name FROM node_groups WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
+		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
 			return nodeGroupIdentifier{}, err
 		}
@@ -6405,7 +6501,11 @@ func newNodeGroupIdentifier(ctx context.Context, tx pgx.Tx, input string) (nodeG
 	}, nil
 }
 
-func newDomainIdentifier(ctx context.Context, tx pgx.Tx, input string) (domainIdentifier, error) {
+// newDomainIdentifierForUpdate takes an exclusive row lock and has no shared
+// variant: every caller deletes the domains row it resolved. Should a
+// read-only caller appear, give it a shared variant the way the org and node
+// helpers have one, rather than reusing this.
+func newDomainIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (domainIdentifier, error) {
 	if input == "" {
 		return domainIdentifier{}, errEmptyInputIdentifier
 	}
@@ -6418,13 +6518,13 @@ func newDomainIdentifier(ctx context.Context, tx pgx.Tx, input string) (domainId
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the FQDN (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &fqdn, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &fqdn, &orgID)
 		if err != nil {
 			return domainIdentifier{}, err
 		}
 	} else {
 		// This is not a valid UUID, treat it as an FQDN and validate it by mapping it to an ID (domain FQDNs are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE fqdn = $1 FOR SHARE", input).Scan(&id, &fqdn, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE fqdn = $1 FOR UPDATE", input).Scan(&id, &fqdn, &orgID)
 		if err != nil {
 			return domainIdentifier{}, err
 		}
@@ -6437,7 +6537,10 @@ func newDomainIdentifier(ctx context.Context, tx pgx.Tx, input string) (domainId
 	}, nil
 }
 
-func newOrgClientCredentialIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (orgClientCredentialIdentifier, error) {
+// newOrgClientCredentialIdentifierForUpdate takes an exclusive row lock and
+// has no shared variant, for the same reason newDomainIdentifierForUpdate does
+// not: its only caller deletes the row it resolved.
+func newOrgClientCredentialIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (orgClientCredentialIdentifier, error) {
 	if input == "" {
 		return orgClientCredentialIdentifier{}, errEmptyInputIdentifier
 	}
@@ -6449,7 +6552,7 @@ func newOrgClientCredentialIdentifier(ctx context.Context, tx pgx.Tx, input stri
 	err := inputID.Scan(input)
 	if err == nil {
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return orgClientCredentialIdentifier{}, err
 		}
@@ -6458,7 +6561,7 @@ func newOrgClientCredentialIdentifier(ctx context.Context, tx pgx.Tx, input stri
 			return orgClientCredentialIdentifier{}, cdnerrors.ErrUnprocessable
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org client credential names are only unique per org)
-		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE name = $1 and org_id = $2 FOR SHARE", input, inputOrgID).Scan(&id, &name, &orgID)
+		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE name = $1 and org_id = $2 FOR UPDATE", input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
 			return orgClientCredentialIdentifier{}, err
 		}
@@ -6697,7 +6800,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	defer cancel()
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifier(dbCtx, tx, *orgNameOrID)
+		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -6710,8 +6813,10 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 
 		var domainQuota int64
 		// Verify we are not hitting the limit of how many domains the
-		// org allows, do "FOR UPDATE" to lock out any concurrently
-		// running function until we are done with counting rows.
+		// org allows. The exclusive lock that locks out any concurrently
+		// running function until we are done with counting rows was already
+		// taken when the org identifier was resolved; naming it again here
+		// keeps the guarantee visible at the point it is relied on.
 		err = tx.QueryRow(dbCtx, "SELECT domain_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&domainQuota)
 		if err != nil {
 			return err
@@ -6781,7 +6886,7 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	defer cancel()
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifier(dbCtx, tx, *orgNameOrID)
+		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
 		if err != nil {
 			return cdnerrors.ErrUnprocessable
 		}
@@ -6794,8 +6899,10 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 
 		var serviceQuota int64
 		// Verify we are not hitting the limit of how many services the
-		// org allows, do "FOR UPDATE" to lock out any concurrently
-		// running function until we are done with counting rows.
+		// org allows. The exclusive lock that locks out any concurrently
+		// running function until we are done with counting rows was already
+		// taken when the org identifier was resolved; naming it again here
+		// keeps the guarantee visible at the point it is relied on.
 		err = tx.QueryRow(dbCtx, "SELECT service_quota FROM orgs WHERE id=$1 FOR UPDATE", orgIdent.id).Scan(&serviceQuota)
 		if err != nil {
 			return err
@@ -8553,7 +8660,10 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 	}, nil
 }
 
-func newIPNetworkIdentifier(ctx context.Context, tx pgx.Tx, input string) (ipNetworkIdentifier, error) {
+// newIPNetworkIdentifierForUpdate takes an exclusive row lock and has no
+// shared variant, for the same reason newDomainIdentifierForUpdate does not:
+// its only caller deletes the row it resolved.
+func newIPNetworkIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (ipNetworkIdentifier, error) {
 	if input == "" {
 		return ipNetworkIdentifier{}, errEmptyInputIdentifier
 	}
@@ -8564,7 +8674,7 @@ func newIPNetworkIdentifier(ctx context.Context, tx pgx.Tx, input string) (ipNet
 	inputID := new(pgtype.UUID)
 	err := inputID.Scan(input)
 	if err == nil {
-		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &network)
+		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &network)
 		if err != nil {
 			return ipNetworkIdentifier{}, err
 		}
@@ -8574,7 +8684,7 @@ func newIPNetworkIdentifier(ctx context.Context, tx pgx.Tx, input string) (ipNet
 			return ipNetworkIdentifier{}, fmt.Errorf("invalid network prefix: %w", parseErr)
 		}
 
-		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE network = $1 FOR SHARE", prefix.Masked()).Scan(&id, &network)
+		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE network = $1 FOR UPDATE", prefix.Masked()).Scan(&id, &network)
 		if err != nil {
 			return ipNetworkIdentifier{}, err
 		}
@@ -8597,7 +8707,7 @@ func deleteNetwork(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, input
 	var network netip.Prefix
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		networkIdent, err := newIPNetworkIdentifier(dbCtx, tx, input)
+		networkIdent, err := newIPNetworkIdentifierForUpdate(dbCtx, tx, input)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14473,7 +14583,7 @@ func updateCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cac
 
 	var updatedNode cdntypes.CacheNode
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		cacheNodeIdent, err := newCacheNodeIdentifierForUpdate(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14543,7 +14653,7 @@ func updateL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lb
 
 	var updatedNode cdntypes.L4LBNode
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		l4lbNodeIdent, err := newL4LBNodeIdentifierForUpdate(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14613,7 +14723,7 @@ func updateNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nod
 
 	var updatedGroup cdntypes.NodeGroup
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
+		nodeGroupIdent, err := newNodeGroupIdentifierForUpdate(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14662,7 +14772,7 @@ func deleteCacheNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, cac
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		cacheNodeIdent, err := newCacheNodeIdentifierForUpdate(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14698,7 +14808,7 @@ func deleteL4LBNode(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, l4lb
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		l4lbNodeIdent, err := newL4LBNodeIdentifierForUpdate(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14734,7 +14844,7 @@ func deleteNodeGroup(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, nod
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		nodeGroupIdent, err := newNodeGroupIdentifier(dbCtx, tx, nodeGroupNameOrID)
+		nodeGroupIdent, err := newNodeGroupIdentifierForUpdate(dbCtx, tx, nodeGroupNameOrID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -14765,7 +14875,7 @@ func unsetCacheNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn,
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		cacheNodeIdent, err := newCacheNodeIdentifier(dbCtx, tx, cacheNodeNameOrID)
+		cacheNodeIdent, err := newCacheNodeIdentifierForUpdate(dbCtx, tx, cacheNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unsetCacheNodeGroup: unable to parse cache node identifier: %w", err)
 		}
@@ -14793,7 +14903,7 @@ func unsetL4LBNodeGroup(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, 
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		l4lbNodeIdent, err := newL4LBNodeIdentifier(dbCtx, tx, l4lbNodeNameOrID)
+		l4lbNodeIdent, err := newL4LBNodeIdentifierForUpdate(dbCtx, tx, l4lbNodeNameOrID)
 		if err != nil {
 			return fmt.Errorf("unsetL4LBNodeGroup: unable to parse l4lb node identifier: %w", err)
 		}
