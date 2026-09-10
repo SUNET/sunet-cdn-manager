@@ -3840,7 +3840,7 @@ func TestGetService(t *testing.T) {
 	}
 }
 
-func TestGetServicesDisabledAt(t *testing.T) {
+func TestGetServicesTimeDisabled(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -3854,7 +3854,7 @@ func TestGetServicesDisabledAt(t *testing.T) {
 
 	// Disable org1-service2 directly in the DB so this test only depends on
 	// the read path, not on the disable endpoint (added in task 2).
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3893,16 +3893,16 @@ func TestGetServicesDisabledAt(t *testing.T) {
 	if !ok {
 		t.Fatal("org1-service1 missing from services list")
 	}
-	if enabled.DisabledAt != nil {
-		t.Errorf("org1-service1 should be enabled, got disabled_at=%v", enabled.DisabledAt)
+	if enabled.TimeDisabled != nil {
+		t.Errorf("org1-service1 should be enabled, got time_disabled=%v", enabled.TimeDisabled)
 	}
 
 	disabled, ok := byName["org1-service2"]
 	if !ok {
 		t.Fatal("org1-service2 missing from services list")
 	}
-	if disabled.DisabledAt == nil {
-		t.Error("org1-service2 should report a disabled_at timestamp")
+	if disabled.TimeDisabled == nil {
+		t.Error("org1-service2 should report a time_disabled timestamp")
 	}
 
 	// Also exercise the all-services branch of selectServicesTx (superuser
@@ -3942,20 +3942,20 @@ func TestGetServicesDisabledAt(t *testing.T) {
 	if !ok {
 		t.Fatal("org1-service1 missing from all-services list")
 	}
-	if allEnabled.DisabledAt != nil {
-		t.Errorf("org1-service1 should be enabled in all-services list, got disabled_at=%v", allEnabled.DisabledAt)
+	if allEnabled.TimeDisabled != nil {
+		t.Errorf("org1-service1 should be enabled in all-services list, got time_disabled=%v", allEnabled.TimeDisabled)
 	}
 
 	allDisabled, ok := allByName["org1-service2"]
 	if !ok {
 		t.Fatal("org1-service2 missing from all-services list")
 	}
-	if allDisabled.DisabledAt == nil {
-		t.Error("org1-service2 should report a disabled_at timestamp in all-services list")
+	if allDisabled.TimeDisabled == nil {
+		t.Error("org1-service2 should report a time_disabled timestamp in all-services list")
 	}
 }
 
-func TestGetServiceDisabledAt(t *testing.T) {
+func TestGetServiceTimeDisabled(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -3967,7 +3967,7 @@ func TestGetServiceDisabledAt(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3997,8 +3997,8 @@ func TestGetServiceDisabledAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if service.DisabledAt == nil {
-		t.Error("single-service GET should report a disabled_at timestamp")
+	if service.TimeDisabled == nil {
+		t.Error("single-service GET should report a time_disabled timestamp")
 	}
 
 	// Also exercise the NULL (enabled) case of the same selectService query,
@@ -4028,8 +4028,8 @@ func TestGetServiceDisabledAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if enabledService.DisabledAt != nil {
-		t.Errorf("single-service GET for enabled service should report nil disabled_at, got %v", enabledService.DisabledAt)
+	if enabledService.TimeDisabled != nil {
+		t.Errorf("single-service GET for enabled service should report nil time_disabled, got %v", enabledService.TimeDisabled)
 	}
 }
 
@@ -4175,7 +4175,7 @@ func TestPutServiceDisabled(t *testing.T) {
 	// than merely nothing about its own target row.
 	disabledIDs := func() []string {
 		t.Helper()
-		rows, err := dbPool.Query(ctx, "SELECT id::text FROM services WHERE disabled_at IS NOT NULL ORDER BY id")
+		rows, err := dbPool.Query(ctx, "SELECT id::text FROM services WHERE time_disabled IS NOT NULL ORDER BY id")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4245,7 +4245,7 @@ func TestPutServiceDisabled(t *testing.T) {
 				// instead of proving anything.
 				after := disabledIDs()
 				if !slices.Equal(before, after) {
-					t.Errorf("a refused request must not change any row's disabled_at: %v -> %v", before, after)
+					t.Errorf("a refused request must not change any row's time_disabled: %v -> %v", before, after)
 				}
 				return
 			}
@@ -4254,24 +4254,24 @@ func TestPutServiceDisabled(t *testing.T) {
 				t.Fatal("a success case must name the serviceID to verify")
 			}
 
-			var disabledAt *time.Time
-			err = dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", test.serviceID).Scan(&disabledAt)
+			var timeDisabled *time.Time
+			err = dbPool.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", test.serviceID).Scan(&timeDisabled)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			if test.expectDisabled && disabledAt == nil {
+			if test.expectDisabled && timeDisabled == nil {
 				t.Error("expected service to be disabled")
 			}
-			if !test.expectDisabled && disabledAt != nil {
-				t.Errorf("expected service to be enabled, got disabled_at=%v", disabledAt)
+			if !test.expectDisabled && timeDisabled != nil {
+				t.Errorf("expected service to be enabled, got time_disabled=%v", timeDisabled)
 			}
 		})
 	}
 }
 
 // TestServiceDisableIsIdempotent proves that a repeated disable does not move
-// disabled_at forward. This is what the console renders as "Disabled <date>",
+// time_disabled forward. This is what the console renders as "Disabled <date>",
 // and what a future retention policy would key on, so a silently-resetting
 // timestamp would make both drift over time.
 func TestServiceDisableIsIdempotent(t *testing.T) {
@@ -4317,30 +4317,30 @@ func TestServiceDisableIsIdempotent(t *testing.T) {
 		}
 	}
 
-	readDisabledAt := func() *time.Time {
+	readTimeDisabled := func() *time.Time {
 		t.Helper()
-		var disabledAt *time.Time
-		err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", serviceID).Scan(&disabledAt)
+		var timeDisabled *time.Time
+		err := dbPool.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", serviceID).Scan(&timeDisabled)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return disabledAt
+		return timeDisabled
 	}
 
 	disable()
-	first := readDisabledAt()
+	first := readTimeDisabled()
 	if first == nil {
 		t.Fatal("expected service to be disabled after first disable")
 	}
 
 	disable()
-	second := readDisabledAt()
+	second := readTimeDisabled()
 	if second == nil {
 		t.Fatal("expected service to be disabled after second disable")
 	}
 
 	if !first.Equal(*second) {
-		t.Errorf("repeated disable moved disabled_at: %v -> %v", first, second)
+		t.Errorf("repeated disable moved time_disabled: %v -> %v", first, second)
 	}
 }
 
@@ -4420,7 +4420,7 @@ func TestServiceDisableEnableRoundTrip(t *testing.T) {
 
 	setDisabled(true)
 
-	// Everything except disabled_at must survive the disable.
+	// Everything except time_disabled must survive the disable.
 	during := takeSnapshot()
 	if during.activeVersion != before.activeVersion {
 		t.Errorf("active version changed on disable: %d -> %d", before.activeVersion, during.activeVersion)
@@ -4452,7 +4452,7 @@ func TestConsoleServicesQuotaLine(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4532,7 +4532,7 @@ func TestDisabledServiceConsumesQuota(t *testing.T) {
 	}
 
 	// Disabling it must NOT free the slot.
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE name = 'org4-service1'")
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE name = 'org4-service1'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4562,7 +4562,7 @@ func TestDeleteService(t *testing.T) {
 		"00000003-0000-0000-0000-000000000003",
 		"00000003-0000-0000-0000-000000000010",
 	} {
-		_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", id)
+		_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = $1", id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -7372,7 +7372,7 @@ func TestCacheNodeConfigExcludesDisabledService(t *testing.T) {
 		t.Fatalf("expected org1-service1 in baseline cache node config, got orgs: %+v", cnc.Orgs)
 	}
 
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", org1Service1ID)
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = $1", org1Service1ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7457,7 +7457,7 @@ func TestL4LBNodeConfigExcludesDisabledService(t *testing.T) {
 		t.Fatalf("expected org2-service1 in baseline l4lb node config, got: %+v", lnc.Services)
 	}
 
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", org1Service1ID)
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = $1", org1Service1ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7477,7 +7477,7 @@ func TestL4LBNodeConfigExcludesDisabledService(t *testing.T) {
 // TestCacheNodeConfigExcludesDisabledServiceNewVersion covers the spec's
 // "editing while disabled: allowed, just not deployed" rule. A brand new,
 // fully configured, active version on a disabled service must still be absent
-// from the config, because the filter keys off services.disabled_at and is
+// from the config, because the filter keys off services.time_disabled and is
 // independent of version state.
 func TestCacheNodeConfigExcludesDisabledServiceNewVersion(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
@@ -7510,7 +7510,7 @@ func TestCacheNodeConfigExcludesDisabledServiceNewVersion(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{"UPDATE services SET disabled_at = now() WHERE id = $1", []any{org1Service1ID}},
+		{"UPDATE services SET time_disabled = now() WHERE id = $1", []any{org1Service1ID}},
 		{"UPDATE service_versions SET active = false WHERE id = '00000004-0000-0000-0000-000000000003'", nil},
 		{"UPDATE services SET version_counter = version_counter + 1 WHERE id = $1", []any{org1Service1ID}},
 		{"INSERT INTO service_versions (id, service_id, version, active) SELECT '00000004-0000-0000-0000-0000000000f1', id, version_counter, TRUE FROM services WHERE id = $1", []any{org1Service1ID}},
@@ -7560,8 +7560,8 @@ func TestCacheNodeConfigExcludesDisabledServiceNewVersion(t *testing.T) {
 	// missing origin, domain or VCL row), the service would be absent whether
 	// or not it was disabled, and the assertion would be vacuous. Re-enabling
 	// must bring the NEW version into the config, which proves the absence
-	// above was caused by disabled_at and nothing else.
-	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = NULL WHERE id = $1", org1Service1ID); err != nil {
+	// above was caused by time_disabled and nothing else.
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET time_disabled = NULL WHERE id = $1", org1Service1ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -10124,10 +10124,10 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 
 	ctx := context.Background()
 
-	disabledAt := func() *time.Time {
+	timeDisabled := func() *time.Time {
 		t.Helper()
 		var at *time.Time
-		err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = '00000003-0000-0000-0000-000000000001'").Scan(&at)
+		err := dbPool.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = '00000003-0000-0000-0000-000000000001'").Scan(&at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10207,8 +10207,8 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 
 		// Rendering the confirmation page must not itself disable anything.
 		// The whole point of the two-step ceremony is that looking is free.
-		if at := disabledAt(); at != nil {
-			t.Errorf("GET of the disable page must not change disabled_at, got %v", at)
+		if at := timeDisabled(); at != nil {
+			t.Errorf("GET of the disable page must not change time_disabled, got %v", at)
 		}
 	})
 
@@ -10245,7 +10245,7 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 			t.Fatalf("expected redirect (302), got %d (%s)", resp.StatusCode, string(body))
 		}
 
-		if disabledAt() == nil {
+		if timeDisabled() == nil {
 			t.Error("service should be disabled after the POST")
 		}
 	})
@@ -10280,8 +10280,8 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 			t.Fatalf("expected redirect (302), got %d (%s)", resp.StatusCode, string(body))
 		}
 
-		if at := disabledAt(); at != nil {
-			t.Errorf("service should be enabled after the POST, got disabled_at=%v", at)
+		if at := timeDisabled(); at != nil {
+			t.Errorf("service should be enabled after the POST, got time_disabled=%v", at)
 		}
 	})
 
@@ -10315,8 +10315,8 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 			t.Fatalf("expected redirect (302), got %d", resp.StatusCode)
 		}
 
-		if at := disabledAt(); at != nil {
-			t.Errorf("an unconfirmed disable must not change disabled_at, got %v", at)
+		if at := timeDisabled(); at != nil {
+			t.Errorf("an unconfirmed disable must not change time_disabled, got %v", at)
 		}
 	})
 
@@ -10377,18 +10377,18 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 			t.Errorf("expected the enable refusal to be explained in-page, got %q", got)
 		}
 
-		if at := disabledAt(); at != nil {
-			t.Errorf("a refused request must not change disabled_at, got %v", at)
+		if at := timeDisabled(); at != nil {
+			t.Errorf("a refused request must not change time_disabled, got %v", at)
 		}
 	})
 
 	t.Run("services page shows disabled state", func(t *testing.T) {
-		_, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000001'")
+		_, err := dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = '00000003-0000-0000-0000-000000000001'")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			_, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = NULL WHERE id = '00000003-0000-0000-0000-000000000001'")
+			_, err := dbPool.Exec(ctx, "UPDATE services SET time_disabled = NULL WHERE id = '00000003-0000-0000-0000-000000000001'")
 			if err != nil {
 				t.Error(err)
 			}
@@ -10540,7 +10540,7 @@ func TestConsoleServiceEnableStaleRowCannotHitReplacement(t *testing.T) {
 	const originalID = "00000003-0000-0000-0000-000000000002"
 	const serviceName = "org1-service2"
 
-	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", originalID); err != nil {
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = $1", originalID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -10579,7 +10579,7 @@ func TestConsoleServiceEnableStaleRowCannotHitReplacement(t *testing.T) {
 	var replacementID string
 	err = dbPool.QueryRow(
 		ctx,
-		`INSERT INTO services (org_id, name, uid_range, disabled_at)
+		`INSERT INTO services (org_id, name, uid_range, time_disabled)
 		 VALUES ('00000002-0000-0000-0000-000000000001', $1, '(1000910000, 1000919999)', now())
 		 RETURNING id::text`,
 		serviceName,
@@ -10601,11 +10601,11 @@ func TestConsoleServiceEnableStaleRowCannotHitReplacement(t *testing.T) {
 	defer enableResp.Body.Close()
 
 	// The replacement was deliberately left disabled and must stay that way.
-	var disabledAt *time.Time
-	if err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", replacementID).Scan(&disabledAt); err != nil {
+	var timeDisabled *time.Time
+	if err := dbPool.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", replacementID).Scan(&timeDisabled); err != nil {
 		t.Fatal(err)
 	}
-	if disabledAt == nil {
+	if timeDisabled == nil {
 		t.Error("a stale Enable action must not bring a same-named replacement service online")
 	}
 }
@@ -10636,7 +10636,7 @@ func TestConsoleServiceDeleteStaleFormCannotHitReplacement(t *testing.T) {
 	const originalID = "00000003-0000-0000-0000-000000000002"
 	const serviceName = "org1-service2"
 
-	if _, err := dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = $1", originalID); err != nil {
+	if _, err := dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = $1", originalID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -10672,7 +10672,7 @@ func TestConsoleServiceDeleteStaleFormCannotHitReplacement(t *testing.T) {
 	var replacementID string
 	err = dbPool.QueryRow(
 		ctx,
-		`INSERT INTO services (org_id, name, uid_range, disabled_at)
+		`INSERT INTO services (org_id, name, uid_range, time_disabled)
 		 VALUES ('00000002-0000-0000-0000-000000000001', $1, '(1000900000, 1000909999)', now())
 		 RETURNING id::text`,
 		serviceName,
@@ -10736,17 +10736,17 @@ func TestServiceUUIDIsConstrainedToSuppliedOrg(t *testing.T) {
 	// org2-service1 lives in org2; the request below claims org1.
 	const org2Service1 = "00000003-0000-0000-0000-000000000004"
 
-	disabledAt := func() *time.Time {
+	timeDisabled := func() *time.Time {
 		t.Helper()
 		var at *time.Time
-		if err := dbPool.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", org2Service1).Scan(&at); err != nil {
+		if err := dbPool.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", org2Service1).Scan(&at); err != nil {
 			t.Fatal(err)
 		}
 		return at
 	}
 
-	if at := disabledAt(); at != nil {
-		t.Fatalf("org2-service1 should start enabled, got disabled_at=%v", at)
+	if at := timeDisabled(); at != nil {
+		t.Fatalf("org2-service1 should start enabled, got time_disabled=%v", at)
 	}
 
 	req, err := http.NewRequest(
@@ -10780,8 +10780,8 @@ func TestServiceUUIDIsConstrainedToSuppliedOrg(t *testing.T) {
 
 	// The assertion that actually matters: the service in the org the request
 	// never named must be untouched.
-	if at := disabledAt(); at != nil {
-		t.Errorf("a request naming org1 must not modify an org2 service, got disabled_at=%v", at)
+	if at := timeDisabled(); at != nil {
+		t.Errorf("a request naming org1 must not modify an org2 service, got time_disabled=%v", at)
 	}
 }
 
@@ -10964,7 +10964,7 @@ func TestConsoleServiceDelete(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err = dbPool.Exec(ctx, "UPDATE services SET disabled_at = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
+	_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE id = '00000003-0000-0000-0000-000000000002'")
 	if err != nil {
 		t.Fatal(err)
 	}

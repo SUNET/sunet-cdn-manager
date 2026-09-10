@@ -69,7 +69,7 @@ type ServiceEntry struct {
 func disabledServiceCount(services []ServiceEntry) int {
 	count := 0
 	for _, s := range services {
-		if s.DisabledAt != nil {
+		if s.TimeDisabled != nil {
 			count++
 		}
 	}

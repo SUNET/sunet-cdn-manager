@@ -93,7 +93,7 @@ type Service struct {
 	OrgName       string      `json:"org_name" doc:"Name of related organization"`
 	UIDRangeFirst int64       `json:"uid_range_first" doc:"First process UID allocated to this service" db:"uid_range_first"`
 	UIDRangeEnd   int64       `json:"uid_range_last" doc:"Last UID allocated to this service" db:"uid_range_last"`
-	DisabledAt    *time.Time  `json:"disabled_at" db:"disabled_at" doc:"When the service was disabled, null if the service is enabled"`
+	TimeDisabled  *time.Time  `json:"time_disabled" db:"time_disabled" doc:"When the service was disabled, null if the service is enabled"`
 }
 
 type ServiceVersion struct {
