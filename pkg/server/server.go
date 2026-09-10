@@ -7188,7 +7188,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				return fmt.Errorf("unable to generate VCL for cache node config: %w", err)
 			}
 
-			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, serviceIPAddresses, originGroups, origins)
+			haProxyConf, err := generateCompleteHaProxyConf(confTemplates.haproxy, orgID, serviceID, serviceIPAddresses, originGroups, origins)
 			if err != nil {
 				return fmt.Errorf("unable to generate haproxy conf for cache node config: %w", err)
 			}
@@ -8498,6 +8498,8 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 }
 
 type haproxyConfInput struct {
+	OrgID          pgtype.UUID
+	ServiceID      pgtype.UUID
 	OriginGroups   []enrichedOriginGroup
 	Origins        []cdntypes.Origin
 	HTTPSEnabled   bool
@@ -8505,7 +8507,7 @@ type haproxyConfInput struct {
 	AddressStrings []string
 }
 
-func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) (string, error) {
+func generateCompleteHaProxyConf(tmpl *template.Template, orgID pgtype.UUID, serviceID pgtype.UUID, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) (string, error) {
 	// Get a list of all origin groups that are actually referenced by
 	// origins, we do the same for varnish where it is required but might
 	// as well do it here so the config only contains exactly what is
@@ -8573,6 +8575,8 @@ func generateCompleteHaProxyConf(tmpl *template.Template, serviceIPAddresses []n
 	}
 
 	hci := haproxyConfInput{
+		OrgID:          orgID,
+		ServiceID:      serviceID,
 		OriginGroups:   referencedOriginGroups,
 		Origins:        origins,
 		AddressStrings: addressStrings,
