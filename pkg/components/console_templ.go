@@ -1627,7 +1627,7 @@ func ServicesContent(orgName string, services []ServiceEntry, superuser bool, se
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				if service.DisabledAt == nil {
+				if service.TimeDisabled == nil {
 					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 139, "Enabled")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
@@ -1638,9 +1638,9 @@ func ServicesContent(orgName string, services []ServiceEntry, superuser bool, se
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var78 string
-					templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(service.DisabledAt.Format("2006-01-02"))
+					templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.JoinStringErrs(service.TimeDisabled.Format("2006-01-02"))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 384, Col: 58}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `console.templ`, Line: 384, Col: 60}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var78))
 					if templ_7745c5c3_Err != nil {
@@ -1681,7 +1681,7 @@ func ServicesContent(orgName string, services []ServiceEntry, superuser bool, se
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				if service.DisabledAt == nil {
+				if service.TimeDisabled == nil {
 					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "<a href=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err

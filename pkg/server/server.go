@@ -1384,7 +1384,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		// Collect what deletion will destroy so the confirmation page can
 		// state it rather than asking a bare "are you sure".
 		var versionCount, uidRangeFirst, uidRangeLast int64
-		var disabledAt *time.Time
+		var timeDisabled *time.Time
 		var ipAddresses []netip.Addr
 		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 			qErr := tx.QueryRow(
@@ -1393,10 +1393,10 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				   (SELECT COUNT(*) FROM service_versions WHERE service_id = services.id),
 				   lower(services.uid_range),
 				   upper(services.uid_range)-1,
-				   services.disabled_at
+				   services.time_disabled
 				 FROM services WHERE id = $1`,
 				serviceIdent.id,
-			).Scan(&versionCount, &uidRangeFirst, &uidRangeLast, &disabledAt)
+			).Scan(&versionCount, &uidRangeFirst, &uidRangeLast, &timeDisabled)
 			if qErr != nil {
 				return qErr
 			}
@@ -1424,7 +1424,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			// Delete link only renders for a disabled service, so the service
 			// was re-enabled in the meantime. The URL carries the service UUID,
 			// so pass the resolved name for the breadcrumb here too.
-			if disabledAt == nil {
+			if timeDisabled == nil {
 				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ConsoleErrorContent(consoleDeleteNeedsDisabled), serviceIdent.name)
 				if renderErr != nil {
 					logger.Err(renderErr).Msg("unable to render delete-service needs-disabled page")
@@ -4373,14 +4373,14 @@ func setServiceDisabled(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, 
 		}
 
 		if disabled {
-			// "AND disabled_at IS NULL" makes a repeated disable
+			// "AND time_disabled IS NULL" makes a repeated disable
 			// idempotent instead of moving the timestamp forward.
-			_, err = tx.Exec(dbCtx, "UPDATE services SET disabled_at = now() WHERE id = $1 AND disabled_at IS NULL", serviceIdent.id)
+			_, err = tx.Exec(dbCtx, "UPDATE services SET time_disabled = now() WHERE id = $1 AND time_disabled IS NULL", serviceIdent.id)
 		} else {
-			_, err = tx.Exec(dbCtx, "UPDATE services SET disabled_at = NULL WHERE id = $1", serviceIdent.id)
+			_, err = tx.Exec(dbCtx, "UPDATE services SET time_disabled = NULL WHERE id = $1", serviceIdent.id)
 		}
 		if err != nil {
-			return fmt.Errorf("unable to update disabled_at for service: %w", err)
+			return fmt.Errorf("unable to update time_disabled for service: %w", err)
 		}
 
 		return nil
@@ -6068,12 +6068,12 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 
 	var rows pgx.Rows
 	if lookupOrg.Valid {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.disabled_at FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
 		}
 	} else {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.disabled_at FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for all services: %w", err)
 		}
@@ -6118,9 +6118,9 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 		s.Name = serviceIdent.name
 		s.ID = serviceIdent.id
 
-		err = tx.QueryRow(ctx, "SELECT disabled_at FROM services WHERE id = $1", serviceIdent.id).Scan(&s.DisabledAt)
+		err = tx.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", serviceIdent.id).Scan(&s.TimeDisabled)
 		if err != nil {
-			return fmt.Errorf("selectService: unable to select disabled_at: %w", err)
+			return fmt.Errorf("selectService: unable to select time_disabled: %w", err)
 		}
 
 		return nil
@@ -7000,13 +7000,13 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 		}
 
 		// Lock the row so the disabled check cannot race an enable.
-		var disabledAt *time.Time
-		err = tx.QueryRow(dbCtx, "SELECT disabled_at FROM services WHERE id = $1 FOR UPDATE", serviceIdent.id).Scan(&disabledAt)
+		var timeDisabled *time.Time
+		err = tx.QueryRow(dbCtx, "SELECT time_disabled FROM services WHERE id = $1 FOR UPDATE", serviceIdent.id).Scan(&timeDisabled)
 		if err != nil {
-			return fmt.Errorf("deleteService: unable to select disabled_at: %w", err)
+			return fmt.Errorf("deleteService: unable to select time_disabled: %w", err)
 		}
 
-		if disabledAt == nil {
+		if timeDisabled == nil {
 			return cdnerrors.ErrServiceNotDisabled
 		}
 
@@ -7120,7 +7120,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				FROM service_origin_groups
 				GROUP BY service_version_id
 			) AS agg_service_origin_groups ON agg_service_origin_groups.service_version_id = service_versions.id
-	       WHERE services.disabled_at IS NULL
+	       WHERE services.time_disabled IS NULL
 	       ORDER BY orgs.name`,
 	)
 	if err != nil {
@@ -7416,7 +7416,7 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 			FROM service_versions
 			JOIN services ON services.id = service_versions.service_id
 			WHERE service_versions.active=true
-			AND services.disabled_at IS NULL
+			AND services.time_disabled IS NULL
 			ORDER BY service_versions.service_id
 	`,
 		)
