@@ -7631,23 +7631,27 @@ func canonicalizeOriginHost(host string) (string, error) {
 // IsMulticast or IsPrivate. We specifically skip adding test and documentation
 // prefixes here since those are usable for tests of the system etc. The main
 // goal is not be able to add addresses pointing to networks that might be
-// internally routable.
+// internally routable. If modifying this list make sure to also update
+// related places:
+// * firewall skuid-based rule generation in sunet-cdn-agent
+// * unbound private-address configuration in cdn-ops puppet cache class.
 var specialIPPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
-	netip.MustParsePrefix("100.64.0.0/10"),  // CGNAT, RFC 6598
-	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
-	netip.MustParsePrefix("192.88.99.0/24"), // 6to4 relay anycast
-	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking, RFC 2544
-	netip.MustParsePrefix("240.0.0.0/4"),    // reserved
-	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use translation
-	netip.MustParsePrefix("100::/64"),       // discard-only
-	netip.MustParsePrefix("5f00::/16"),      // SRv6, RFC 9602
-	netip.MustParsePrefix("fec0::/10"),      // deprecated site-local
-	netip.MustParsePrefix("2001:2::/48"),    // benchmarking, RFC 5180
-	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known prefix, RFC 6052
-	netip.MustParsePrefix("2001::/32"),      // Teredo
-	netip.MustParsePrefix("2002::/16"),      // 6to4
-	netip.MustParsePrefix("::/96"),          // deprecated IPv4-compatible IPv6 address, RFC 4291
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"),   // CGNAT, RFC 6598
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("192.88.99.0/24"),  // 6to4 relay anycast
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking, RFC 2544
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use translation
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("5f00::/16"),       // SRv6, RFC 9602
+	netip.MustParsePrefix("fec0::/10"),       // deprecated site-local
+	netip.MustParsePrefix("2001:2::/48"),     // benchmarking, RFC 5180
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64 well-known prefix, RFC 6052
+	netip.MustParsePrefix("2001::/32"),       // Teredo
+	netip.MustParsePrefix("2002::/16"),       // 6to4
+	netip.MustParsePrefix("::/96"),           // deprecated IPv4-compatible IPv6 address, RFC 4291
+	netip.MustParsePrefix("::ffff:0:0:0/96"), // IPv4-translated, RFC 2765
 }
 
 // addressIsValid is supposed to control what origin hosts are allowed to be
