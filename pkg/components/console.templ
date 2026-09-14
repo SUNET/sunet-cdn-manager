@@ -368,6 +368,7 @@ templ ServicesContent(orgName string, services []ServiceEntry, superuser bool, s
 			<thead>
 				<tr>
 					<th>Service</th>
+					<th>Service ID</th>
 					<th>State</th>
 					<th>IP Addresses</th>
 					<th>Actions</th>
@@ -377,6 +378,7 @@ templ ServicesContent(orgName string, services []ServiceEntry, superuser bool, s
 				for _, service := range services {
 					<tr>
 						<td class="name"><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", service.OrgName, service.Name)) }>{ service.Name }</a></td>
+						<td class="id">{ service.ID.String() }</td>
 						<td class="state">
 							if service.TimeDisabled == nil {
 								Enabled
