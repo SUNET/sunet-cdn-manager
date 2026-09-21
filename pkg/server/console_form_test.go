@@ -245,7 +245,7 @@ func createVersionValidator(t *testing.T) *vclValidatorClient {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547",
+		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:1f2a31ea7a594698de371b1c2d3f88c07b9531fd",
 		ExposedPorts: []string{"8888/tcp"},
 		WaitingFor:   wait.ForLog("starting server"),
 	}

@@ -210,7 +210,7 @@ var (
 	// (cdntypes.CreateServiceVersionConditionalGroup.Name) only enforces
 	// min/max length via go-playground validator tags, so without this
 	// check a name like "My Group" would pass validate.Struct, reach VCL
-	// generation, and surface as a raw varnish compiler error instead of
+	// generation, and surface as a raw vinyl compiler error instead of
 	// a clean form re-render. See mapCreateServiceVersionForm.
 	originGroupNamePattern = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 
@@ -289,7 +289,7 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 	}
 	defer resp.Body.Close()
 
-	// sunet-vcl-validator returns 422 if varnishd did not like the VCL content
+	// sunet-vcl-validator returns 422 if vinyld did not like the VCL content
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -2397,7 +2397,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 // (cdntypes.CreateServiceVersionConditionalGroup.Name) only has
 // min=1,max=63 go-playground validator tags, so without this check a name
 // like "My Group" would sail through validate.Struct and reach VCL
-// generation, surfacing as a raw varnish compiler error instead of a clean
+// generation, surfacing as a raw vinyl compiler error instead of a clean
 // form re-render.
 func mapCreateServiceVersionForm(formData cdntypes.CreateServiceVersionForm) ([]cdntypes.InputConditionalOriginGroup, cdntypes.InputDefaultOriginGroup, error) {
 	conditionalGroups := []cdntypes.InputConditionalOriginGroup{}
@@ -7734,7 +7734,7 @@ func validateInputOrigins(origins []cdntypes.InputOrigin) error {
 // validateOriginGroupInput rejects duplicate group names (across the
 // conditional groups and the default group) and duplicate conditions
 // (across the conditional groups) before any VCL is generated or rows are
-// inserted. Duplicate names would otherwise surface as a varnish
+// inserted. Duplicate names would otherwise surface as a vinyl
 // duplicate-backend compiler error (the DB UNIQUE(service_version_id,
 // name) constraint is the backstop); duplicate conditions would compile
 // fine but leave the later group as a dead branch the ordered
@@ -8276,7 +8276,7 @@ type vclMacroInput struct {
 	HTTPSelection  string
 }
 
-// Make it easier to generate varnish configuration
+// Make it easier to generate vinyl configuration
 type enrichedOriginGroup struct {
 	cdntypes.OriginGroup
 	HTTP  bool
@@ -8339,7 +8339,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		return "", cdnerrors.NewValidationError(err.Error())
 	}
 
-	// If we blindly add all existing origin groups to the varnish
+	// If we blindly add all existing origin groups to the vinyl
 	// configuration it will fail to load:
 	// ===
 	// Unused backend haproxy_http_origin-group-2, defined:
@@ -8514,7 +8514,7 @@ type haproxyConfInput struct {
 
 func generateCompleteHaProxyConf(tmpl *template.Template, orgID pgtype.UUID, serviceID pgtype.UUID, serviceVersion int64, serviceIPAddresses []netip.Addr, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin) (string, error) {
 	// Get a list of all origin groups that are actually referenced by
-	// origins, we do the same for varnish where it is required but might
+	// origins, we do the same for vinyl where it is required but might
 	// as well do it here so the config only contains exactly what is
 	// needed.
 	originGroupIDs := map[pgtype.UUID][]cdntypes.Origin{}

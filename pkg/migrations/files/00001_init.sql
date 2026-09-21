@@ -178,7 +178,7 @@ CREATE TABLE service_origins (
 );
 
 -- The available service_vcl_* columns are based on steps for "Client side" and "Backend Side":
--- https://varnish-cache.org/docs/trunk/reference/vcl-step.html
+-- https://vinyl-cache.org/docs/trunk/reference/vcl-step.html
 CREATE TABLE service_vcls (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     time_created timestamptz NOT NULL DEFAULT now(),

@@ -5373,7 +5373,7 @@ func TestGetServiceVersions(t *testing.T) {
 
 func TestPostServiceVersion(t *testing.T) {
 	req := testcontainers.ContainerRequest{
-		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547",
+		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:1f2a31ea7a594698de371b1c2d3f88c07b9531fd",
 		ExposedPorts: []string{"8888/tcp"},
 		WaitingFor:   wait.ForLog("starting server"),
 	}
@@ -5389,7 +5389,7 @@ func TestPostServiceVersion(t *testing.T) {
 	}
 
 	// We need to use PortEndpoint() rather than the simpler Endpoint()
-	// because the varnish container used as a baseline for the validator
+	// because the vinyl container used as a baseline for the validator
 	// container includes "EXPOSE 80 8443" so we end up trying to use
 	// 80/tcp in that case (which is not used at all for the validator
 	// container). Also it is not possible to simply add our own EXPOSE in
@@ -5798,7 +5798,7 @@ func TestPostServiceVersion(t *testing.T) {
 			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
 		{
-			description:     "failed superuser request, condition fails varnish compilation",
+			description:     "failed superuser request, condition fails vcl compilation",
 			username:        "admin",
 			password:        validAdminPassword,
 			orgNameOrID:     "org1",

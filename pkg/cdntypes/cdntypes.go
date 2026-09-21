@@ -109,7 +109,7 @@ type ServiceVersion struct {
 
 type ServiceVersionVCL struct {
 	ServiceVersion
-	VCL string `json:"vcl" example:"varnish vcl" doc:"VCL content"`
+	VCL string `json:"vcl" example:"vinyl vcl" doc:"VCL content"`
 }
 
 // A combined type of all related data for a service version
@@ -236,7 +236,7 @@ const (
 // vclRequiredMacros lists all macro names that must appear exactly once in a
 // VCL template. The "preamble" macro marks where the system-generated VCL
 // version, imports, and backend definitions are injected. The remaining
-// macros each correspond to a Varnish subroutine.
+// macros each correspond to a Vinyl subroutine.
 var vclRequiredMacros = []string{
 	VCLMacroPreamble,
 	VCLMacroRecv,

@@ -43,7 +43,7 @@ services:
         condition: service_healthy
     command: "start-dev"
   sunet-vcl-validator:
-    image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator:e46f64d255425ec1d87329b9a7246101b1416547"
+    image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator:1f2a31ea7a594698de371b1c2d3f88c07b9531fd
     ports:
       - "8888:8888"
   satosa:
