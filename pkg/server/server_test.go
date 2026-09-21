@@ -5373,7 +5373,7 @@ func TestGetServiceVersions(t *testing.T) {
 
 func TestPostServiceVersion(t *testing.T) {
 	req := testcontainers.ContainerRequest{
-		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator:1f2a31ea7a594698de371b1c2d3f88c07b9531fd",
+		Image:        "platform.sunet.se/sunet-cdn/sunet-vcl-validator@sha256:e0f75b51c6b663d56f08c75b0e59ba1d2c60e378e45f694c6faac8290ea56b31",
 		ExposedPorts: []string{"8888/tcp"},
 		WaitingFor:   wait.ForLog("starting server"),
 	}
