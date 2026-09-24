@@ -5920,6 +5920,25 @@ func selectOrgListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) 
 	return orgItems, nil
 }
 
+// countOrgResources returns how many services, domains and client tokens
+// belong to the org. Callers making decisions that must exclude concurrent
+// resource creation should hold the org row lock (see
+// newOrgIdentifierForUpdate). The lock does not block deletion of those
+// resources, so the counts can still decrease while the caller runs.
+func countOrgResources(ctx context.Context, tx pgx.Tx, orgID pgtype.UUID) (int64, int64, int64, error) {
+	var serviceCount, domainCount, clientTokenCount int64
+	err := tx.QueryRow(ctx,
+		`SELECT
+			(SELECT COUNT(*) FROM services WHERE org_id = $1),
+			(SELECT COUNT(*) FROM domains WHERE org_id = $1),
+			(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1)`,
+		orgID).Scan(&serviceCount, &domainCount, &clientTokenCount)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return serviceCount, domainCount, clientTokenCount, nil
+}
+
 func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string, name string, serviceQuota, domainQuota, clientTokenQuota int64) (cdntypes.Org, error) {
 	if !ad.Superuser {
 		return cdntypes.Org{}, cdnerrors.ErrForbidden
@@ -5942,31 +5961,24 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 		// using. The org row was locked when the identifier was resolved,
 		// and the functions creating services, domains and client tokens
 		// take the same lock before checking their quota, so the counts
-		// can not change until we are done. All quotas are checked so
-		// every violation can be reported at once.
-		var numServices, numDomains, numClientTokens int64
-		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM services WHERE org_id=$1", orgIdent.id).Scan(&numServices)
+		// can not increase until we are done. Deletions do not take the
+		// org lock, so a count can decrease concurrently, which at worst
+		// rejects a quota that would just have become valid. All quotas
+		// are checked so every violation can be reported at once.
+		serviceCount, domainCount, clientTokenCount, err := countOrgResources(dbCtx, tx, orgIdent.id)
 		if err != nil {
-			return fmt.Errorf("updateOrg: unable to count services: %w", err)
-		}
-		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
-		if err != nil {
-			return fmt.Errorf("updateOrg: unable to count domains: %w", err)
-		}
-		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id=$1", orgIdent.id).Scan(&numClientTokens)
-		if err != nil {
-			return fmt.Errorf("updateOrg: unable to count client tokens: %w", err)
+			return fmt.Errorf("updateOrg: unable to count quota usage: %w", err)
 		}
 
 		var quotaErrs []error
-		if serviceQuota < numServices {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceQuotaBelowUsage, serviceQuota, numServices))
+		if serviceQuota < serviceCount {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceQuotaBelowUsage, serviceQuota, serviceCount))
 		}
-		if domainQuota < numDomains {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrDomainQuotaBelowUsage, domainQuota, numDomains))
+		if domainQuota < domainCount {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrDomainQuotaBelowUsage, domainQuota, domainCount))
 		}
-		if clientTokenQuota < numClientTokens {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrClientTokenQuotaBelowUsage, clientTokenQuota, numClientTokens))
+		if clientTokenQuota < clientTokenCount {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrClientTokenQuotaBelowUsage, clientTokenQuota, clientTokenCount))
 		}
 		if len(quotaErrs) > 0 {
 			return errors.Join(quotaErrs...)
@@ -6021,23 +6033,17 @@ func deleteOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 			return fmt.Errorf("deleteOrg: unable to parse org identifier: %w", err)
 		}
 
-		var serviceCount, domainCount, clientCredCount int64
-		err = tx.QueryRow(dbCtx,
-			`SELECT
-				(SELECT COUNT(*) FROM services WHERE org_id = $1),
-				(SELECT COUNT(*) FROM domains WHERE org_id = $1),
-				(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1)`,
-			orgIdent.id).Scan(&serviceCount, &domainCount, &clientCredCount)
+		serviceCount, domainCount, clientTokenCount, err := countOrgResources(dbCtx, tx, orgIdent.id)
 		if err != nil {
 			return fmt.Errorf("deleteOrg: unable to count dependents: %w", err)
 		}
 
-		if serviceCount > 0 || domainCount > 0 || clientCredCount > 0 {
+		if serviceCount > 0 || domainCount > 0 || clientTokenCount > 0 {
 			return &cdnerrors.DependentsError{
 				Name:         orgIdent.name,
 				Services:     serviceCount,
 				Domains:      domainCount,
-				ClientTokens: clientCredCount,
+				ClientTokens: clientTokenCount,
 			}
 		}
 
