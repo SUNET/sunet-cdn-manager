@@ -148,6 +148,9 @@ const (
 	consoleNotAllowedEnableService   = "Not allowed to enable service"
 	consoleNotAllowedActivateSV      = "Not allowed to activate service version"
 	consoleOrgNotFound               = "Organization not found"
+	consoleServiceQuotaBelowUsage    = "Cannot be lower than the current number of services"
+	consoleDomainQuotaBelowUsage     = "Cannot be lower than the current number of domains"
+	consoleTokenQuotaBelowUsage      = "Cannot be lower than the current number of client tokens"
 	consoleDeleteRequiresSuperuser   = "Service deletion requires an operator. You can disable a service yourself, which takes it offline and clears its cache, but a disabled service keeps its IP addresses, UID range and quota slot. Only deletion releases those, and only an operator can delete. Contact an administrator if this service should be removed."
 	consoleServiceNotFound           = "Service not found"
 	consoleDeleteNeedsDisabled       = "This service must be disabled before it can be deleted. Disable it first, then delete it."
@@ -5935,6 +5938,40 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 			return fmt.Errorf("updateOrg: unable to parse org identifier: %w", err)
 		}
 
+		// Do not allow setting a quota below what the org is already
+		// using. The org row was locked when the identifier was resolved,
+		// and the functions creating services, domains and client tokens
+		// take the same lock before checking their quota, so the counts
+		// can not change until we are done. All quotas are checked so
+		// every violation can be reported at once.
+		var numServices, numDomains, numClientTokens int64
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM services WHERE org_id=$1", orgIdent.id).Scan(&numServices)
+		if err != nil {
+			return fmt.Errorf("updateOrg: unable to count services: %w", err)
+		}
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
+		if err != nil {
+			return fmt.Errorf("updateOrg: unable to count domains: %w", err)
+		}
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id=$1", orgIdent.id).Scan(&numClientTokens)
+		if err != nil {
+			return fmt.Errorf("updateOrg: unable to count client tokens: %w", err)
+		}
+
+		var quotaErrs []error
+		if serviceQuota < numServices {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceQuotaBelowUsage, serviceQuota, numServices))
+		}
+		if domainQuota < numDomains {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrDomainQuotaBelowUsage, domainQuota, numDomains))
+		}
+		if clientTokenQuota < numClientTokens {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrClientTokenQuotaBelowUsage, clientTokenQuota, numClientTokens))
+		}
+		if len(quotaErrs) > 0 {
+			return errors.Join(quotaErrs...)
+		}
+
 		err = tx.QueryRow(dbCtx,
 			"UPDATE orgs SET name = $1, service_quota = $2, domain_quota = $3, client_token_quota = $4 WHERE id = $5 RETURNING id, name, service_quota, domain_quota, client_token_quota",
 			name, serviceQuota, domainQuota, clientTokenQuota, orgIdent.id).Scan(
@@ -5955,7 +5992,10 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) || errors.Is(err, cdnerrors.ErrCheckViolation) {
+		// The quota errors are returned as-is so callers can get at every
+		// violation joined together by errors.Join above.
+		if errors.Is(err, cdnerrors.ErrNotFound) || errors.Is(err, cdnerrors.ErrAlreadyExists) || errors.Is(err, cdnerrors.ErrCheckViolation) ||
+			errors.Is(err, cdnerrors.ErrServiceQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrDomainQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrClientTokenQuotaBelowUsage) {
 			return cdntypes.Org{}, err
 		}
 		return cdntypes.Org{}, fmt.Errorf("updateOrg: transaction failed: %w", err)
@@ -9763,6 +9803,14 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, huma.Error409Conflict("organization already exists")
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					return nil, huma.Error422UnprocessableEntity("invalid organization data")
+				case errors.Is(err, cdnerrors.ErrServiceQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrDomainQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrClientTokenQuotaBelowUsage):
+					// updateOrg joins every quota violation with
+					// errors.Join, list each one in the response.
+					var details []error
+					if joined, ok := err.(interface{ Unwrap() []error }); ok {
+						details = joined.Unwrap()
+					}
+					return nil, huma.Error422UnprocessableEntity("quota is below current usage", details...)
 				default:
 					return nil, fmt.Errorf("unable to update organization: %w", err)
 				}
@@ -12222,6 +12270,18 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 					orgFormData.Errors.Name = consoleAlreadyExists
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					orgFormData.Errors.ServerError = "Invalid organization data"
+				case errors.Is(err, cdnerrors.ErrServiceQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrDomainQuotaBelowUsage) || errors.Is(err, cdnerrors.ErrClientTokenQuotaBelowUsage):
+					// More than one quota can be below usage at the
+					// same time, mark every field that is.
+					if errors.Is(err, cdnerrors.ErrServiceQuotaBelowUsage) {
+						orgFormData.Errors.ServiceQuota = consoleServiceQuotaBelowUsage
+					}
+					if errors.Is(err, cdnerrors.ErrDomainQuotaBelowUsage) {
+						orgFormData.Errors.DomainQuota = consoleDomainQuotaBelowUsage
+					}
+					if errors.Is(err, cdnerrors.ErrClientTokenQuotaBelowUsage) {
+						orgFormData.Errors.ClientTokenQuota = consoleTokenQuotaBelowUsage
+					}
 				default:
 					orgFormData.Errors.ServerError = "Organization update failed"
 				}
