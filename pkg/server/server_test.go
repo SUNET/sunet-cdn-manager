@@ -11545,6 +11545,239 @@ func TestPutOrganization(t *testing.T) {
 	}
 }
 
+func TestPutOrganizationQuotaBelowUsage(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// org1 has 6 services and 8 domains in the test data but no client
+	// tokens, add one so all three quotas have usage to compare against.
+	_, err = dbPool.Exec(context.Background(), "INSERT INTO org_keycloak_client_credentials (org_id, role_id, name, client_id, description, crypt_registration_access_token) SELECT '00000002-0000-0000-0000-000000000001', id, 'quota-test-token', 'quota-test-client-id', 'quota test', '\\x00' FROM roles WHERE name='user'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		description      string
+		expectedStatus   int
+		serviceQuota     int64
+		domainQuota      int64
+		clientTokenQuota int64
+		expectedDetails  []string
+	}{
+		{
+			description:      "service quota below usage",
+			expectedStatus:   http.StatusUnprocessableEntity,
+			serviceQuota:     5,
+			domainQuota:      8,
+			clientTokenQuota: 1,
+			expectedDetails:  []string{"service quota is below current usage (quota 5, usage 6)"},
+		},
+		{
+			description:      "domain quota below usage",
+			expectedStatus:   http.StatusUnprocessableEntity,
+			serviceQuota:     6,
+			domainQuota:      7,
+			clientTokenQuota: 1,
+			expectedDetails:  []string{"domain quota is below current usage (quota 7, usage 8)"},
+		},
+		{
+			description:      "client token quota below usage",
+			expectedStatus:   http.StatusUnprocessableEntity,
+			serviceQuota:     6,
+			domainQuota:      8,
+			clientTokenQuota: 0,
+			expectedDetails:  []string{"client token quota is below current usage (quota 0, usage 1)"},
+		},
+		{
+			description:      "all quotas below usage",
+			expectedStatus:   http.StatusUnprocessableEntity,
+			serviceQuota:     0,
+			domainQuota:      0,
+			clientTokenQuota: 0,
+			expectedDetails: []string{
+				"service quota is below current usage (quota 0, usage 6)",
+				"domain quota is below current usage (quota 0, usage 8)",
+				"client token quota is below current usage (quota 0, usage 1)",
+			},
+		},
+		{
+			description:      "quotas equal to usage",
+			expectedStatus:   http.StatusOK,
+			serviceQuota:     6,
+			domainQuota:      8,
+			clientTokenQuota: 1,
+		},
+		{
+			description:      "quotas above usage",
+			expectedStatus:   http.StatusOK,
+			serviceQuota:     10,
+			domainQuota:      20,
+			clientTokenQuota: 30,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			body := struct {
+				Name             string `json:"name"`
+				ServiceQuota     int64  `json:"service_quota"`
+				DomainQuota      int64  `json:"domain_quota"`
+				ClientTokenQuota int64  `json:"client_token_quota"`
+			}{
+				Name:             "org1",
+				ServiceQuota:     test.serviceQuota,
+				DomainQuota:      test.domainQuota,
+				ClientTokenQuota: test.clientTokenQuota,
+			}
+
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/orgs/org1", bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.SetBasicAuth("admin", validAdminPassword)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			jsonData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if resp.StatusCode != test.expectedStatus {
+				t.Fatalf("PUT org unexpected status code: %d (%s)", resp.StatusCode, string(jsonData))
+			}
+
+			if test.expectedStatus == http.StatusOK {
+				var result cdntypes.Org
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					t.Fatalf("unable to unmarshal response: %v", err)
+				}
+				if result.ServiceQuota != test.serviceQuota || result.DomainQuota != test.domainQuota || result.ClientTokenQuota != test.clientTokenQuota {
+					t.Fatalf("unexpected quotas in response: %s", string(jsonData))
+				}
+				return
+			}
+
+			var errResp struct {
+				Errors []struct {
+					Message string `json:"message"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal(jsonData, &errResp); err != nil {
+				t.Fatalf("unable to unmarshal error response: %v", err)
+			}
+
+			messages := []string{}
+			for _, e := range errResp.Errors {
+				messages = append(messages, e.Message)
+			}
+
+			if !slices.Equal(messages, test.expectedDetails) {
+				t.Fatalf("expected error details %q, got %q", test.expectedDetails, messages)
+			}
+		})
+	}
+
+	// The API rejects negative quotas before reaching the database, make
+	// sure the database constraints also hold on their own.
+	for _, query := range []string{
+		"UPDATE orgs SET service_quota = -1 WHERE name = 'org4'",
+		"UPDATE orgs SET domain_quota = -1 WHERE name = 'org4'",
+		"UPDATE orgs SET client_token_quota = -1 WHERE name = 'org4'",
+	} {
+		t.Run("database rejects: "+query, func(t *testing.T) {
+			_, err := dbPool.Exec(context.Background(), query)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) {
+				t.Fatalf("expected pgconn.PgError, got: %v", err)
+			}
+			if pgErr.Code != pgCheckViolation {
+				t.Fatalf("expected check violation (%s), got %s", pgCheckViolation, pgErr.Code)
+			}
+		})
+	}
+}
+
+func TestConsoleEditOrgQuotaBelowUsage(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+	// org1 has 6 services and 8 domains but no client tokens in the test
+	// data, so only the service and domain fields should get errors.
+	formBody := "name=org1&service-quota=5&domain-quota=7&client-token-quota=0"
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/superuser/orgs/org1/edit", strings.NewReader(formBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("unexpected status code: got %d, want %d (%s)", resp.StatusCode, http.StatusOK, string(body))
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to parse response HTML: %v", err)
+	}
+
+	fieldErrors := map[string]string{
+		"service-quota":      consoleServiceQuotaBelowUsage,
+		"domain-quota":       consoleDomainQuotaBelowUsage,
+		"client-token-quota": "",
+	}
+	for field, expected := range fieldErrors {
+		got := strings.TrimSpace(doc.Find(fmt.Sprintf("label[for=%q] + span.error-text", field)).Text())
+		if got != expected {
+			t.Fatalf("expected %s error %q, got %q", field, expected, got)
+		}
+	}
+
+	var serviceQuota, domainQuota int64
+	err = dbPool.QueryRow(context.Background(), "SELECT service_quota, domain_quota FROM orgs WHERE name = 'org1'").Scan(&serviceQuota, &domainQuota)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceQuota != 100 || domainQuota != 100 {
+		t.Fatalf("expected quotas to be unchanged (100/100), got %d/%d", serviceQuota, domainQuota)
+	}
+}
+
 func TestDeleteOrganization(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
