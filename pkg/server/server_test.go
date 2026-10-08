@@ -5431,6 +5431,7 @@ func TestPostServiceVersion(t *testing.T) {
 		vclTemplateFile    string
 		assertOriginGroups bool
 		versionDescription string
+		crlfLineEndings    bool
 	}{
 		{
 			description:     "successful superuser request with ID",
@@ -5466,6 +5467,31 @@ func TestPostServiceVersion(t *testing.T) {
 			expectedStatus:  http.StatusCreated,
 			active:          true,
 			vclTemplateFile: "testdata/vcl/template1.vcl",
+		},
+		{
+			description:     "successful superuser request with CRLF line endings in VCL template and condition",
+			username:        "admin",
+			password:        validAdminPassword,
+			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
+			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
+			domains:         []string{"example.com", "example.se"},
+			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
+				{
+					Name:      "multiline",
+					Condition: "req.url ~ \"^/a\" ||\nreq.url ~ \"^/b\"",
+					Origins: []cdntypes.InputOrigin{
+						{Host: "198.51.100.21", Port: 443, TLS: true},
+					},
+				},
+			},
+			defaultGroup: cdntypes.InputDefaultOriginGroup{
+				Origins: []cdntypes.InputOrigin{
+					{Host: "198.51.100.20", Port: 443, TLS: true},
+				},
+			},
+			expectedStatus:  http.StatusCreated,
+			vclTemplateFile: "testdata/vcl/template1.vcl",
+			crlfLineEndings: true,
 		},
 		{
 			description:     "failed superuser request with ID, domain not known",
@@ -6137,6 +6163,21 @@ func TestPostServiceVersion(t *testing.T) {
 					t.Fatal(err)
 				}
 				newServiceVersion.VCLTemplate = string(vclTemplateContentBytes)
+				if test.crlfLineEndings {
+					newServiceVersion.VCLTemplate = strings.ReplaceAll(newServiceVersion.VCLTemplate, "\n", "\r\n")
+				}
+			}
+
+			// Only the request is sent with CRLF line endings, the
+			// test table keeps LF as that is what is expected to be
+			// stored.
+			if test.crlfLineEndings {
+				crlfGroups := []cdntypes.InputConditionalOriginGroup{}
+				for _, cg := range test.conditionalGroups {
+					cg.Condition = strings.ReplaceAll(cg.Condition, "\n", "\r\n")
+					crlfGroups = append(crlfGroups, cg)
+				}
+				newServiceVersion.ConditionalOriginGroups = crlfGroups
 			}
 
 			b, err := json.Marshal(newServiceVersion)
@@ -6196,6 +6237,38 @@ func TestPostServiceVersion(t *testing.T) {
 
 				if test.versionDescription != dbDescription {
 					t.Fatalf("database does not contain expected description: want: %s, have: %s", test.versionDescription, dbDescription)
+				}
+
+				// Templates are stored with LF line endings regardless
+				// of what the client sent.
+				var dbVCLTemplate string
+				err = dbPool.QueryRow(
+					ctx,
+					"SELECT vcl_template FROM service_vcls WHERE service_version_id = $1",
+					createdVersion.ID,
+				).Scan(&dbVCLTemplate)
+				if err != nil {
+					t.Fatalf("unable to query service_vcls for vcl_template: %s", err)
+				}
+				if dbVCLTemplate != string(vclTemplateContentBytes) {
+					t.Errorf("database does not contain expected vcl_template: want: %q, have: %q", string(vclTemplateContentBytes), dbVCLTemplate)
+				}
+
+				// The same goes for origin group conditions.
+				for _, cg := range test.conditionalGroups {
+					var dbCondition string
+					err = dbPool.QueryRow(
+						ctx,
+						"SELECT condition FROM service_origin_groups WHERE service_version_id = $1 AND name = $2",
+						createdVersion.ID,
+						cg.Name,
+					).Scan(&dbCondition)
+					if err != nil {
+						t.Fatalf("unable to query service_origin_groups for condition: %s", err)
+					}
+					if dbCondition != cg.Condition {
+						t.Errorf("database does not contain expected condition for origin group %s: want: %q, have: %q", cg.Name, cg.Condition, dbCondition)
+					}
 				}
 			}
 

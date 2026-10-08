@@ -309,6 +309,19 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 	return nil
 }
 
+// vclLineEndingReplacer converts CRLF and lone CR line endings to LF. CRLF is
+// listed first so it is matched before the lone CR.
+var vclLineEndingReplacer = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+// normalizeVCLLineEndings makes VCL content (templates and origin group
+// conditions) use LF line endings only. Browsers submit textarea content with
+// CRLF line endings as required by the HTML spec, and API clients may send
+// them as well. The database enforces this via the vcl_template_no_cr and
+// condition_no_cr constraints.
+func normalizeVCLLineEndings(vcl string) string {
+	return vclLineEndingReplacer.Replace(vcl)
+}
+
 func validateVCLMacros(vclTemplate string) error {
 	if len(vclTemplate) == 0 {
 		return errors.New("VCL template must not be empty")
@@ -8149,6 +8162,15 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		if ad.OrgID == nil {
 			return serviceVersionInsertResult{}, cdnerrors.ErrForbidden
 		}
+	}
+
+	// Normalize before validation so the validated template and conditions
+	// are the ones that get stored. The conditional groups are copied so
+	// the caller's slice is not modified.
+	vclTemplate = normalizeVCLLineEndings(vclTemplate)
+	conditionalGroups = slices.Clone(conditionalGroups)
+	for i := range conditionalGroups {
+		conditionalGroups[i].Condition = normalizeVCLLineEndings(conditionalGroups[i].Condition)
 	}
 
 	var serviceVersionResult serviceVersionInsertResult
