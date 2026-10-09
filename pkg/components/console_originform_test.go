@@ -11,8 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// render is a small helper to render a templ.Component into a string for
-// substring assertions in the tests below.
 // testServiceID is a stand-in service UUID for component tests. The
 // create-version form action is keyed on the service ID, not its name.
 func testServiceID(t *testing.T) pgtype.UUID {
@@ -24,6 +22,8 @@ func testServiceID(t *testing.T) pgtype.UUID {
 	return id
 }
 
+// render is a small helper to render a templ.Component into a string for
+// substring assertions in the tests below.
 func render(t *testing.T, c templ.Component) string {
 	t.Helper()
 	var buf bytes.Buffer
