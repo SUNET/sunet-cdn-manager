@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/testhelpers"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/testcontainers/testcontainers-go"
@@ -262,6 +263,239 @@ func TestVersionedOriginGroupsMigration(t *testing.T) {
 		}
 		if count != 0 {
 			t.Errorf("legacy column %s still present after migration", column)
+		}
+	}
+}
+
+// TestStripCRMigration seeds service_vcls and service_origin_groups rows with
+// the line endings that the console textareas (CRLF) and API clients may have
+// stored before migration 00016, and verifies the migration normalizes them
+// to LF, leaves already clean rows untouched and then rejects new CR
+// characters.
+func TestStripCRMigration(t *testing.T) {
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See TestVersionedOriginGroupsMigration for why the cdn schema is
+	// created here.
+	bootstrapPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA cdn"); err != nil {
+		bootstrapPool.Close()
+		t.Fatalf("creating cdn schema failed: %s", err)
+	}
+	bootstrapPool.Close()
+	pgConfig.ConnConfig.RuntimeParams["search_path"] = "cdn,public"
+
+	if err := upTo(ctx, logger, pgConfig, 15); err != nil {
+		t.Fatalf("migrating up to version 15 failed: %s", err)
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	seed := []string{
+		"INSERT INTO orgs (id, name) VALUES ('91000000-0000-0000-0000-000000000001', 'mig-org')",
+		"INSERT INTO services (id, org_id, name, uid_range) VALUES ('91000000-0000-0000-0000-000000000002', '91000000-0000-0000-0000-000000000001', 'svc-a', '(1000010000, 1000019999)')",
+		"INSERT INTO service_versions (id, service_id, version) VALUES ('91000000-0000-0000-0000-000000000101', '91000000-0000-0000-0000-000000000002', 1)",
+		"INSERT INTO service_versions (id, service_id, version) VALUES ('91000000-0000-0000-0000-000000000102', '91000000-0000-0000-0000-000000000002', 2)",
+		"INSERT INTO service_versions (id, service_id, version) VALUES ('91000000-0000-0000-0000-000000000103', '91000000-0000-0000-0000-000000000002', 3)",
+		"INSERT INTO service_versions (id, service_id, version, active) VALUES ('91000000-0000-0000-0000-000000000104', '91000000-0000-0000-0000-000000000002', 4, true)",
+		"INSERT INTO service_versions (id, service_id, version) VALUES ('91000000-0000-0000-0000-000000000105', '91000000-0000-0000-0000-000000000002', 5)",
+		// Default groups have a NULL condition which must survive the
+		// migration and pass the new constraint.
+		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('91000000-0000-0000-0000-000000000200', '91000000-0000-0000-0000-000000000101', true, 'default', 4)",
+	}
+	for _, stmt := range seed {
+		if _, err := dbPool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed statement failed: %s: %s", stmt, err)
+		}
+	}
+
+	vclTests := []struct {
+		description      string
+		serviceVersionID string
+		template         string
+		expected         string
+	}{
+		{
+			description:      "LF only",
+			serviceVersionID: "91000000-0000-0000-0000-000000000101",
+			template:         "sub vcl_recv {\n#SUNET-CDN-MANAGER vcl_recv\n}\n",
+			expected:         "sub vcl_recv {\n#SUNET-CDN-MANAGER vcl_recv\n}\n",
+		},
+		{
+			description:      "CRLF from console textarea",
+			serviceVersionID: "91000000-0000-0000-0000-000000000102",
+			template:         "sub vcl_recv {\r\n#SUNET-CDN-MANAGER vcl_recv\r\n}\r\n",
+			expected:         "sub vcl_recv {\n#SUNET-CDN-MANAGER vcl_recv\n}\n",
+		},
+		{
+			description:      "mixed CRLF and LF",
+			serviceVersionID: "91000000-0000-0000-0000-000000000103",
+			template:         "sub vcl_recv {\r\n#SUNET-CDN-MANAGER vcl_recv\n}\r\n",
+			expected:         "sub vcl_recv {\n#SUNET-CDN-MANAGER vcl_recv\n}\n",
+		},
+		{
+			description:      "lone CR",
+			serviceVersionID: "91000000-0000-0000-0000-000000000104",
+			template:         "sub vcl_recv {\r#SUNET-CDN-MANAGER vcl_recv\r\r\n}",
+			expected:         "sub vcl_recv {\n#SUNET-CDN-MANAGER vcl_recv\n\n}",
+		},
+	}
+
+	for _, vt := range vclTests {
+		_, err := dbPool.Exec(ctx, "INSERT INTO service_vcls (service_version_id, vcl_template) VALUES ($1, $2)", vt.serviceVersionID, vt.template)
+		if err != nil {
+			t.Fatalf("seeding vcl %q failed: %s", vt.description, err)
+		}
+	}
+
+	conditionTests := []struct {
+		description string
+		groupID     string
+		condition   string
+		expected    string
+	}{
+		{
+			description: "single line",
+			groupID:     "91000000-0000-0000-0000-000000000201",
+			condition:   `req.url ~ "^/api/"`,
+			expected:    `req.url ~ "^/api/"`,
+		},
+		{
+			description: "LF only",
+			groupID:     "91000000-0000-0000-0000-000000000202",
+			condition:   "req.url ~ \"^/a\" ||\nreq.url ~ \"^/b\"",
+			expected:    "req.url ~ \"^/a\" ||\nreq.url ~ \"^/b\"",
+		},
+		{
+			description: "CRLF from console textarea",
+			groupID:     "91000000-0000-0000-0000-000000000203",
+			condition:   "req.url ~ \"^/c\" ||\r\nreq.url ~ \"^/d\"",
+			expected:    "req.url ~ \"^/c\" ||\nreq.url ~ \"^/d\"",
+		},
+		{
+			description: "lone CR",
+			groupID:     "91000000-0000-0000-0000-000000000204",
+			condition:   "req.url ~ \"^/e\" ||\rreq.url ~ \"^/f\"",
+			expected:    "req.url ~ \"^/e\" ||\nreq.url ~ \"^/f\"",
+		},
+	}
+
+	for i, ct := range conditionTests {
+		_, err := dbPool.Exec(ctx,
+			"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, condition, position) VALUES ($1, '91000000-0000-0000-0000-000000000101', false, $2, $3, $4)",
+			ct.groupID, fmt.Sprintf("group-%d", i), ct.condition, i)
+		if err != nil {
+			t.Fatalf("seeding condition %q failed: %s", ct.description, err)
+		}
+	}
+
+	// xmin changes whenever a row is rewritten, so it shows which rows the
+	// migration touched.
+	vclXmin := func(serviceVersionID string) string {
+		t.Helper()
+		var xmin string
+		err := dbPool.QueryRow(ctx, "SELECT xmin::text FROM service_vcls WHERE service_version_id = $1", serviceVersionID).Scan(&xmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return xmin
+	}
+	groupXmin := func(groupID string) string {
+		t.Helper()
+		var xmin string
+		err := dbPool.QueryRow(ctx, "SELECT xmin::text FROM service_origin_groups WHERE id = $1", groupID).Scan(&xmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return xmin
+	}
+
+	vclXminBefore := map[string]string{}
+	for _, vt := range vclTests {
+		vclXminBefore[vt.serviceVersionID] = vclXmin(vt.serviceVersionID)
+	}
+	groupXminBefore := map[string]string{}
+	for _, ct := range conditionTests {
+		groupXminBefore[ct.groupID] = groupXmin(ct.groupID)
+	}
+	defaultGroupXminBefore := groupXmin("91000000-0000-0000-0000-000000000200")
+
+	if err := upTo(ctx, logger, pgConfig, 16); err != nil {
+		t.Fatalf("migrating to version 16 failed: %s", err)
+	}
+
+	for _, vt := range vclTests {
+		t.Run("vcl_template "+vt.description, func(t *testing.T) {
+			var got string
+			err := dbPool.QueryRow(ctx, "SELECT vcl_template FROM service_vcls WHERE service_version_id = $1", vt.serviceVersionID).Scan(&got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != vt.expected {
+				t.Errorf("got %q, want %q", got, vt.expected)
+			}
+
+			// Only rows containing CR characters are rewritten.
+			rewritten := vclXmin(vt.serviceVersionID) != vclXminBefore[vt.serviceVersionID]
+			if wantRewritten := vt.template != vt.expected; rewritten != wantRewritten {
+				t.Errorf("row rewritten by migration: got %t, want %t", rewritten, wantRewritten)
+			}
+		})
+	}
+
+	for _, ct := range conditionTests {
+		t.Run("condition "+ct.description, func(t *testing.T) {
+			var got string
+			err := dbPool.QueryRow(ctx, "SELECT condition FROM service_origin_groups WHERE id = $1", ct.groupID).Scan(&got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != ct.expected {
+				t.Errorf("got %q, want %q", got, ct.expected)
+			}
+
+			// Only rows containing CR characters are rewritten.
+			rewritten := groupXmin(ct.groupID) != groupXminBefore[ct.groupID]
+			if wantRewritten := ct.condition != ct.expected; rewritten != wantRewritten {
+				t.Errorf("row rewritten by migration: got %t, want %t", rewritten, wantRewritten)
+			}
+		})
+	}
+
+	var defaultCondition *string
+	err = dbPool.QueryRow(ctx, "SELECT condition FROM service_origin_groups WHERE id = '91000000-0000-0000-0000-000000000200'").Scan(&defaultCondition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultCondition != nil {
+		t.Errorf("default group condition: got %q, want NULL", *defaultCondition)
+	}
+	if groupXmin("91000000-0000-0000-0000-000000000200") != defaultGroupXminBefore {
+		t.Error("default group row with NULL condition was rewritten by migration")
+	}
+
+	// The constraints added by the migration reject new CR characters.
+	for _, crText := range []string{"\r\n", "\r"} {
+		_, err = dbPool.Exec(ctx, "INSERT INTO service_vcls (service_version_id, vcl_template) VALUES ('91000000-0000-0000-0000-000000000105', $1)", "sub vcl_recv {"+crText+"}")
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "vcl_template_no_cr" {
+			t.Errorf("inserting vcl_template with %q: expected vcl_template_no_cr check violation, got: %v", crText, err)
+		}
+
+		_, err = dbPool.Exec(ctx, "INSERT INTO service_origin_groups (service_version_id, default_group, name, condition, position) VALUES ('91000000-0000-0000-0000-000000000105', false, 'cr-group', $1, 0)", "req.url ~ \"^/a\" ||"+crText+"req.url ~ \"^/b\"")
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "condition_no_cr" {
+			t.Errorf("inserting condition with %q: expected condition_no_cr check violation, got: %v", crText, err)
 		}
 	}
 }

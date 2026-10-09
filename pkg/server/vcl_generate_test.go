@@ -225,3 +225,51 @@ func TestGenerateCompleteVclLegacyStable(t *testing.T) {
 		t.Errorf("legacy vcl_recv block changed:\n%s", vcl)
 	}
 }
+
+func TestNormalizeVCLLineEndings(t *testing.T) {
+	tests := []struct {
+		description string
+		input       string
+		expected    string
+	}{
+		{
+			description: "LF only is unchanged",
+			input:       "sub vcl_recv {\n}\n",
+			expected:    "sub vcl_recv {\n}\n",
+		},
+		{
+			description: "CRLF becomes LF",
+			input:       "sub vcl_recv {\r\n}\r\n",
+			expected:    "sub vcl_recv {\n}\n",
+		},
+		{
+			description: "mixed CRLF and LF",
+			input:       "a\r\nb\nc\r\n",
+			expected:    "a\nb\nc\n",
+		},
+		{
+			description: "lone CR becomes LF",
+			input:       "a\rb\r\nc",
+			expected:    "a\nb\nc",
+		},
+		{
+			description: "CR CR LF is two line breaks",
+			input:       "a\r\r\nb",
+			expected:    "a\n\nb",
+		},
+		{
+			description: "empty string",
+			input:       "",
+			expected:    "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			got := normalizeVCLLineEndings(test.input)
+			if got != test.expected {
+				t.Errorf("got %q, want %q", got, test.expected)
+			}
+		})
+	}
+}

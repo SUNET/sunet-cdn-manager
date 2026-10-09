@@ -501,3 +501,85 @@ func TestActivateServiceVersionRequiresOrgMembership(t *testing.T) {
 		t.Error("the refusal differs between an existing and a non-existent service")
 	}
 }
+
+// TestCreateServiceVersionFormStripsCR covers the console path: browsers
+// submit textarea content with CRLF line endings, as required by the HTML
+// spec, so the VCL template and origin group conditions must be normalized
+// to LF before they are stored.
+func TestCreateServiceVersionFormStripsCR(t *testing.T) {
+	const (
+		serviceName = "crlf-version-service"
+		serviceID   = "00000003-0000-0000-0000-0000000000f6"
+	)
+
+	validator := createVersionValidator(t)
+
+	ts, dbPool, err := prepareServer(t, testServerInput{vclValidator: validator})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	_, err = dbPool.Exec(ctx,
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT $1, id, $2, '(1000950000, 1000959999)' FROM orgs WHERE name='org1'",
+		serviceID, serviceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
+
+	form := createVersionForm()
+	form.Set("vcl_template", strings.ReplaceAll(cdntypes.DefaultVCLTemplate, "\n", "\r\n"))
+	form.Set("conditional-origin-groups.0.name", "multiline")
+	form.Set("conditional-origin-groups.0.condition", "req.url ~ \"^/a\" ||\r\nreq.url ~ \"^/b\"")
+	form.Set("conditional-origin-groups.0.origins.0.host", "192.0.2.11")
+	form.Set("conditional-origin-groups.0.origins.0.port", "443")
+	form.Set("conditional-origin-groups.0.origins.0.tls", "on")
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/console/org/org1/create/service/version/"+serviceID, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	resp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var stored string
+	err = dbPool.QueryRow(ctx,
+		"SELECT service_vcls.vcl_template FROM service_vcls JOIN service_versions ON service_vcls.service_version_id = service_versions.id WHERE service_versions.service_id = $1",
+		serviceID).Scan(&stored)
+	if err != nil {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("no stored VCL template for the created version (status %d): %s: %s", resp.StatusCode, err, body)
+	}
+
+	if stored != cdntypes.DefaultVCLTemplate {
+		t.Errorf("stored VCL template was not normalized to LF line endings: got %q", stored)
+	}
+
+	var storedCondition string
+	err = dbPool.QueryRow(ctx,
+		"SELECT service_origin_groups.condition FROM service_origin_groups JOIN service_versions ON service_origin_groups.service_version_id = service_versions.id WHERE service_versions.service_id = $1 AND service_origin_groups.name = 'multiline'",
+		serviceID).Scan(&storedCondition)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "req.url ~ \"^/a\" ||\nreq.url ~ \"^/b\""; storedCondition != want {
+		t.Errorf("stored origin group condition was not normalized to LF line endings: got %q, want %q", storedCondition, want)
+	}
+}
