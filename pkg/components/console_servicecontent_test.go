@@ -48,8 +48,8 @@ func TestServicesContentActionLinksUseTheServiceID(t *testing.T) {
 	timeDisabled := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	services := []ServiceEntry{
-		{Service: cdntypes.Service{ID: serviceID, Name: "trap-name", OrgName: "myorg"}},
-		{Service: cdntypes.Service{ID: serviceID, Name: "trap-name", OrgName: "myorg", TimeDisabled: &timeDisabled}},
+		{ID: serviceID, Name: "trap-name", OrgName: "myorg"},
+		{ID: serviceID, Name: "trap-name", OrgName: "myorg", TimeDisabled: &timeDisabled},
 	}
 
 	// superuser so the Delete link renders too.
