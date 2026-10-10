@@ -8524,6 +8524,13 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_recv macro template: %w", err)
 	}
 
+	// Render vcl_backend_fetch macro content
+	var backendFetchBuf strings.Builder
+	err = confTemplates.vclMacroBackendFetch.Execute(&backendFetchBuf, macroInput)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_fetch macro template: %w", err)
+	}
+
 	// Render vcl_backend_response macro content
 	var backendRespBuf strings.Builder
 	err = confTemplates.vclMacroBackendResp.Execute(&backendRespBuf, macroInput)
@@ -8542,6 +8549,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	}
 	macroContent[cdntypes.VCLMacroPreamble] = preambleBuf.String()
 	macroContent[cdntypes.VCLMacroRecv] = recvBuf.String()
+	macroContent[cdntypes.VCLMacroBackendFetch] = backendFetchBuf.String()
 	macroContent[cdntypes.VCLMacroBackendResponse] = backendRespBuf.String()
 
 	// Replace macro lines in the user template with delimiter-wrapped content.
@@ -11509,10 +11517,11 @@ func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logg
 }
 
 type configTemplates struct {
-	vclPreamble         *template.Template
-	vclMacroRecv        *template.Template
-	vclMacroBackendResp *template.Template
-	haproxy             *template.Template
+	vclPreamble          *template.Template
+	vclMacroRecv         *template.Template
+	vclMacroBackendFetch *template.Template
+	vclMacroBackendResp  *template.Template
+	haproxy              *template.Template
 }
 
 func newConfigTemplates() (configTemplates, error) {
@@ -11527,6 +11536,11 @@ func newConfigTemplates() (configTemplates, error) {
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_recv template: %w", err)
 	}
+	confTemplates.vclMacroBackendFetch, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_fetch.vcl")
+	if err != nil {
+		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_fetch template: %w", err)
+	}
+
 	confTemplates.vclMacroBackendResp, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_response.vcl")
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_response template: %w", err)

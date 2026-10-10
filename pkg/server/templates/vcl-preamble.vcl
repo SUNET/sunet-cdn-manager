@@ -9,18 +9,22 @@ import {{.}};
 # set req.backend_hint for things to work.
 backend default none;
 
-# Origin group backends
+# Origin group backends. Each points at a haproxy frontend that handles TLS,
+# DNS and load balancing towards the origin servers. No .proxy_header is
+# set: it would limit each backend connection to a single request as documented
+# at
+# https://vinyl-cache.org/docs/9.1/reference/vcl-backend.html#attribute-proxy-header.
+# haproxy instead takes the client address from the last X-Forwarded-For
+# element which vinyl always appends.
 {{- range $originGroup := $.OriginGroups }}
 {{- if $originGroup.HTTPS }}
 backend {{$originGroup.Name}}_https {
   .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_https";
-  .proxy_header = 2;
 }
 {{- end}}
 {{- if $originGroup.HTTP }}
 backend {{$originGroup.Name}}_http {
   .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_http";
-  .proxy_header = 2;
 }
 {{- end}}
 {{- end}}
