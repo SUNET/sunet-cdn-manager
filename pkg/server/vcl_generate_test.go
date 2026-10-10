@@ -226,6 +226,28 @@ func TestGenerateCompleteVclLegacyStable(t *testing.T) {
 	}
 }
 
+func TestGenerateCompleteVclRetryConnectHandling(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedRetryConnectHandling := `  if (bereq.method != "GET" && bereq.method != "HEAD" && bereq.method != "OPTIONS") {
+    set bereq.retry_connect = false;
+  }`
+	if !strings.Contains(vcl, expectedRetryConnectHandling) {
+		t.Errorf("retry connect handling missing:\n%s", vcl)
+	}
+}
+
 func TestNormalizeVCLLineEndings(t *testing.T) {
 	tests := []struct {
 		description string
