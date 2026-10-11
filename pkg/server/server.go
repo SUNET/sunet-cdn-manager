@@ -7227,7 +7227,7 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 					ID:              serviceID,
 					IPAddresses:     serviceIPAddresses,
 					UIDRangeFirst:   serviceUIDRange.Lower.Int64,
-					UIDRangeLast:    serviceUIDRange.Upper.Int64,
+					UIDRangeLast:    serviceUIDRange.Upper.Int64 - 1,
 					ServiceVersions: map[int64]cdntypes.ServiceVersionWithConfig{},
 				}
 			}
