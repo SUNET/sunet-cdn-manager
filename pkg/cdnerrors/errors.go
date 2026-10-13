@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Errors that can be shared across the other packages
@@ -39,6 +40,8 @@ var (
 	ErrNoServiceIPAddresses        = errors.New("no service IP addresses available for allocation")
 	ErrServiceNotDisabled          = errors.New("service must be disabled before it can be deleted")
 	ErrConfirmNameMismatch         = errors.New("confirmation name does not match resource name")
+	ErrLoginRateLimited            = errors.New("too many login attempts")
+	ErrLoginBusy                   = errors.New("server busy handling logins")
 )
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
@@ -55,6 +58,22 @@ func (e *VCLValidationError) Error() string {
 // Make it possible to use errors.Is(err, ErrInvalidVCL)
 func (e *VCLValidationError) Unwrap() error {
 	return ErrInvalidVCL
+}
+
+// LoginRateLimitedError identifies as ErrLoginRateLimited error but also
+// includes how long the client should wait before trying again
+type LoginRateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+// Implement the error interface
+func (e *LoginRateLimitedError) Error() string {
+	return fmt.Sprintf("%s: retry after %s", ErrLoginRateLimited, e.RetryAfter)
+}
+
+// Make it possible to use errors.Is(err, ErrLoginRateLimited)
+func (e *LoginRateLimitedError) Unwrap() error {
+	return ErrLoginRateLimited
 }
 
 // Creates a new validation error containing the supplied details

@@ -35,6 +35,18 @@ client_secret = "some-secret"
 encryption_passwords = [ "some-secret-encryption-password" ]
 encryption_salt = "36023a78c7d2000ac58604da1b630a9f"
 
+# Optional, the values below are the defaults.
+#[login]
+## Max number of concurrent argon2 password hash calculations, each uses ~64 MiB
+#argon2_max_concurrent = 1
+## Max time a login waits for a free hashing slot before getting a 503, at most
+## 4s
+#argon2_wait_timeout = "3s"
+## Password checks needing a hash allowed per client IP (IPv6: per /64) in a burst...
+#ip_rate_burst = 10
+## ...and one more allowed per this interval (10/min sustained)
+#ip_rate_interval = "6s"
+
 [domains]
 resolver_address = "127.0.0.1:53"
 verify_interval = "2m"

@@ -499,3 +499,103 @@ func TestStripCRMigration(t *testing.T) {
 		}
 	}
 }
+
+// TestArgon2ParamsPositiveMigration verifies that migration 00017 applies
+// with an existing valid user_argon2keys row and then rejects the time and
+// threads values that make argon2.IDKey panic, while still accepting the
+// smallest valid ones.
+func TestArgon2ParamsPositiveMigration(t *testing.T) {
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See TestVersionedOriginGroupsMigration for why the cdn schema is
+	// created here.
+	bootstrapPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA cdn"); err != nil {
+		bootstrapPool.Close()
+		t.Fatalf("creating cdn schema failed: %s", err)
+	}
+	bootstrapPool.Close()
+	pgConfig.ConnConfig.RuntimeParams["search_path"] = "cdn,public"
+
+	if err := upTo(ctx, logger, pgConfig, 16); err != nil {
+		t.Fatalf("migrating up to version 16 failed: %s", err)
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	seed := []string{
+		"INSERT INTO roles (id, name) VALUES ('92000000-0000-0000-0000-000000000001', 'mig-role')",
+		"INSERT INTO auth_providers (id, name) VALUES ('92000000-0000-0000-0000-000000000002', 'local')",
+		"INSERT INTO users (id, role_id, auth_provider_id, display_name) VALUES ('92000000-0000-0000-0000-000000000003', '92000000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000002', 'mig-user')",
+		"INSERT INTO user_argon2keys (user_id, key, salt, time, memory, threads, tag_size) VALUES ('92000000-0000-0000-0000-000000000003', '\\x01', '\\x01', 3, 65536, 4, 32)",
+	}
+	for _, stmt := range seed {
+		if _, err := dbPool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed statement failed: %s: %s", stmt, err)
+		}
+	}
+
+	if err := upTo(ctx, logger, pgConfig, 17); err != nil {
+		t.Fatalf("migrating up to version 17 failed: %s", err)
+	}
+
+	setTime := "UPDATE user_argon2keys SET time = $1 WHERE user_id = '92000000-0000-0000-0000-000000000003'"
+	setThreads := "UPDATE user_argon2keys SET threads = $1 WHERE user_id = '92000000-0000-0000-0000-000000000003'"
+
+	tests := []struct {
+		description    string
+		query          string
+		value          int
+		wantConstraint string
+	}{
+		{
+			description:    "time 0",
+			query:          setTime,
+			value:          0,
+			wantConstraint: "argon2_time_positive",
+		},
+		{
+			description:    "threads 0",
+			query:          setThreads,
+			value:          0,
+			wantConstraint: "argon2_threads_positive",
+		},
+		{
+			description: "time 1",
+			query:       setTime,
+			value:       1,
+		},
+		{
+			description: "threads 1",
+			query:       setThreads,
+			value:       1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			_, err := dbPool.Exec(ctx, test.query, test.value)
+			if test.wantConstraint == "" {
+				if err != nil {
+					t.Fatalf("expected success, got: %v", err)
+				}
+				return
+			}
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != test.wantConstraint {
+				t.Fatalf("expected %s check violation, got: %v", test.wantConstraint, err)
+			}
+		})
+	}
+}

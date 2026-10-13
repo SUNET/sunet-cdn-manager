@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
@@ -527,6 +528,8 @@ type testServerInput struct {
 	dbPool               *pgxpool.Pool
 	consoleSessionMaxAge time.Duration
 	consoleSessionCapAge time.Duration
+	argon2Slots          *argon2Slots
+	loginLimiter         *loginRateLimiter
 }
 
 func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
@@ -652,7 +655,21 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to create config templates: %v", err)
 	}
 
-	var argon2Mutex sync.Mutex
+	if tsi.argon2Slots == nil {
+		tsi.argon2Slots = newArgon2Slots(1, 30*time.Second)
+	}
+
+	if tsi.loginLimiter == nil {
+		// All test requests come from 127.0.0.1, use a limit the
+		// regular tests never reach. Rate limit tests pass their own.
+		tsi.loginLimiter, err = newLoginRateLimiter(time.Millisecond, 1000000)
+		if err != nil {
+			if dbPoolCreated {
+				tsi.dbPool.Close()
+			}
+			t.Fatalf("unable to create login rate limiter: %v", err)
+		}
+	}
 
 	loginCache, err := lru.New[string, struct{}](128)
 	if err != nil {
@@ -731,11 +748,11 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 	conf := config.Config{}
 	conf.Server.ConsoleSessionCapAge = tsi.consoleSessionCapAge
 
-	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
+	router := newChiRouter(conf, logger, dbc, tsi.argon2Slots, tsi.loginLimiter, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
 
 	ts.Config.Handler = router
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEADs, serverURL)
+	err = setupHumaAPI(router, dbc, tsi.argon2Slots, tsi.loginLimiter, loginCache, tsi.vclValidator, confTemplates, tsi.kcClientManager, tsi.jwkCache, tsi.jwtIssuer, tsi.oiConf, clientCredAEADs, serverURL)
 	if err != nil {
 		if dbPoolCreated {
 			tsi.dbPool.Close()
@@ -1508,6 +1525,388 @@ func TestDeleteUser(t *testing.T) {
 	}
 }
 
+func TestArgon2KeyUnchanged(t *testing.T) {
+	ctx := context.Background()
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	var userID pgtype.UUID
+	err = userID.Scan(username1ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var storedKey []byte
+	err = dbPool.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1", userID).Scan(&storedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+		return argon2KeyUnchanged(ctx, tx, userID, storedKey)
+	})
+	if err != nil {
+		t.Fatalf("expected unchanged key to pass, got: %v", err)
+	}
+
+	changedKey := bytes.Clone(storedKey)
+	changedKey[0] ^= 0xff
+
+	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
+		return argon2KeyUnchanged(ctx, tx, userID, changedKey)
+	})
+	if !errors.Is(err, cdnerrors.ErrBadOldPassword) {
+		t.Fatalf("expected ErrBadOldPassword for changed key, got: %v", err)
+	}
+}
+
+func TestSetLocalPasswordNonLocalUser(t *testing.T) {
+	ctx := context.Background()
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Burst 1: if anything is hashed for verification the token is gone
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipKey := netip.MustParsePrefix("192.0.2.1/32")
+
+	var keycloakUserID pgtype.UUID
+	err = keycloakUserID.Scan("00000014-0000-0000-0000-000000000004")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A non-superuser keycloak user trying to set their own local password
+	ad := cdntypes.AuthData{
+		UserID:    &keycloakUserID,
+		Superuser: false,
+	}
+
+	_, err = setLocalPassword(ctx, &logger, ad, dbc, newArgon2Slots(1, 5*time.Second), loginLimiter, loginCache, ipKey, keycloakUserID, "some-old-password-1", "some-new-password-1")
+	if !errors.Is(err, cdnerrors.ErrNotLocalUser) {
+		t.Fatalf("expected ErrNotLocalUser, got: %v", err)
+	}
+
+	_, ok := loginLimiter.take(ipKey)
+	if !ok {
+		t.Fatal("expected no rate limit token to be spent for a non-local user")
+	}
+}
+
+// A local user without a password has no user_argon2keys row. Their old
+// password check must be handled like an unknown user: hashed against dummy
+// values and answered with ErrBadOldPassword, not a lookup error.
+func TestSetLocalPasswordNoPasswordSet(t *testing.T) {
+	ctx := context.Background()
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Burst 1: the dummy hash must spend the only token
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipKey := netip.MustParsePrefix("192.0.2.1/32")
+
+	// username6, a local non-superuser
+	var userID pgtype.UUID
+	err = userID.Scan("00000006-0000-0000-0000-000000000007")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = dbPool.Exec(ctx, "DELETE FROM user_argon2keys WHERE user_id = $1", userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ad := cdntypes.AuthData{
+		UserID:    &userID,
+		Superuser: false,
+	}
+
+	_, err = setLocalPassword(ctx, &logger, ad, dbc, newArgon2Slots(1, 5*time.Second), loginLimiter, loginCache, ipKey, userID, "password6", "some-new-password-1")
+	if !errors.Is(err, cdnerrors.ErrBadOldPassword) {
+		t.Fatalf("expected ErrBadOldPassword, got: %v", err)
+	}
+
+	_, ok := loginLimiter.take(ipKey)
+	if ok {
+		t.Fatal("expected the dummy hash to spend a rate limit token")
+	}
+}
+
+// A password change can wait for an argon2 slot twice: once for the old
+// password verification and once for hashing the new password. Both waits must
+// share one argon2_wait_timeout budget so the request stays within the server
+// write timeout.
+func TestSetLocalPasswordSharedSlotWaitBudget(t *testing.T) {
+	ctx := context.Background()
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Long enough that the old password hash (a lot slower with -race)
+	// fits comfortably within the margin of the elapsed check below.
+	waitTimeout := 4 * time.Second
+	a2Slots := newArgon2Slots(1, waitTimeout)
+
+	// username6, a local non-superuser
+	var userID pgtype.UUID
+	err = userID.Scan("00000006-0000-0000-0000-000000000007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := cdntypes.AuthData{
+		UserID:    &userID,
+		Superuser: false,
+	}
+
+	// The initial holder takes the only slot so the old password
+	// verification has to wait.
+	releaseInitialHolder, err := a2Slots.acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The goroutines below give up quietly if the waiters they expect
+	// never show up, the checks after setLocalPassword() then fail.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	done := make(chan struct{})
+	defer close(done)
+	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer waitCancel()
+
+	start := time.Now()
+
+	// Queue a second holder behind setLocalPassword's old password check.
+	// A released slot goes to the earliest waiter, so it is handed
+	// straight to this holder when the old password hash is done, and the
+	// new password hash has to wait too.
+	wg.Go(func() {
+		err := waitForArgon2Waiters(waitCtx, a2Slots, 1)
+		if err != nil {
+			return
+		}
+		releaseSecondHolder, err := a2Slots.acquire(context.Background())
+		if err != nil {
+			return
+		}
+		<-done
+		releaseSecondHolder()
+	})
+
+	// Once both are queued, the initial holder releases the slot after
+	// half the budget, handing it to setLocalPassword's old password
+	// check, which is first in line.
+	wg.Go(func() {
+		err := waitForArgon2Waiters(waitCtx, a2Slots, 2)
+		if err != nil {
+			releaseInitialHolder()
+			return
+		}
+		time.Sleep(time.Until(start.Add(waitTimeout / 2)))
+		releaseInitialHolder()
+	})
+
+	_, err = setLocalPassword(ctx, &logger, ad, dbc, a2Slots, loginLimiter, loginCache, netip.MustParsePrefix("192.0.2.1/32"), userID, "password6", "some-new-password-1")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, cdnerrors.ErrLoginBusy) {
+		t.Fatalf("expected ErrLoginBusy, got: %v", err)
+	}
+
+	// The old password verification succeeded (and was cached), so it
+	// was the second wait that ran out of budget.
+	if loginCache.Len() != 1 {
+		t.Fatalf("expected old password verification to succeed, login cache has %d entries", loginCache.Len())
+	}
+
+	// With a shared budget the request gives up after waitTimeout/2 +
+	// hash + waitTimeout/2, since only the time spent waiting counts.
+	// Separate budgets would add a full second waitTimeout on top of the
+	// first wait (waitTimeout/2 + hash + waitTimeout). That is at least
+	// 1.5*waitTimeout no matter how slow the machine is, so a limit of
+	// 1.4*waitTimeout catches it while leaving the shared budget case
+	// (waitTimeout + hash) room for a slow hash.
+	if limit := waitTimeout + waitTimeout*2/5; elapsed > limit {
+		t.Fatalf("expected password change to give up within %s, took %s", limit, elapsed)
+	}
+}
+
+// TestSetLocalPasswordHashNotCountedAsWait makes sure the time spent hashing
+// the old password does not use up the slot wait budget shared by a
+// password change: with a waitTimeout shorter than one hash and no other
+// slot holders the password change must succeed.
+func TestSetLocalPasswordHashNotCountedAsWait(t *testing.T) {
+	ctx := context.Background()
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A hash with the default argon2 settings takes tens of milliseconds
+	// (hundreds with -race), so the old password hash alone outlasts this.
+	a2Slots := newArgon2Slots(1, 20*time.Millisecond)
+
+	// username6, a local non-superuser
+	var userID pgtype.UUID
+	err = userID.Scan("00000006-0000-0000-0000-000000000007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := cdntypes.AuthData{
+		UserID:    &userID,
+		Superuser: false,
+	}
+
+	_, err = setLocalPassword(ctx, &logger, ad, dbc, a2Slots, loginLimiter, loginCache, netip.MustParsePrefix("192.0.2.1/32"), userID, "password6", "some-new-password-1")
+	if err != nil {
+		t.Fatalf("expected password change to succeed, got: %v", err)
+	}
+}
+
+func TestPutPasswordRateLimited(t *testing.T) {
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{loginLimiter: loginLimiter})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	b, err := json.Marshal(struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	}{
+		Old: "password6-wrong",
+		New: "updated-password-6",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/users/00000006-0000-0000-0000-000000000007/local-password", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", contentTypeJSON)
+	// Basic auth (uncached) spends the only token, so verifying the
+	// uncached old password must be rate limited.
+	req.SetBasicAuth("username6", "password6")
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		t.Fatalf("expected 429, got %d (%s)", resp.StatusCode, body)
+	}
+	if resp.Header.Get(headerRetryAfter) == "" {
+		t.Fatal("expected Retry-After header on 429")
+	}
+}
+
 func TestPutPassword(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
@@ -1567,6 +1966,16 @@ func TestPutPassword(t *testing.T) {
 			modifiedUser:   "username6",
 			oldPassword:    "password6-wrong",
 			newPassword:    "updated-password-4",
+		},
+		{
+			description:    "failed request for user changing the password of a nonexistent user",
+			username:       "username6",
+			password:       "password6",
+			expectedStatus: http.StatusForbidden,
+			modifiedUserID: "00000006-0000-0000-0000-0000000000ff",
+			modifiedUser:   "nonexistent-user",
+			oldPassword:    "password6",
+			newPassword:    "updated-password-5",
 		},
 		{
 			description:    "failed request for keycloak user",
@@ -9636,6 +10045,77 @@ func TestDeleteNodeGroup(t *testing.T) {
 	}
 }
 
+// waitForArgon2Waiters waits until n requests are waiting for an argon2
+// slot so a test can control the order waiters queue up in.
+func waitForArgon2Waiters(ctx context.Context, a2Slots *argon2Slots, n int64) error {
+	for a2Slots.waiting.Load() != n {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for %d argon2 slot waiters, have %d: %w", n, a2Slots.waiting.Load(), ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func TestArgon2SlotsBusy(t *testing.T) {
+	waitTimeout := 50 * time.Millisecond
+	a2Slots := newArgon2Slots(1, waitTimeout)
+
+	release, err := a2Slots.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, err = a2Slots.acquire(context.Background())
+	if !errors.Is(err, cdnerrors.ErrLoginBusy) {
+		t.Fatalf("expected ErrLoginBusy with all slots held, got: %v", err)
+	}
+	if waited := time.Since(start); waited < waitTimeout {
+		t.Fatalf("expected acquire to wait at least %s, waited %s", waitTimeout, waited)
+	}
+	if waiting := a2Slots.waiting.Load(); waiting != 0 {
+		t.Fatalf("expected no waiters after giving up, have %d", waiting)
+	}
+
+	release()
+
+	release, err = a2Slots.acquire(context.Background())
+	if err != nil {
+		t.Fatalf("expected acquire to succeed after release, got: %v", err)
+	}
+	release()
+}
+
+func TestArgon2SlotsCancelledContext(t *testing.T) {
+	// Long timeout and a free slot: an already cancelled request must
+	// still be refused right away and never get a slot.
+	a2Slots := newArgon2Slots(1, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	_, err := a2Slots.acquire(ctx)
+	if !errors.Is(err, cdnerrors.ErrLoginBusy) {
+		t.Fatalf("expected ErrLoginBusy for cancelled context, got: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected error to wrap context.Canceled, got: %v", err)
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("expected acquire to return at once, waited %s", waited)
+	}
+
+	// The slot must still be free
+	release, err := a2Slots.acquire(context.Background())
+	if err != nil {
+		t.Fatalf("expected free slot after cancelled acquire, got: %v", err)
+	}
+	release()
+}
+
 func TestAuthChallenge(t *testing.T) {
 	expectedChallenge := `Basic realm="test realm"`
 	challenge := authChallenge("Basic", "test realm")
@@ -13806,5 +14286,399 @@ func TestSanitizeURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClientIPKey(t *testing.T) {
+	tests := []struct {
+		description string
+		remoteAddr  string
+		want        string
+	}{
+		{description: "IPv4", remoteAddr: "192.0.2.10:12345", want: "192.0.2.10/32"},
+		{description: "IPv4-mapped IPv6", remoteAddr: "[::ffff:192.0.2.10]:12345", want: "192.0.2.10/32"},
+		{description: "IPv6", remoteAddr: "[2001:db8:1:2:aaaa::1]:443", want: "2001:db8:1:2::/64"},
+		{description: "IPv6 same /64", remoteAddr: "[2001:db8:1:2:bbbb::2]:443", want: "2001:db8:1:2::/64"},
+		{description: "IPv6 other /64", remoteAddr: "[2001:db8:1:3::1]:443", want: "2001:db8:1:3::/64"},
+		{description: "IPv6 with zone", remoteAddr: "[fe80::1%eth0]:443", want: "fe80::/64"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			key, err := clientIPKey(test.remoteAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if key.String() != test.want {
+				t.Fatalf("want key %s, got %s", test.want, key)
+			}
+		})
+	}
+
+	_, err := clientIPKey("not-an-address")
+	if err == nil {
+		t.Fatal("expected error for unparsable remote address")
+	}
+}
+
+func TestLoginRateLimiter(t *testing.T) {
+	burst := 3
+	// Long interval so no tokens are refilled during the test
+	loginLimiter, err := newLoginRateLimiter(time.Hour, burst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := netip.MustParsePrefix("192.0.2.1/32")
+	otherKey := netip.MustParsePrefix("2001:db8::/64")
+
+	for i := range burst + 2 {
+		_, ok := loginLimiter.check(key)
+		if !ok {
+			t.Fatalf("check %d must not spend tokens", i+1)
+		}
+	}
+
+	for i := range burst {
+		_, ok := loginLimiter.take(key)
+		if !ok {
+			t.Fatalf("take %d of %d failed", i+1, burst)
+		}
+	}
+
+	retryAfter, ok := loginLimiter.take(key)
+	if ok {
+		t.Fatal("take must fail when burst is used up")
+	}
+	if retryAfter <= 0 || retryAfter > time.Hour {
+		t.Fatalf("unexpected retryAfter from take: %s", retryAfter)
+	}
+
+	retryAfter, ok = loginLimiter.check(key)
+	if ok {
+		t.Fatal("check must fail when burst is used up")
+	}
+	if retryAfter <= 0 || retryAfter > time.Hour {
+		t.Fatalf("unexpected retryAfter from check: %s", retryAfter)
+	}
+
+	_, ok = loginLimiter.check(otherKey)
+	if !ok {
+		t.Fatal("other key must not be affected")
+	}
+	_, ok = loginLimiter.take(otherKey)
+	if !ok {
+		t.Fatal("other key must not be affected")
+	}
+}
+
+func TestRetryAfterSeconds(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{d: 0, want: "1"},
+		{d: 100 * time.Millisecond, want: "1"},
+		{d: time.Second, want: "1"},
+		{d: 1500 * time.Millisecond, want: "2"},
+		{d: 5 * time.Second, want: "5"},
+	}
+
+	for _, test := range tests {
+		got := retryAfterSeconds(test.d)
+		if got != test.want {
+			t.Fatalf("retryAfterSeconds(%s): want %s, got %s", test.d, test.want, got)
+		}
+	}
+}
+
+// postConsoleLogin posts the console login form and returns the response
+// status code, headers and body. Unlike consoleLogin it does not expect the
+// login to succeed.
+func postConsoleLogin(t *testing.T, tsURL string, username string, password string) (int, http.Header, string) {
+	t.Helper()
+
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+
+	req, err := http.NewRequest(http.MethodPost, tsURL+cdntypes.AuthLoginPath, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return resp.StatusCode, resp.Header, string(body)
+}
+
+// basicAuthGet fetches a user via the API using HTTP Basic auth and returns
+// the response status code and headers.
+func basicAuthGet(t *testing.T, tsURL string, username string, userID string, password string) (int, http.Header) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, tsURL+"/api/v1/users/"+userID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth(username, password)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return resp.StatusCode, resp.Header
+}
+
+const username1ID = "00000006-0000-0000-0000-000000000002"
+
+// basicAuthGetStatus is like basicAuthGet but returns errors instead of
+// calling t.Fatal, so it can be used from goroutines.
+func basicAuthGetStatus(tsURL string, username string, userID string, password string) (int, error) {
+	req, err := http.NewRequest(http.MethodGet, tsURL+"/api/v1/users/"+userID, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.SetBasicAuth(username, password)
+
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	return resp.StatusCode, nil
+}
+
+// TestLoginParallelColdCacheNotRateLimited makes sure parallel requests with
+// the same valid credentials, all queued for a slot before the cache is
+// filled, do not get rate limited once the first one has filled the cache.
+func TestLoginParallelColdCacheNotRateLimited(t *testing.T) {
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2Slots := newArgon2Slots(1, 5*time.Second)
+	ts, dbPool, err := prepareServer(t, testServerInput{argon2Slots: a2Slots, loginLimiter: loginLimiter})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	release, err := a2Slots.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const parallel = 3
+	statuses := make([]int, parallel)
+	errs := make([]error, parallel)
+	var wg sync.WaitGroup
+	for i := range parallel {
+		wg.Go(func() {
+			statuses[i], errs[i] = basicAuthGetStatus(ts.URL, "username1", username1ID, validUserPassword)
+		})
+	}
+
+	// Release the slot once all requests have passed the rate limit
+	// check and are waiting for it
+	waitCtx, waitCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer waitCancel()
+	err = waitForArgon2Waiters(waitCtx, a2Slots, parallel)
+	release()
+	wg.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range parallel {
+		if errs[i] != nil {
+			t.Fatalf("request %d failed: %v", i, errs[i])
+		}
+		if statuses[i] != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i, statuses[i])
+		}
+	}
+}
+
+func TestLoginUnknownUserLooksLikeBadPassword(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	unknownStatus, _, unknownBody := postConsoleLogin(t, ts.URL, "no-such-user", "no-such-password-123")
+	badStatus, _, badBody := postConsoleLogin(t, ts.URL, "username1", "wrong-password-1234")
+
+	if unknownStatus != http.StatusOK || badStatus != http.StatusOK {
+		t.Fatalf("expected 200 for both failed logins, got unknown user: %d, bad password: %d", unknownStatus, badStatus)
+	}
+	if unknownBody != badBody {
+		t.Fatal("login page for unknown user differs from login page for bad password")
+	}
+	if !strings.Contains(badBody, "Login failed!") {
+		t.Fatal("expected failed login message in body")
+	}
+}
+
+func TestLoginRateLimitUnknownUsers(t *testing.T) {
+	burst := 2
+	loginLimiter, err := newLoginRateLimiter(time.Hour, burst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{loginLimiter: loginLimiter})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Unknown users take the hashing path, so they spend tokens
+	for i := range burst {
+		status, _, _ := postConsoleLogin(t, ts.URL, fmt.Sprintf("no-such-user-%d", i), "no-such-password-123")
+		if status != http.StatusOK {
+			t.Fatalf("attempt %d: expected 200, got %d", i+1, status)
+		}
+	}
+
+	status, header, body := postConsoleLogin(t, ts.URL, "no-such-user-x", "no-such-password-123")
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 after burst, got %d", status)
+	}
+	if header.Get(headerRetryAfter) == "" {
+		t.Fatal("expected Retry-After header on 429")
+	}
+	if !strings.Contains(body, "Too many login attempts") {
+		t.Fatal("expected rate limit message in login page body")
+	}
+
+	// A correct but uncached password also needs a hash, so it is refused too
+	status, _, _ = postConsoleLogin(t, ts.URL, "username1", validUserPassword)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 for uncached valid login after burst, got %d", status)
+	}
+}
+
+func TestLoginCacheHitsNotRateLimited(t *testing.T) {
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{loginLimiter: loginLimiter})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// The first request spends the only token, the rest are cache hits
+	for i := range 5 {
+		status, _ := basicAuthGet(t, ts.URL, "username1", username1ID, validUserPassword)
+		if status != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i+1, status)
+		}
+	}
+}
+
+func TestLoginBusyDoesNotSpendToken(t *testing.T) {
+	a2Slots := newArgon2Slots(1, 100*time.Millisecond)
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, dbPool, err := prepareServer(t, testServerInput{argon2Slots: a2Slots, loginLimiter: loginLimiter})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// Hold the only slot so every login needing a hash is busy
+	release, err := a2Slots.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, header := basicAuthGet(t, ts.URL, "username1", username1ID, "wrong-password-1234")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 from API while busy, got %d", status)
+	}
+	if header.Get(headerRetryAfter) != "1" {
+		t.Fatalf("expected Retry-After 1 (100ms wait rounded up), got '%s'", header.Get(headerRetryAfter))
+	}
+
+	status, header, body := postConsoleLogin(t, ts.URL, "username1", "wrong-password-1234")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 from console login while busy, got %d", status)
+	}
+	if header.Get(headerRetryAfter) != "1" {
+		t.Fatalf("expected Retry-After 1 from console login, got '%s'", header.Get(headerRetryAfter))
+	}
+	if !strings.Contains(body, "Server busy") {
+		t.Fatal("expected busy message in login page body")
+	}
+
+	release()
+
+	// The busy attempts did not spend the single token...
+	status, _ = basicAuthGet(t, ts.URL, "username1", username1ID, "wrong-password-1234")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after slot release, got %d", status)
+	}
+
+	// ...but that hashed attempt did
+	status, header = basicAuthGet(t, ts.URL, "username1", username1ID, "wrong-password-1234")
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 once the token is spent, got %d", status)
+	}
+	if header.Get(headerRetryAfter) == "" {
+		t.Fatal("expected Retry-After header on API 429")
 	}
 }

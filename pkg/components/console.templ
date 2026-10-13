@@ -1291,7 +1291,7 @@ templ DisableServiceContent(orgName string, serviceName string, serviceID string
 	}
 }
 
-templ LoginPage(loginFailed bool) {
+templ LoginPage(msg LoginPageMessage) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -1310,8 +1310,13 @@ templ LoginPage(loginFailed bool) {
 					<a href={ templ.URL("/auth/oidc/keycloak") } role="button">Login with Swamid</a>
 					<div class="login-separator">or</div>
 					<h2>Local</h2>
-					if loginFailed {
-						<div class="login-error" role="alert">Login failed!</div>
+					switch msg {
+						case LoginPageFailed:
+							<div class="login-error" role="alert">Login failed!</div>
+						case LoginPageRateLimited:
+							<div class="login-error" role="alert">Too many login attempts, try again later.</div>
+						case LoginPageBusy:
+							<div class="login-error" role="alert">Server busy, try again shortly.</div>
 					}
 					<form method="post" action={ templ.URL(cdntypes.AuthLoginPath) }>
 						<label for="username">
