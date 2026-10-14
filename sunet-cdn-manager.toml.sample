@@ -4,6 +4,11 @@ addr = "127.0.0.1:8444"
 vcl_validation_url = "http://localhost:8888/validate-vcl"
 console_session_max_age = "1h"
 console_session_cap_age = "8h"
+# Optional, defaults to (and can not be lower than) db.query_timeout +
+# 2*login.argon2_wait_timeout + 5s. Each request gets this minus 2s to do its
+# work. Raise it temporarily if a long running request, like re-encrypting org
+# client credentials, runs out of time.
+#write_timeout = "26s"
 
 [db]
 dbname = "cdn"

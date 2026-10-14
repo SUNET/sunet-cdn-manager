@@ -33,6 +33,10 @@ type serverSettings struct {
 	VCLValidationURL     string        `mapstructure:"vcl_validation_url" validate:"required"`
 	ConsoleSessionMaxAge time.Duration `mapstructure:"console_session_max_age" validate:"required,min=1s"`
 	ConsoleSessionCapAge time.Duration `mapstructure:"console_session_cap_age" validate:"required,min=1s,gtefield=ConsoleSessionMaxAge"`
+	// Server WriteTimeout. Optional, it defaults to and can not be lower
+	// than minWriteTimeout(), see GetConfig(). Each request gets this minus
+	// a small margin for writing the response to do its work.
+	WriteTimeout time.Duration `mapstructure:"write_timeout"`
 }
 
 // loginSettings controls the cost of local password verification. All keys
@@ -126,7 +130,38 @@ func GetConfig(localViper *viper.Viper) (Config, error) {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 
+	err = setWriteTimeout(&conf)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
+	}
+
 	return conf, nil
+}
+
+// minWriteTimeout keeps the server write timeout used before it became
+// configurable. It reserves one db.query_timeout, two
+// login.argon2_wait_timeout for the hashing slot waits of a password change
+// (Basic auth check and new password) and 5s for the hashing itself and other
+// fast database steps. It is not a guarantee: a request where several
+// database steps are slow can need more, it then fails at its deadline.
+func minWriteTimeout(conf Config) time.Duration {
+	return conf.DB.QueryTimeout + 2*conf.Login.Argon2WaitTimeout + 5*time.Second
+}
+
+// setWriteTimeout makes server.write_timeout optional. It can only be raised
+// above the minimum, e.g. temporarily for a long running request like
+// re-encrypting org client credentials. Struct tags can not compare values
+// across config sections so this is checked here.
+func setWriteTimeout(conf *Config) error {
+	minTimeout := minWriteTimeout(*conf)
+	switch {
+	case conf.Server.WriteTimeout == 0:
+		conf.Server.WriteTimeout = minTimeout
+	case conf.Server.WriteTimeout < minTimeout:
+		return fmt.Errorf("server.write_timeout %s is lower than the minimum %s (db.query_timeout + 2*login.argon2_wait_timeout + 5s)", conf.Server.WriteTimeout, minTimeout)
+	}
+
+	return nil
 }
 
 func certPoolFromFile(fileName string) (*x509.CertPool, error) {

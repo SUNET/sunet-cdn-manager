@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -61,6 +63,17 @@ const (
 	dbPassword = "cdn-password"
 
 	contentTypeJSON = "application/json"
+
+	// deadlineSlack is how much earlier than expected a context deadline
+	// may be when checked, covering the time spent between creating the
+	// context and reading its deadline.
+	deadlineSlack = 5 * time.Second
+
+	// promptLimit is the longest a call or event expected to finish right
+	// away (e.g. at a 200ms context deadline) may take. It is far below
+	// the client timeouts that would end the call if the deadline was
+	// ignored.
+	promptLimit = 5 * time.Second
 )
 
 var pgContainer *postgres.PostgresContainer
@@ -530,6 +543,7 @@ type testServerInput struct {
 	consoleSessionCapAge time.Duration
 	argon2Slots          *argon2Slots
 	loginLimiter         *loginRateLimiter
+	writeTimeout         time.Duration
 }
 
 func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
@@ -747,6 +761,12 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 
 	conf := config.Config{}
 	conf.Server.ConsoleSessionCapAge = tsi.consoleSessionCapAge
+	// GetConfig() always fills this in, a zero value here would give every
+	// request an already expired deadline
+	if tsi.writeTimeout == 0 {
+		tsi.writeTimeout = 60 * time.Second
+	}
+	conf.Server.WriteTimeout = tsi.writeTimeout
 
 	router := newChiRouter(conf, logger, dbc, tsi.argon2Slots, tsi.loginLimiter, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
 
@@ -1854,6 +1874,197 @@ func TestSetLocalPasswordHashNotCountedAsWait(t *testing.T) {
 	}
 }
 
+func TestDetachedContext(t *testing.T) {
+	dbc := &dbConn{queryTimeout: time.Minute}
+
+	tests := []struct {
+		description   string
+		parentTimeout time.Duration // 0 means no parent deadline
+		wantRemaining time.Duration
+	}{
+		{description: "no parent deadline", parentTimeout: 0, wantRemaining: time.Minute},
+		{description: "earlier parent deadline", parentTimeout: 10 * time.Second, wantRemaining: 10 * time.Second},
+		{description: "later parent deadline", parentTimeout: time.Hour, wantRemaining: time.Minute},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			parent := context.Background()
+			if test.parentTimeout != 0 {
+				var parentCancel context.CancelFunc
+				parent, parentCancel = context.WithTimeout(parent, test.parentTimeout)
+				defer parentCancel()
+			}
+
+			ctx, cancel := dbc.detachedContext(parent)
+			defer cancel()
+
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("expected a deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining > test.wantRemaining || remaining < test.wantRemaining-deadlineSlack {
+				t.Fatalf("expected about %s remaining, got %s", test.wantRemaining, remaining)
+			}
+		})
+	}
+}
+
+// Writes must still be able to complete when the client goes away or the
+// server is shutting down, only the deadline of the parent carries over.
+func TestDetachedContextIgnoresParentCancel(t *testing.T) {
+	dbc := &dbConn{queryTimeout: time.Minute}
+	parent, parentCancel := context.WithTimeout(context.Background(), time.Hour)
+
+	ctx, cancel := dbc.detachedContext(parent)
+	defer cancel()
+	reqCtx, reqCancel := detachedRequestContext(parent)
+	defer reqCancel()
+
+	parentCancel()
+
+	if ctx.Err() != nil {
+		t.Fatalf("expected detachedContext to ignore parent cancellation, got: %v", ctx.Err())
+	}
+	if reqCtx.Err() != nil {
+		t.Fatalf("expected detachedRequestContext to ignore parent cancellation, got: %v", reqCtx.Err())
+	}
+}
+
+func TestDetachedRequestContext(t *testing.T) {
+	// Without a parent deadline (not called for an HTTP request) there is
+	// nothing to inherit, and the context must not be done already
+	ctx, cancel := detachedRequestContext(context.Background())
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("expected no deadline without a parent deadline")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("expected a usable context, got: %v", ctx.Err())
+	}
+
+	// A parent deadline beyond db.query_timeout is kept as is
+	parent, parentCancel := context.WithTimeout(context.Background(), time.Hour)
+	defer parentCancel()
+	parentDeadline, _ := parent.Deadline()
+
+	ctx2, cancel2 := detachedRequestContext(parent)
+	defer cancel2()
+	deadline, ok := ctx2.Deadline()
+	if !ok || !deadline.Equal(parentDeadline) {
+		t.Fatalf("expected the parent deadline %s, got: %s (ok: %t)", parentDeadline, deadline, ok)
+	}
+}
+
+// A write must not outlive the request deadline: if it can not finish in
+// time it is rolled back instead of committing after the client got an error.
+func TestSetLocalPasswordRequestDeadline(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	// db.query_timeout is far longer than the request deadline below, so
+	// only the request deadline can end the blocked write in time.
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginCache, err := lru.New[string, struct{}](128)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginLimiter, err := newLoginRateLimiter(time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// username6, a local non-superuser
+	var userID pgtype.UUID
+	err = userID.Scan("00000006-0000-0000-0000-000000000007")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyBefore []byte
+	err = dbPool.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1", userID).Scan(&keyBefore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shared test pool is capped at one connection, hold the row lock
+	// from a separate pool against the same database.
+	lockCfg := dbPool.Config().Copy()
+	lockCfg.MaxConns = 1
+	lockPool, err := pgxpool.NewWithConfig(ctx, lockCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockPool.Close()
+
+	lockTx, err := lockPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		// Normally already rolled back below, this covers an early
+		// t.Fatal()
+		if rbErr := lockTx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Logf("unable to roll back lock transaction: %v", rbErr)
+		}
+	}()
+
+	_, err = lockTx.Exec(ctx, "SELECT 1 FROM users WHERE id = $1 FOR UPDATE", userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A superuser skips the old password check, so the only step that can
+	// block is the write transaction locking the user row.
+	ad := cdntypes.AuthData{
+		Superuser: true,
+	}
+
+	reqCtx, reqCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer reqCancel()
+
+	start := time.Now()
+	_, err = setLocalPassword(reqCtx, &logger, ad, dbc, newArgon2Slots(1, 5*time.Second), loginLimiter, loginCache, netip.Prefix{}, userID, "", "some-new-password-1")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected the blocked password change to fail")
+	}
+	// Between the 3s request deadline (plus hashing) and the 30s
+	// db.query_timeout that would end the write without it
+	if elapsed > 10*time.Second {
+		t.Fatalf("expected the request deadline to end the write, it took %s", elapsed)
+	}
+
+	err = lockTx.Rollback(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyAfter []byte
+	err = dbPool.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1", userID).Scan(&keyAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(keyBefore, keyAfter) {
+		t.Fatal("expected the password to be unchanged after the write ran out of time")
+	}
+}
+
 func TestPutPasswordRateLimited(t *testing.T) {
 	loginLimiter, err := newLoginRateLimiter(time.Hour, 1)
 	if err != nil {
@@ -2950,7 +3161,7 @@ func createKeycloakContainer(ctx context.Context, t *testing.T) (*oidc.Provider,
 	}
 
 	// Client used for creating/deleting API client credentials in keycloak
-	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc.Client(ctx), client)
+	kcClientManager := newKeycloakClientManager(logger, endpointURL, realm, cc, client)
 
 	oiConf, err := fetchKeyCloakOpenIDConfig(ctx, client, issuerURL.String())
 	if err != nil {
@@ -14680,5 +14891,775 @@ func TestLoginBusyDoesNotSpendToken(t *testing.T) {
 	}
 	if header.Get(headerRetryAfter) == "" {
 		t.Fatal("expected Retry-After header on API 429")
+	}
+}
+
+func TestRequestDeadlineMiddleware(t *testing.T) {
+	budget := time.Minute
+
+	var deadline time.Time
+	var ok bool
+	handler := requestDeadlineMiddleware(budget)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		deadline, ok = r.Context().Deadline()
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !ok {
+		t.Fatal("expected the request context to have a deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > budget || remaining < budget-deadlineSlack {
+		t.Fatalf("expected about %s remaining, got %s", budget, remaining)
+	}
+}
+
+func TestRequestDeadlineMiddlewareLogsOverrun(t *testing.T) {
+	tests := []struct {
+		description string
+		budget      time.Duration
+		block       bool          // handler waits until the request context is done
+		work        time.Duration // handler then keeps working this long, like a detached write
+		clientGone  bool          // the client cancels the request before it starts
+		wantLog     bool
+	}{
+		{description: "finishes in time", budget: time.Minute, block: false, work: 0, clientGone: false, wantLog: false},
+		{description: "exceeds budget", budget: 50 * time.Millisecond, block: true, work: 0, clientGone: false, wantLog: true},
+		{description: "client goes away", budget: time.Minute, block: true, work: 0, clientGone: true, wantLog: false},
+		{description: "client goes away, work exceeds budget", budget: 50 * time.Millisecond, block: true, work: 100 * time.Millisecond, clientGone: true, wantLog: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := zerolog.New(&buf)
+
+			handler := hlog.NewHandler(logger)(requestDeadlineMiddleware(test.budget)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				if test.block {
+					<-r.Context().Done()
+				}
+				time.Sleep(test.work)
+			})))
+
+			reqCtx, reqCancel := context.WithCancel(context.Background())
+			defer reqCancel()
+			if test.clientGone {
+				reqCancel()
+			}
+
+			req := httptest.NewRequestWithContext(reqCtx, http.MethodGet, "/some/path", nil)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			gotLog := strings.Contains(buf.String(), "request exceeded time budget")
+			if gotLog != test.wantLog {
+				t.Fatalf("expected budget log: %t, got: %t, log output: %s", test.wantLog, gotLog, buf.String())
+			}
+		})
+	}
+}
+
+// The VCL validator is called inside the service version write transaction,
+// it must stop at the request deadline like the database steps do.
+func TestValidateServiceVersionConfigHonoursContext(t *testing.T) {
+	requestSeen := make(chan struct{}, 1)
+	release := make(chan struct{})
+	validatorServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		requestSeen <- struct{}{}
+		<-release
+	}))
+	// Deferred in this order so release is closed before Close() waits
+	// for the blocked handler
+	defer validatorServer.Close()
+	defer close(release)
+
+	u, err := url.Parse(validatorServer.URL + "/validate-vcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vclValidator := newVclValidator(u)
+
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vclTemplate, err := os.ReadFile("testdata/vcl/template1.vcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = vclValidator.validateServiceVersionConfig(ctx, confTemplates, cdntypes.InputServiceVersion{
+		VCLTemplate: string(vclTemplate),
+		Domains:     []cdntypes.DomainString{"www.example.com"},
+		DefaultOriginGroup: cdntypes.InputDefaultOriginGroup{
+			Origins: []cdntypes.InputOrigin{{Host: "192.0.2.10", Port: 80}},
+		},
+	})
+	elapsed := time.Since(start)
+
+	select {
+	case <-requestSeen:
+	default:
+		t.Fatalf("expected the validator to be called, got: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
+	}
+	if elapsed > promptLimit {
+		t.Fatalf("expected the context to end the validator call, it took %s", elapsed)
+	}
+}
+
+func TestDeleteClientCredHonoursContext(t *testing.T) {
+	release := make(chan struct{})
+	keycloakServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer keycloakServer.Close()
+	defer close(release)
+
+	baseURL, err := url.Parse(keycloakServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kccm := &keycloakClientManager{
+		realm:   "test-realm",
+		client:  keycloakServer.Client(),
+		baseURL: baseURL,
+		logger:  zerolog.New(zerolog.NewTestWriter(t)),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = kccm.deleteClientCred(ctx, "some-client-id", "some-token")
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
+	}
+	if elapsed > promptLimit {
+		t.Fatalf("expected the context to end the delete call, it took %s", elapsed)
+	}
+}
+
+// Creating a client credential first gets an admin token and then sends the
+// registration request, both must stop at the request deadline.
+func TestCreateClientCredHonoursContext(t *testing.T) {
+	tests := []struct {
+		description string
+		blockPath   string
+	}{
+		{description: "token request blocks", blockPath: "/token"},
+		{description: "registration request blocks", blockPath: "/realms/test-realm/clients-registrations/default"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			release := make(chan struct{})
+			keycloakServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == test.blockPath {
+					<-release
+					return
+				}
+				if r.URL.Path == "/token" {
+					w.Header().Set(headerContentType, "application/json")
+					_, err := w.Write([]byte(`{"access_token":"some-token","token_type":"Bearer","expires_in":300}`))
+					if err != nil {
+						t.Errorf("unable to write token response: %v", err)
+					}
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer keycloakServer.Close()
+			defer close(release)
+
+			baseURL, err := url.Parse(keycloakServer.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cc := clientcredentials.Config{ // #nosec G101 -- Dummy credentials for a stub token endpoint
+				ClientID:     "some-admin-client",
+				ClientSecret: "some-admin-secret",
+				TokenURL:     keycloakServer.URL + "/token",
+			}
+
+			// Long enough that only the request context can end the
+			// call in time
+			client := &http.Client{
+				Timeout: 30 * time.Second,
+			}
+
+			kccm := newKeycloakClientManager(zerolog.New(zerolog.NewTestWriter(t)), baseURL, "test-realm", cc, client)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+
+			start := time.Now()
+			_, _, _, err = kccm.createClientCred(ctx, "some-client-id")
+			elapsed := time.Since(start)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
+			}
+			if elapsed > promptLimit {
+				t.Fatalf("expected the context to end the create call, it took %s", elapsed)
+			}
+		})
+	}
+}
+
+// stubKeycloakClientManager returns a keycloakClientManager talking to a stub
+// keycloak served by handler. The admin token endpoint is at /token.
+func stubKeycloakClientManager(t *testing.T, handler http.HandlerFunc) *keycloakClientManager {
+	t.Helper()
+
+	keycloakServer := httptest.NewServer(handler)
+	t.Cleanup(keycloakServer.Close)
+
+	baseURL, err := url.Parse(keycloakServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cc := clientcredentials.Config{ // #nosec G101 -- Dummy credentials for a stub token endpoint
+		ClientID:     "some-admin-client",
+		ClientSecret: "some-admin-secret",
+		TokenURL:     keycloakServer.URL + "/token",
+	}
+
+	return newKeycloakClientManager(zerolog.New(zerolog.NewTestWriter(t)), baseURL, "test-realm", cc, &http.Client{Timeout: keycloakTimeout})
+}
+
+func writeStubKeycloakToken(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+
+	w.Header().Set(headerContentType, "application/json")
+	_, err := w.Write([]byte(`{"access_token":"some-token","token_type":"Bearer","expires_in":300}`))
+	if err != nil {
+		t.Errorf("unable to write token response: %v", err)
+	}
+}
+
+// When creating a keycloak client fails after the registration request was
+// sent, keycloak may still have created it, whatever the response was. The
+// caller can not remove such a client since it never got its registration
+// access token, so it needs to know to log it. A failure to get the admin
+// token happens before anything is sent.
+func TestCreateClientCredMaybeCreated(t *testing.T) {
+	const regPath = "/realms/test-realm/clients-registrations/default"
+
+	tests := []struct {
+		description  string
+		tokenStatus  int
+		tokenBlocks  bool
+		regStatus    int
+		regBody      string
+		regBlocks    bool
+		maybeCreated bool
+	}{
+		{description: "token request fails", tokenStatus: http.StatusInternalServerError},
+		{description: "token request times out", tokenBlocks: true},
+		{description: "registration rejected", regStatus: http.StatusBadRequest, maybeCreated: true},
+		{description: "registration unexpected success status", regStatus: http.StatusOK, maybeCreated: true},
+		{description: "registration server error", regStatus: http.StatusBadGateway, maybeCreated: true},
+		{description: "registration times out", regBlocks: true, maybeCreated: true},
+		{description: "registration response unreadable", regStatus: http.StatusCreated, regBody: "not json", maybeCreated: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			release := make(chan struct{})
+			defer close(release)
+
+			kccm := stubKeycloakClientManager(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/token":
+					switch {
+					case test.tokenBlocks:
+						<-release
+					case test.tokenStatus != 0:
+						w.WriteHeader(test.tokenStatus)
+					default:
+						writeStubKeycloakToken(t, w)
+					}
+				case regPath:
+					if test.regBlocks {
+						<-release
+						return
+					}
+					w.WriteHeader(test.regStatus)
+					_, err := w.Write([]byte(test.regBody))
+					if err != nil {
+						t.Errorf("unable to write registration response: %v", err)
+					}
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+
+			_, _, _, err := kccm.createClientCred(ctx, "some-client-id")
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if maybeCreated := errors.Is(err, errKeycloakClientMaybeCreated); maybeCreated != test.maybeCreated {
+				t.Fatalf("expected maybe created to be %t, got error: %v", test.maybeCreated, err)
+			}
+		})
+	}
+}
+
+// A keycloak client that may have been created without us getting its
+// registration access token can only be removed by an operator, so its client
+// ID must be logged.
+func TestInsertOrgClientCredentialMaybeRegisteredLogged(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var deleteSeen atomic.Bool
+	kccm := stubKeycloakClientManager(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			writeStubKeycloakToken(t, w)
+		case r.Method == http.MethodDelete:
+			deleteSeen.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	})
+
+	clientCredAEAD, err := chacha20poly1305.NewX(make([]byte, chacha20poly1305.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := zerolog.New(io.MultiWriter(&logBuf, zerolog.NewTestWriter(t)))
+
+	_, err = insertOrgClientCredential(context.Background(), &logger, dbc, "maybe-cred", "maybe", "org1", cdntypes.AuthData{Superuser: true}, kccm, clientCredAEAD)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	// Cleanups run in the background, wait for any that were started
+	// before checking that none tried to delete the client
+	kccm.waitCleanups()
+	if deleteSeen.Load() {
+		t.Fatal("expected no cleanup attempt without a registration access token")
+	}
+
+	if !strings.Contains(logBuf.String(), "may have been registered") || !strings.Contains(logBuf.String(), "sunet-cdn-org-client-") {
+		t.Fatalf("expected the possibly registered client ID to be logged, got log: %s", logBuf.String())
+	}
+}
+
+// When keycloak rejects deleting a client with 401 the client is either
+// already gone or still exists with a registration access token that is no
+// longer valid. The database row must be kept so a client that may still
+// exist is not reported as deleted.
+func TestDeleteOrgClientCredentialKeycloakUnauthorized(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kccm := stubKeycloakClientManager(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			writeStubKeycloakToken(t, w)
+		case r.Method == http.MethodPost:
+			w.Header().Set(headerContentType, "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, err := w.Write([]byte(`{"id":"some-id","secret":"some-secret","registrationAccessToken":"some-registration-token"}`))
+			if err != nil {
+				t.Errorf("unable to write registration response: %v", err)
+			}
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	clientCredAEAD, err := chacha20poly1305.NewX(make([]byte, chacha20poly1305.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ad := cdntypes.AuthData{Superuser: true}
+
+	nocd, err := insertOrgClientCredential(ctx, &logger, dbc, "unauthorized-cred", "unauthorized", "org1", ad, kccm, clientCredAEAD)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = deleteOrgClientCredential(ctx, &logger, dbc, []cipher.AEAD{clientCredAEAD}, ad, kccm, "org1", "unauthorized-cred")
+	if err == nil {
+		t.Fatal("expected the delete to fail")
+	}
+
+	var count int
+	err = dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE id=$1", nocd.ID).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("expected the client credential row to be kept")
+	}
+}
+
+// Removing an orphaned keycloak client can happen because the request ran out
+// of time, so the cleanup must not inherit the expired request deadline.
+func TestKeycloakCleanupContext(t *testing.T) {
+	parent, parentCancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer parentCancel()
+	<-parent.Done()
+
+	ctx, cancel := keycloakCleanupContext(parent)
+	defer cancel()
+
+	if ctx.Err() != nil {
+		t.Fatalf("expected a usable cleanup context, got: %v", ctx.Err())
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected the cleanup context to have its own deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > keycloakTimeout || remaining < keycloakTimeout-deadlineSlack {
+		t.Fatalf("expected about %s remaining, got %s", keycloakTimeout, remaining)
+	}
+}
+
+// The request deadline must reach writes through the real router: a password
+// change blocked on a row lock fails at the request budget instead of after
+// db.query_timeout, and nothing is committed.
+func TestPutPasswordRequestDeadline(t *testing.T) {
+	// A request budget of 8s is well below the 30s db.query_timeout used by
+	// prepareServer()
+	writeTimeout := 10 * time.Second
+	ts, dbPool, err := prepareServer(t, testServerInput{writeTimeout: writeTimeout})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	// username6, a local non-superuser
+	const userID = "00000006-0000-0000-0000-000000000007"
+
+	var keyBefore []byte
+	err = dbPool.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1", userID).Scan(&keyBefore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shared test pool is capped at one connection, hold the row lock
+	// from a separate pool against the same database.
+	lockCfg := dbPool.Config().Copy()
+	lockCfg.MaxConns = 1
+	lockPool, err := pgxpool.NewWithConfig(ctx, lockCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockPool.Close()
+
+	lockTx, err := lockPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		// Normally already rolled back below, this covers an early
+		// t.Fatal()
+		if rbErr := lockTx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Logf("unable to roll back lock transaction: %v", rbErr)
+		}
+	}()
+
+	_, err = lockTx.Exec(ctx, "SELECT 1 FROM users WHERE id = $1 FOR UPDATE", userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := json.Marshal(struct {
+		New string `json:"new"`
+	}{
+		New: "some-new-password-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/users/"+userID+"/local-password", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", contentTypeJSON)
+	// A superuser skips the old password check, so the only step that can
+	// block is the write transaction locking the user row.
+	req.SetBasicAuth("admin", validAdminPassword)
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got: %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if elapsed > writeTimeout {
+		t.Fatalf("expected the request deadline to end the write within %s, it took %s", writeTimeout, elapsed)
+	}
+
+	err = lockTx.Rollback(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyAfter []byte
+	err = dbPool.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1", userID).Scan(&keyAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(keyBefore, keyAfter) {
+		t.Fatal("expected the password to be unchanged after the write ran out of time")
+	}
+}
+
+// When creating a client credential fails after it was registered in
+// keycloak, the orphaned keycloak client is removed in the background so a
+// slow keycloak can not delay the error response past the server
+// WriteTimeout. Shutdown still waits for that cleanup.
+func TestInsertOrgClientCredentialBackgroundCleanup(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	dbc, err := newDBConn(dbPool, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An existing credential with the same name makes the INSERT fail
+	// after the client has been registered in keycloak
+	_, err = dbPool.Exec(ctx, "INSERT INTO org_keycloak_client_credentials (org_id, role_id, name, client_id, description, crypt_registration_access_token) SELECT '00000002-0000-0000-0000-000000000001', id, 'duplicate-cred', 'duplicate-cred-client-id', 'duplicate', '\\x00' FROM roles WHERE name='user'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deleteSeen := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDelete := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+
+	keycloakServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			w.Header().Set(headerContentType, "application/json")
+			_, err := w.Write([]byte(`{"access_token":"some-token","token_type":"Bearer","expires_in":300}`))
+			if err != nil {
+				t.Errorf("unable to write token response: %v", err)
+			}
+		case r.Method == http.MethodPost:
+			w.Header().Set(headerContentType, "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, err := w.Write([]byte(`{"id":"some-id","secret":"some-secret","registrationAccessToken":"some-registration-token"}`))
+			if err != nil {
+				t.Errorf("unable to write registration response: %v", err)
+			}
+		case r.Method == http.MethodDelete:
+			deleteSeen <- struct{}{}
+			<-release
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	// Deferred in this order so the DELETE is released before Close()
+	// waits for the blocked handler
+	defer keycloakServer.Close()
+	defer releaseDelete()
+
+	baseURL, err := url.Parse(keycloakServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cc := clientcredentials.Config{ // #nosec G101 -- Dummy credentials for a stub token endpoint
+		ClientID:     "some-admin-client",
+		ClientSecret: "some-admin-secret",
+		TokenURL:     keycloakServer.URL + "/token",
+	}
+	kccm := newKeycloakClientManager(logger, baseURL, "test-realm", cc, &http.Client{Timeout: keycloakTimeout})
+
+	clientCredAEAD, err := chacha20poly1305.NewX(make([]byte, chacha20poly1305.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ad := cdntypes.AuthData{
+		Superuser: true,
+	}
+
+	start := time.Now()
+	_, err = insertOrgClientCredential(ctx, &logger, dbc, "duplicate-cred", "duplicate", "org1", ad, kccm, clientCredAEAD)
+	elapsed := time.Since(start)
+	if !errors.Is(err, cdnerrors.ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists, got: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected the error to be returned without waiting for the cleanup, it took %s", elapsed)
+	}
+
+	select {
+	case <-deleteSeen:
+	case <-time.After(promptLimit):
+		t.Fatal("expected the orphaned keycloak client to be deleted")
+	}
+
+	cleanupsDone := make(chan struct{})
+	go func() {
+		kccm.waitCleanups()
+		close(cleanupsDone)
+	}()
+
+	select {
+	case <-cleanupsDone:
+		t.Fatal("expected waiting for cleanups to block while the DELETE is in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	releaseDelete()
+
+	select {
+	case <-cleanupsDone:
+	case <-time.After(promptLimit):
+		t.Fatal("expected waiting for cleanups to return once the DELETE completed")
+	}
+}
+
+// A request handler can still be running when Run() waits for keycloak
+// cleanups, since Shutdown() can time out and over HTTP/2 does not wait for
+// handlers of streams reset by the client. A cleanup submitted at that point
+// must either be waited for or not run at all.
+func TestKeycloakCleanupsAfterWait(t *testing.T) {
+	kccm := &keycloakClientManager{}
+
+	var accepted, finished atomic.Int64
+	cleanup := func(release <-chan struct{}) func() {
+		return func() {
+			<-release
+			finished.Add(1)
+		}
+	}
+
+	// Cleanups already running when waitCleanups() is called, they keep
+	// it blocked until released
+	release := make(chan struct{})
+	for range 4 {
+		if !kccm.goCleanup(cleanup(release)) {
+			t.Fatal("expected goCleanup() to accept a cleanup before waitCleanups()")
+		}
+		accepted.Add(1)
+	}
+
+	// Late submissions racing with waitCleanups(), like handlers still
+	// running during shutdown. Each one is either accepted, and then
+	// waited for, or refused.
+	start := make(chan struct{})
+	var submitters sync.WaitGroup
+	for range 8 {
+		submitters.Go(func() {
+			<-start
+			if kccm.goCleanup(cleanup(release)) {
+				accepted.Add(1)
+			}
+		})
+	}
+
+	waitDone := make(chan struct{})
+	close(start)
+	go func() {
+		kccm.waitCleanups()
+		close(waitDone)
+	}()
+	submitters.Wait()
+
+	select {
+	case <-waitDone:
+		t.Fatal("expected waitCleanups() to block while cleanups are running")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-waitDone:
+	case <-time.After(promptLimit):
+		t.Fatal("expected waitCleanups() to return once the cleanups finished")
+	}
+
+	if finished.Load() != accepted.Load() {
+		t.Fatalf("expected all %d accepted cleanups to finish before waitCleanups() returned, %d had", accepted.Load(), finished.Load())
+	}
+
+	ran := false
+	if kccm.goCleanup(func() { ran = true }) {
+		t.Fatal("expected goCleanup() to refuse a cleanup after waitCleanups()")
+	}
+	if ran {
+		t.Fatal("expected a refused cleanup not to run")
 	}
 }

@@ -92,3 +92,82 @@ func TestGetConfigLoginInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestGetConfigWriteTimeoutDefault(t *testing.T) {
+	conf, err := GetConfig(loadSampleConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sample has query_timeout = "15s" and the default
+	// argon2_wait_timeout of 3s
+	want := 15*time.Second + 2*3*time.Second + 5*time.Second
+	if conf.Server.WriteTimeout != want {
+		t.Fatalf("unexpected default write timeout, want: %s, got: %s", want, conf.Server.WriteTimeout)
+	}
+}
+
+func TestGetConfigWriteTimeoutOverride(t *testing.T) {
+	v := loadSampleConfig(t)
+	v.Set("server.write_timeout", "2m")
+
+	conf, err := GetConfig(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if conf.Server.WriteTimeout != 2*time.Minute {
+		t.Fatalf("unexpected write timeout, want: %s, got: %s", 2*time.Minute, conf.Server.WriteTimeout)
+	}
+}
+
+func TestGetConfigWriteTimeoutMinimum(t *testing.T) {
+	tests := []struct {
+		description string
+		settings    map[string]any
+		wantErr     bool
+	}{
+		{
+			description: "below minimum",
+			settings:    map[string]any{"server.write_timeout": "25s"},
+			wantErr:     true,
+		},
+		{
+			description: "at minimum",
+			settings:    map[string]any{"server.write_timeout": "26s"},
+			wantErr:     false,
+		},
+		{
+			description: "negative",
+			settings:    map[string]any{"server.write_timeout": "-1s"},
+			wantErr:     true,
+		},
+		{
+			description: "minimum follows argon2 wait",
+			settings:    map[string]any{"server.write_timeout": "25s", "login.argon2_wait_timeout": "2s"},
+			wantErr:     false,
+		},
+		{
+			description: "minimum follows query timeout",
+			settings:    map[string]any{"server.write_timeout": "26s", "db.query_timeout": "16s"},
+			wantErr:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			v := loadSampleConfig(t)
+			for key, value := range test.settings {
+				v.Set(key, value)
+			}
+
+			_, err := GetConfig(v)
+			if test.wantErr && err == nil {
+				t.Fatalf("expected an error for %v", test.settings)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("expected no error for %v, got: %v", test.settings, err)
+			}
+		})
+	}
+}
