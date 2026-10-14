@@ -27,6 +27,16 @@ var CSSFS embed.FS
 //go:embed all:js/dist
 var JsFS embed.FS
 
+// LoginPageMessage selects the message shown above the local login form
+type LoginPageMessage int
+
+const (
+	LoginPageNoMessage LoginPageMessage = iota
+	LoginPageFailed
+	LoginPageRateLimited
+	LoginPageBusy
+)
+
 type DomainFormFields struct {
 	FQDN string
 }

@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
@@ -71,6 +72,7 @@ import (
 	"golang.org/x/net/idna"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
+	"golang.org/x/time/rate"
 )
 
 func init() {
@@ -167,10 +169,17 @@ const (
 	consolePasswordTooLong           = "Password must be at most 64 characters."
 	consolePasswordConfirmRequired   = "Please confirm the password." // #nosec G101 -- User-facing validation message, not a credential
 	consolePasswordResetFailed       = "Password reset failed."       // #nosec G101 -- User-facing error message, not a credential
+	consoleServerBusy                = "Server busy, try again shortly."
 	consoleCreateUserRenderErr       = "unable to render create user page"
 	consoleEditUserRenderErr         = "unable to render edit user page"
 	consoleUsersRenderErr            = "unable to render users page"
 	consoleNeedOrgMembershipMsg      = "not allowed to view this page, you need to be a member of an organization"
+
+	// Sent with 429 and 503 responses from login and password checks
+	headerRetryAfter = "Retry-After"
+
+	headerContentType = "Content-Type"
+	contentTypeHTML   = "text/html; charset=utf-8"
 
 	// Used for TXT domain verification
 	sunetTxtTag       = "sunet-cdn-verification"
@@ -3171,7 +3180,7 @@ func consumePendingReturnTo(session *sessions.Session) string {
 }
 
 // Endpoint used for console login
-func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) http.HandlerFunc {
+func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -3190,7 +3199,7 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 			}
 
 			// No existing login session, show login form
-			err = renderLoginPage(w, r, false)
+			err = renderLoginPage(w, r, components.LoginPageNoMessage)
 			if err != nil {
 				logger.Err(err).Msg("unable to render login page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -3214,7 +3223,7 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST login form data, treating as failed login")
-				err := renderLoginPage(w, r, true)
+				err := renderLoginPage(w, r, components.LoginPageFailed)
 				if err != nil {
 					logger.Err(err).Msg("unable to render login page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -3223,35 +3232,46 @@ func loginHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[st
 				return
 			}
 
-			var ad cdntypes.AuthData
-
-			err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, formData.Username, formData.Password)
-				if err != nil {
-					return err
-				}
-				return nil
-			})
+			ipKey, err := clientIPKey(r.RemoteAddr)
 			if err != nil {
-				switch err {
-				case pgx.ErrNoRows:
-					// The user does not exist etc, try again
-					err := renderLoginPage(w, r, true)
-					if err != nil {
-						logger.Err(err).Msg("unable to render bad password page for non-existant user")
-					}
-					return
-				case cdnerrors.ErrBadPassword:
-					// Bad password, try again
-					err := renderLoginPage(w, r, true)
-					if err != nil {
-						logger.Err(err).Msg("unable to render bad password page for bad password")
-					}
-					return
-				}
-
-				logger.Err(err).Msg("db request to handle POST login request failed")
+				logger.Err(err).Msg("login: unable to create client IP key")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+
+			ad, err := verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, formData.Username, formData.Password)
+			if err != nil {
+				rateLimitedErr, isRateLimited := errors.AsType[*cdnerrors.LoginRateLimitedError](err)
+				switch {
+				case errors.Is(err, cdnerrors.ErrBadPassword):
+					// Unknown user or bad password, try again
+					err := renderLoginPage(w, r, components.LoginPageFailed)
+					if err != nil {
+						logger.Err(err).Msg("unable to render login page for failed login")
+					}
+				case isRateLimited:
+					// Set Content-Type ourselves since it can not be
+					// sniffed from the body if anything flushes the
+					// response between WriteHeader() and the render.
+					w.Header().Set(headerContentType, contentTypeHTML)
+					w.Header().Set(headerRetryAfter, retryAfterSeconds(rateLimitedErr.RetryAfter))
+					w.WriteHeader(http.StatusTooManyRequests)
+					err := renderLoginPage(w, r, components.LoginPageRateLimited)
+					if err != nil {
+						logger.Err(err).Msg("unable to render login page for rate limited login")
+					}
+				case errors.Is(err, cdnerrors.ErrLoginBusy):
+					w.Header().Set(headerContentType, contentTypeHTML)
+					w.Header().Set(headerRetryAfter, retryAfterSeconds(a2Slots.waitTimeout))
+					w.WriteHeader(http.StatusServiceUnavailable)
+					err := renderLoginPage(w, r, components.LoginPageBusy)
+					if err != nil {
+						logger.Err(err).Msg("unable to render login page for busy login")
+					}
+				default:
+					logger.Err(err).Msg("unable to verify POST login request")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
 				return
 			}
 
@@ -3706,9 +3726,165 @@ func newArgon2DefaultSettings() argon2Settings {
 	return argon2Settings
 }
 
+// argon2Slots bounds the number of concurrent argon2 hash calculations. Each
+// calculation uses argonMemory KiB (64 MiB with the default settings) so
+// without a bound many simultaneous requests could make the server run out of
+// memory. Unlike a sync.Mutex, waiting for a slot gives up when the request
+// context is cancelled (e.g. the client went away) or waitTimeout passes.
+type argon2Slots struct {
+	slots       chan struct{}
+	waitTimeout time.Duration
+	// Number of requests currently waiting for a slot
+	waiting atomic.Int64
+}
+
+func newArgon2Slots(maxConcurrent int, waitTimeout time.Duration) *argon2Slots {
+	return &argon2Slots{
+		slots:       make(chan struct{}, maxConcurrent),
+		waitTimeout: waitTimeout,
+	}
+}
+
+// acquire waits for a free slot. On success the caller must call the returned
+// release function when the hash calculation is done. If ctx is done or
+// waitTimeout passes first it returns cdnerrors.ErrLoginBusy.
+func (s *argon2Slots) acquire(ctx context.Context) (func(), error) {
+	// Check ctx first: if ctx is already done and a slot is free, both
+	// of those select cases below are ready and select picks one at random,
+	// so a cancelled request could otherwise still take the slot.
+	err := ctx.Err()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", cdnerrors.ErrLoginBusy, err)
+	}
+
+	s.waiting.Add(1)
+	defer s.waiting.Add(-1)
+
+	timer := time.NewTimer(s.waitTimeout)
+	defer timer.Stop()
+
+	select {
+	case s.slots <- struct{}{}:
+		return func() { <-s.slots }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", cdnerrors.ErrLoginBusy, ctx.Err())
+	case <-timer.C:
+		return nil, cdnerrors.ErrLoginBusy
+	}
+}
+
+// loginRateLimiterCacheSize is the max number of client keys we keep a rate
+// limiter for. If an attacker controls enough addresses to evict entries
+// they can already get around per-address limiting anyway.
+const loginRateLimiterCacheSize = 10000
+
+// loginRateLimiter is a token bucket per client key (see clientIPKey)
+// limiting how often a client can make us calculate an argon2 hash to verify
+// a password. Verifications answered from the login cache are not counted.
+//
+// Callers use check() before waiting for an argon2 slot and take() once a
+// slot is held, so a request that gives up waiting for a slot never spends a
+// token. This is done instead of Reserve() + Cancel() because
+// rate.Reservation.Cancel() does nothing once the reservation's time to act
+// has passed, which is immediately for a granted reservation.
+//
+// check() does not reserve anything, so concurrent requests from one key
+// can all pass it and queue for a slot. That is fine: the ones that then
+// fail take() release their slot without hashing, so they only hold up
+// other clients for microseconds each.
+type loginRateLimiter struct {
+	mu       sync.Mutex // guards get-or-create in limiters
+	limiters *lru.Cache[netip.Prefix, *rate.Limiter]
+	interval time.Duration
+	burst    int
+}
+
+func newLoginRateLimiter(interval time.Duration, burst int) (*loginRateLimiter, error) {
+	limiters, err := lru.New[netip.Prefix, *rate.Limiter](loginRateLimiterCacheSize)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create login rate limiter LRU cache: %w", err)
+	}
+
+	return &loginRateLimiter{
+		limiters: limiters,
+		interval: interval,
+		burst:    burst,
+	}, nil
+}
+
+func (l *loginRateLimiter) limiterFor(key netip.Prefix) *rate.Limiter {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	limiter, ok := l.limiters.Get(key)
+	if !ok {
+		limiter = rate.NewLimiter(rate.Every(l.interval), l.burst)
+		l.limiters.Add(key, limiter)
+	}
+
+	return limiter
+}
+
+// timeToNextToken returns how long until limiter has a whole token again.
+func (l *loginRateLimiter) timeToNextToken(limiter *rate.Limiter) time.Duration {
+	missing := 1 - limiter.Tokens()
+	if missing <= 0 {
+		return 0
+	}
+	return time.Duration(missing * float64(l.interval))
+}
+
+// check reports whether key has a token available without spending it. If
+// not, retryAfter is the time until one is.
+func (l *loginRateLimiter) check(key netip.Prefix) (time.Duration, bool) {
+	limiter := l.limiterFor(key)
+	if limiter.Tokens() >= 1 {
+		return 0, true
+	}
+	return l.timeToNextToken(limiter), false
+}
+
+// take spends one token for key. It fails if a concurrent request from the
+// same key spent the last token after check().
+func (l *loginRateLimiter) take(key netip.Prefix) (time.Duration, bool) {
+	limiter := l.limiterFor(key)
+	if limiter.Allow() {
+		return 0, true
+	}
+	return l.timeToNextToken(limiter), false
+}
+
+// clientIPKey returns the rate limiting key for a client address as found in
+// http.Request.RemoteAddr: the address itself for IPv4 and the /64 network
+// for IPv6, since a single IPv6 client commonly controls a whole /64. The
+// server terminates TLS itself so RemoteAddr is the real client address.
+func clientIPKey(remoteAddr string) (netip.Prefix, error) {
+	addrPort, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("clientIPKey: unable to parse remote address '%s': %w", remoteAddr, err)
+	}
+
+	addr := addrPort.Addr().Unmap()
+	if addr.Is4() {
+		return addr.Prefix(32)
+	}
+	return addr.Prefix(64)
+}
+
+// retryAfterSeconds formats d for a Retry-After header: whole seconds,
+// rounded up, at least 1.
+func retryAfterSeconds(d time.Duration) string {
+	secs := int64((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return strconv.FormatInt(secs, 10)
+}
+
 type (
-	authDataKey    struct{}
-	sessionDataKey struct{}
+	authDataKey       struct{}
+	sessionDataKey    struct{}
+	clientIPKeyCtxKey struct{}
 )
 
 const (
@@ -3730,8 +3906,8 @@ func sendHumaUnauthorized(logger *zerolog.Logger, api huma.API, humaCtx huma.Con
 }
 
 // Login page/form for browser based (not API) requests
-func renderLoginPage(w http.ResponseWriter, r *http.Request, loginFailed bool) error {
-	component := components.LoginPage(loginFailed)
+func renderLoginPage(w http.ResponseWriter, r *http.Request, msg components.LoginPageMessage) error {
+	component := components.LoginPage(msg)
 	err := component.Render(r.Context(), w)
 	return err
 }
@@ -3815,18 +3991,29 @@ func createLoginCacheKey(userID pgtype.UUID, expectedPasswordHash []byte, expect
 	return hashedCacheKey
 }
 
-func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], username string, password string) (cdntypes.AuthData, error) {
+// dummyArgon2Salt is used when hashing the supplied password for a username
+// that does not exist (or is not a local user with a password) so the
+// response time does not reveal whether the user exists.
+var dummyArgon2Salt = []byte("sunet-cdn-dummy!") // 16 bytes, like real salts
+
+// verifyLocalUserPassword checks username and password for a user of the
+// "local" auth provider, see checkArgon2Password.
+func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, username string, password string) (cdntypes.AuthData, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
-	var argon2Key, argon2Salt []byte
-	var argon2Time, argon2Memory, argon2TagSize uint32
-	var argon2Threads uint8
+	var stored argon2Data
 	var superuser bool
 	var roleName string
 
-	err := tx.QueryRow(
-		ctx,
+	// Query the pool directly instead of using a transaction so the
+	// connection is returned to the pool when Scan() is done, before any
+	// hashing starts.
+	found := false
+	queryCtx, queryCancel := context.WithTimeout(ctx, dbc.queryTimeout)
+	defer queryCancel()
+	err := dbc.dbPool.QueryRow(
+		queryCtx,
 		`SELECT
 			users.id,
 			users.org_id,
@@ -3854,57 +4041,29 @@ func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2M
 		&roleID,
 		&roleName,
 		&superuser,
-		&argon2Key,
-		&argon2Salt,
-		&argon2Time,
-		&argon2Memory,
-		&argon2Threads,
-		&argon2TagSize,
+		&stored.key,
+		&stored.salt,
+		&stored.argonTime,
+		&stored.argonMemory,
+		&stored.argonThreads,
+		&stored.argonTagSize,
 	)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return cdntypes.AuthData{}, fmt.Errorf("verifyLocalUserPassword: unable to look up user: %w", err)
+		}
+		// No such user, not a local user or no password set: hashed
+		// against dummy values by checkArgon2Password().
+	} else {
+		found = true
+	}
+
+	_, err = checkArgon2Password(ctx, logger, a2Slots, loginLimiter, loginCache, ipKey, found, userID, stored, password)
 	if err != nil {
 		return cdntypes.AuthData{}, err
 	}
 
-	hashedCacheKey := createLoginCacheKey(userID, argon2Key, argon2Salt, password)
-
-	validLogin := false
-
-	if _, ok := loginCache.Get(hashedCacheKey); ok {
-		logger.Info().Msgf("login cache hit for userID '%s'", userID.String())
-		validLogin = true
-	} else {
-		logger.Info().Msgf("login cache miss for userID '%s'", userID.String())
-	}
-
-	if !validLogin {
-		// Protect concurrent access to memory intensive argon2
-		// operation. We do not want to overwhelm the server
-		// with many simultaneous logins which could cause OOM
-		// problems.
-		argon2Mutex.Lock()
-		logger.Info().Msgf("calculating hash for userID '%s'", userID.String())
-		loginKey := argon2.IDKey([]byte(password), argon2Salt, argon2Time, argon2Memory, argon2Threads, argon2TagSize)
-		argon2Mutex.Unlock()
-		// Use subtle.ConstantTimeCompare() in an attempt to
-		// not leak password contents via timing attack
-		passwordMatch := (subtle.ConstantTimeCompare(loginKey, argon2Key) == 1)
-
-		if passwordMatch {
-			validLogin = true
-			evicted := loginCache.Add(hashedCacheKey, struct{}{})
-			if evicted {
-				logger.Info().Msg("adding key to loginCache resulted in eviction")
-			}
-		}
-	}
-
-	if !validLogin {
-		return cdntypes.AuthData{}, cdnerrors.ErrBadPassword
-	}
-
-	logger.Info().Msgf("successful login for userID '%s', username '%s'", userID.String(), username)
-
-	return cdntypes.AuthData{
+	ad := cdntypes.AuthData{
 		Username:  &username,
 		UserID:    &userID,
 		OrgID:     orgID,
@@ -3912,7 +4071,95 @@ func dbUserLogin(ctx context.Context, tx pgx.Tx, logger *zerolog.Logger, argon2M
 		RoleID:    roleID,
 		RoleName:  roleName,
 		Superuser: superuser,
-	}, nil
+	}
+
+	return ad, nil
+}
+
+// checkArgon2Password checks password against the stored argon2 data of a
+// local user, found is false if there is no such user or it has no password.
+// No database transaction or connection is held while the argon2 hash is
+// calculated. Unknown users are hashed against dummy values and spend a rate
+// limit token the same way as known ones, so the result does not reveal if a
+// user exists. It returns nil if the password matches, along with how long
+// it waited for an argon2 slot.
+func checkArgon2Password(ctx context.Context, logger *zerolog.Logger, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, found bool, userID pgtype.UUID, stored argon2Data, password string) (time.Duration, error) {
+	var hashedCacheKey string
+	if found {
+		hashedCacheKey = createLoginCacheKey(userID, stored.key, stored.salt, password)
+		if _, ok := loginCache.Get(hashedCacheKey); ok {
+			logger.Info().Msgf("login cache hit for userID '%s'", userID.String())
+			return 0, nil
+		}
+		logger.Info().Msgf("login cache miss for userID '%s'", userID.String())
+	} else {
+		// Hash against dummy values so an unknown user costs the same
+		// as a known one, see dummyArgon2Salt.
+		logger.Info().Msg("local user not found or without password, hashing against dummy values")
+		a2Settings := newArgon2DefaultSettings()
+		stored = argon2Data{
+			key:            make([]byte, a2Settings.argonTagSize),
+			salt:           dummyArgon2Salt,
+			argon2Settings: a2Settings,
+		}
+	}
+
+	// Check (without spending) before waiting for a slot and spend once a
+	// slot is held, so a request that gives up waiting never costs the
+	// client a token. See loginRateLimiter.
+	if retryAfter, ok := loginLimiter.check(ipKey); !ok {
+		logger.Info().Str("ip_key", ipKey.String()).Msg("password verification rate limited")
+		return 0, &cdnerrors.LoginRateLimitedError{RetryAfter: retryAfter}
+	}
+
+	waitStart := time.Now()
+	release, err := a2Slots.acquire(ctx)
+	waited := time.Since(waitStart)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info().Err(err).Str("ip_key", ipKey.String()).Msg("client went away while waiting for argon2 slot")
+		} else {
+			logger.Warn().Err(err).Str("ip_key", ipKey.String()).Int64("waiting", a2Slots.waiting.Load()).Msg("no free argon2 slot for password verification")
+		}
+		return waited, err
+	}
+	defer release()
+
+	// Parallel requests with the same valid credentials can queue for a
+	// slot before the first one has filled the cache, so look again now
+	// that the slot is held instead of spending a token and hashing.
+	if found {
+		if _, ok := loginCache.Get(hashedCacheKey); ok {
+			logger.Info().Msgf("login cache hit for userID '%s' after waiting for argon2 slot", userID.String())
+			return waited, nil
+		}
+	}
+
+	if retryAfter, ok := loginLimiter.take(ipKey); !ok {
+		logger.Info().Str("ip_key", ipKey.String()).Msg("password verification rate limited")
+		return waited, &cdnerrors.LoginRateLimitedError{RetryAfter: retryAfter}
+	}
+
+	if found {
+		logger.Info().Msgf("calculating hash for userID '%s'", userID.String())
+	}
+	loginKey := argon2.IDKey([]byte(password), stored.salt, stored.argonTime, stored.argonMemory, stored.argonThreads, stored.argonTagSize)
+
+	// Use subtle.ConstantTimeCompare() in an attempt to
+	// not leak password contents via timing attack
+	passwordMatch := subtle.ConstantTimeCompare(loginKey, stored.key) == 1
+	if !found || !passwordMatch {
+		return waited, cdnerrors.ErrBadPassword
+	}
+
+	evicted := loginCache.Add(hashedCacheKey, struct{}{})
+	if evicted {
+		logger.Info().Msg("adding key to loginCache resulted in eviction")
+	}
+
+	logger.Info().Msgf("successful login for userID '%s'", userID.String())
+
+	return waited, nil
 }
 
 func jwtToAuthData(ctx context.Context, tx pgx.Tx, jwtToken jwt.Token) (cdntypes.AuthData, error) {
@@ -4145,7 +4392,7 @@ type argon2Data struct {
 	argon2Settings
 }
 
-func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, error) {
+func passwordToArgon2(ctx context.Context, a2Slots *argon2Slots, password string) (argon2Data, error) {
 	argon2Settings := newArgon2DefaultSettings()
 
 	// Generate 16 byte (128 bit) salt as
@@ -4159,9 +4406,13 @@ func passwordToArgon2(argon2Mutex *sync.Mutex, password string) (argon2Data, err
 	}
 
 	// Protect access to memory intensive hash calculation to not overwhelm server if handling many concurrect connections.
-	argon2Mutex.Lock()
+	release, err := a2Slots.acquire(ctx)
+	if err != nil {
+		return argon2Data{}, err
+	}
+	defer release()
+
 	key := argon2.IDKey([]byte(password), salt, argon2Settings.argonTime, argon2Settings.argonMemory, argon2Settings.argonThreads, argon2Settings.argonTagSize)
-	argon2Mutex.Unlock()
 
 	return argon2Data{
 		key:            key,
@@ -4188,6 +4439,26 @@ func upsertArgon2Tx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, a2Data a
 	}
 
 	return keyID, nil
+}
+
+// argon2KeyUnchanged locks the argon2 row of the user and verifies the stored
+// key is still the one an old password was verified against outside of the
+// transaction. If not, the password was changed in the meantime.
+func argon2KeyUnchanged(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, verifiedKey []byte) error {
+	var storedKey []byte
+	err := tx.QueryRow(ctx, "SELECT key FROM user_argon2keys WHERE user_id = $1 FOR UPDATE", userID).Scan(&storedKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cdnerrors.ErrBadOldPassword
+		}
+		return fmt.Errorf("argon2KeyUnchanged: unable to look up argon2 key: %w", err)
+	}
+
+	if subtle.ConstantTimeCompare(storedKey, verifiedKey) != 1 {
+		return cdnerrors.ErrBadOldPassword
+	}
+
+	return nil
 }
 
 func getClientCredEncryptionKeys(conf config.Config) ([][]byte, error) {
@@ -4231,15 +4502,109 @@ func saltFromHex(hexString string) ([]byte, error) {
 	return salt, nil
 }
 
-func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], userID pgtype.UUID, oldPassword string, newPassword string) (pgtype.UUID, error) {
-	// While we could potentially do the argon2 operation inside the
-	// transaction below after we know the user is actually allowed to
-	// change the password it feels wrong to keep a transaction open
-	// longer than necessary. So do the initial hashing here. We still do
-	// another round of hashing when testing the oldPassword below but in
-	// that case it probably makes sense to know the database is in a
-	// consistent state (via FOR SHARE selects) during the operation.
-	a2Data, err := passwordToArgon2(argon2Mutex, newPassword)
+func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, userID pgtype.UUID, oldPassword string, newPassword string) (pgtype.UUID, error) {
+	// A superuser can change any password and a normal user can only change their own password
+	if !ad.Superuser && ad.UserID == nil {
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
+	}
+	if !ad.Superuser && *ad.UserID != userID {
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
+	}
+
+	// Look up the auth provider before hashing anything so a non-local
+	// user gets ErrNotLocalUser instead of a misleading "bad old
+	// password". The stored argon2 data is fetched by user ID in the same
+	// query, so a rename of the user can not affect the old password check
+	// below. A user without a password has no user_argon2keys row, so those
+	// columns are nullable here.
+	found := false
+	var stored argon2Data
+	if !ad.Superuser {
+		var authProviderName string
+		var argon2Time, argon2Memory, argon2TagSize *uint32
+		var argon2Threads *uint8
+		queryCtx, queryCancel := context.WithTimeout(ctx, dbc.queryTimeout)
+		err := dbc.dbPool.QueryRow(
+			queryCtx,
+			`SELECT
+				auth_providers.name,
+				user_argon2keys.key,
+				user_argon2keys.salt,
+				user_argon2keys.time,
+				user_argon2keys.memory,
+				user_argon2keys.threads,
+				user_argon2keys.tag_size
+			FROM users
+			JOIN auth_providers ON users.auth_provider_id = auth_providers.id
+			LEFT JOIN user_argon2keys ON users.id = user_argon2keys.user_id
+			WHERE users.id = $1`,
+			userID,
+		).Scan(
+			&authProviderName,
+			&stored.key,
+			&stored.salt,
+			&argon2Time,
+			&argon2Memory,
+			&argon2Threads,
+			&argon2TagSize,
+		)
+		queryCancel()
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return pgtype.UUID{}, cdnerrors.ErrNotFound
+			}
+			return pgtype.UUID{}, fmt.Errorf("setLocalPassword: unable to look up user: %w", err)
+		}
+
+		if authProviderName != cdntypes.LocalAuthProvider {
+			return pgtype.UUID{}, cdnerrors.ErrNotLocalUser
+		}
+
+		if oldPassword == "" {
+			return pgtype.UUID{}, cdnerrors.ErrOldPasswordRequired
+		}
+
+		if stored.key != nil {
+			found = true
+			stored.argonTime = *argon2Time
+			stored.argonMemory = *argon2Memory
+			stored.argonThreads = *argon2Threads
+			stored.argonTagSize = *argon2TagSize
+		}
+	}
+
+	// A password change can wait for an argon2 slot twice (old password
+	// verification, then the new password hash). Both waits share one
+	// waitTimeout budget so the request stays within the server write
+	// timeout. Only time spent waiting for a slot counts, not time spent
+	// hashing, so a slow hash does not make the second wait fail.
+	var waited time.Duration
+
+	// A normal user must supply the correct old password. Verify it
+	// before the transaction below so no argon2 hashing happens while it
+	// is open. The stored key it was verified against is checked again
+	// inside the transaction via argon2KeyUnchanged().
+	if !ad.Superuser {
+		// Verify the old password before hashing the new one so a client
+		// guessing old passwords is held back by the rate limiter before
+		// costing us a second hash.
+		var err error
+		waited, err = checkArgon2Password(ctx, logger, a2Slots, loginLimiter, loginCache, ipKey, found, userID, stored, oldPassword)
+		if err != nil {
+			if errors.Is(err, cdnerrors.ErrBadPassword) {
+				logger.Err(err).Msg("old password check failed")
+				return pgtype.UUID{}, cdnerrors.ErrBadOldPassword
+			}
+			return pgtype.UUID{}, fmt.Errorf("setLocalPassword: old password verification failed: %w", err)
+		}
+	}
+
+	// Hash the new password before the transaction to not keep it open
+	// longer than necessary. If the budget is already used up slotCtx is
+	// done from the start and acquire() gives up right away.
+	slotCtx, slotCancel := context.WithTimeout(ctx, a2Slots.waitTimeout-waited)
+	defer slotCancel()
+	a2Data, err := passwordToArgon2(slotCtx, a2Slots, newPassword)
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("unable to generate argon2 data from newPassword: %w", err)
 	}
@@ -4249,49 +4614,27 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 
 	var keyID pgtype.UUID
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		var displayName string
-		err := tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR SHARE", userID).Scan(&displayName)
+		// Lock the user and its auth provider, we only allow the
+		// setting of passwords for users using the "local" auth provider
+		var authProviderName string
+		err := tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM users JOIN auth_providers ON users.auth_provider_id = auth_providers.id WHERE users.id = $1 FOR SHARE", userID).Scan(&authProviderName)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
 			}
-			return fmt.Errorf("setLocalPassword: unable to look up user: %w", err)
-		}
-
-		// We only allow the setting of passwords for users using the "local" auth provider
-		var authProviderName string
-		err = tx.QueryRow(dbCtx, "SELECT auth_providers.name FROM auth_providers JOIN users ON auth_providers.id = users.auth_provider_id WHERE users.id=$1 FOR SHARE", userID).Scan(&authProviderName)
-		if err != nil {
-			return fmt.Errorf("unable to look up name of auth provider for user with id '%s': %w", userID, err)
-		}
-
-		// A superuser can change any password and a normal user can only change their own password
-		if !ad.Superuser && ad.UserID == nil {
-			return cdnerrors.ErrForbidden
-		}
-		if !ad.Superuser && *ad.UserID != userID {
-			return cdnerrors.ErrForbidden
+			return fmt.Errorf("setLocalPassword: unable to look up auth provider for user with id '%s': %w", userID, err)
 		}
 
 		if authProviderName != cdntypes.LocalAuthProvider {
 			return cdnerrors.ErrNotLocalUser
 		}
 
-		// A normal user must supply the old password
-		if !ad.Superuser && oldPassword == "" {
-			return cdnerrors.ErrOldPasswordRequired
-		}
-
-		// ... and finally, verify that the password supplied by a normal user actually is correct.
-		// This does result in running a relatively time consuming
-		// operation (argon2 hashing) inside a transaction which is not
-		// optimal but not sure about a better way since we want to do
-		// the following upsert operation in the transaction.
+		// Make sure the password was not changed since the old
+		// password was verified above.
 		if !ad.Superuser {
-			_, err := dbUserLogin(dbCtx, tx, logger, argon2Mutex, loginCache, displayName, oldPassword)
+			err := argon2KeyUnchanged(dbCtx, tx, userID, stored.key)
 			if err != nil {
-				logger.Err(err).Msg("old password check failed")
-				return cdnerrors.ErrBadOldPassword
+				return err
 			}
 		}
 
@@ -5442,7 +5785,7 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 		kccm.createClient,
 		http.MethodPost,
 		regURL,
-		map[string]string{"Content-Type": "application/json"},
+		map[string]string{headerContentType: "application/json"},
 		ckBytes,
 		nil,
 		http.StatusCreated,
@@ -8875,7 +9218,7 @@ func refererHandler(fieldKey string) func(next http.Handler) http.Handler {
 	}
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -8974,11 +9317,11 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 		r.Post("/superuser/node-groups/{nodegroup}/edit", consoleEditNodeGroupHandler(dbc))
 		r.Get("/superuser/users", consoleUsersHandler(dbc))
 		r.Delete("/superuser/users/{userID}", consoleUserDeleteHandler(dbc))
-		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, argon2Mutex))
-		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, argon2Mutex))
+		r.Get("/superuser/create/user", consoleCreateUserHandler(dbc, a2Slots))
+		r.Post("/superuser/create/user", consoleCreateUserHandler(dbc, a2Slots))
 		r.Get("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc))
 		r.Post("/superuser/users/{userID}/edit", consoleEditUserHandler(dbc))
-		r.Post("/superuser/users/{userID}/reset-password", consoleUserResetPasswordHandler(dbc, argon2Mutex, loginCache))
+		r.Post("/superuser/users/{userID}/reset-password", consoleUserResetPasswordHandler(dbc, a2Slots, loginLimiter, loginCache))
 	})
 
 	oauth2HTTPClient := &http.Client{
@@ -8996,8 +9339,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, argon2
 	router.Route("/auth", func(r chi.Router) {
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Get("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
-		r.Post("/login", loginHandler(dbc, argon2Mutex, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
+		r.Get("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
+		r.Post("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
 		r.Post("/logout", logoutHandler(cookieStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
@@ -9069,7 +9412,7 @@ func validateKeycloakToken(ctx context.Context, c *jwk.Cache, issuer string, oiC
 }
 
 // https://huma.rocks/how-to/oauth2-jwt/#huma-auth-middleware
-func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(humaCtx huma.Context, next func(huma.Context)) {
+func newAPIAuthMiddleware(api huma.API, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig) func(humaCtx huma.Context, next func(huma.Context)) {
 	return func(humaCtx huma.Context, next func(huma.Context)) {
 		ctx := humaCtx.Context()
 		logger := zlog.Ctx(ctx)
@@ -9098,6 +9441,10 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, lo
 		var ad cdntypes.AuthData
 		var err error
 
+		// Only Basic auth (local passwords) needs the client IP key for
+		// rate limiting, so Bearer requests never depend on it.
+		var ipKey netip.Prefix
+
 		switch {
 		case strings.EqualFold(scheme, "Basic"):
 			username, password, ok := decodeBasicAuth(token)
@@ -9106,22 +9453,42 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, lo
 				return
 			}
 
-			err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-				ad, err = dbUserLogin(ctx, tx, logger, argon2Mutex, loginCache, username, password)
-				return err
-			})
+			ipKey, err = clientIPKey(humaCtx.RemoteAddr())
 			if err != nil {
-				switch err {
-				case pgx.ErrNoRows, cdnerrors.ErrBadPassword:
+				logger.Err(err).Msg("API basic auth: unable to create client IP key")
+				err = huma.WriteErr(api, humaCtx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				if err != nil {
+					logger.Err(err).Msg("failed writing error about client IP key")
+				}
+				return
+			}
+
+			ad, err = verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, username, password)
+			if err != nil {
+				rateLimitedErr, isRateLimited := errors.AsType[*cdnerrors.LoginRateLimitedError](err)
+				switch {
+				case errors.Is(err, cdnerrors.ErrBadPassword):
 					// The user does not exist, has no password set etc or the password was bad, try again
 					logger.Err(err).Msg("API basic auth failed")
 					sendHumaUnauthorized(logger, api, humaCtx)
-					return
-				}
-				logger.Err(err).Msg("handleBasicAuth transaction failed")
-				err = huma.WriteErr(api, humaCtx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
-				if err != nil {
-					logger.Err(err).Msg("failed writing error about user transaction")
+				case isRateLimited:
+					humaCtx.SetHeader(headerRetryAfter, retryAfterSeconds(rateLimitedErr.RetryAfter))
+					err = huma.WriteErr(api, humaCtx, http.StatusTooManyRequests, "too many login attempts, try again later")
+					if err != nil {
+						logger.Err(err).Msg("failed writing rate limited basic auth response")
+					}
+				case errors.Is(err, cdnerrors.ErrLoginBusy):
+					humaCtx.SetHeader(headerRetryAfter, retryAfterSeconds(a2Slots.waitTimeout))
+					err = huma.WriteErr(api, humaCtx, http.StatusServiceUnavailable, "server busy, try again shortly")
+					if err != nil {
+						logger.Err(err).Msg("failed writing busy basic auth response")
+					}
+				default:
+					logger.Err(err).Msg("handleBasicAuth verification failed")
+					err = huma.WriteErr(api, humaCtx, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+					if err != nil {
+						logger.Err(err).Msg("failed writing error about user verification")
+					}
 				}
 				return
 			}
@@ -9161,6 +9528,9 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, argon2Mutex *sync.Mutex, lo
 		addUserToRequestLog(logger, ad)
 
 		humaCtx = huma.WithValue(humaCtx, authDataKey{}, ad)
+		if ipKey.IsValid() {
+			humaCtx = huma.WithValue(humaCtx, clientIPKeyCtxKey{}, ipKey)
+		}
 
 		next(humaCtx)
 	}
@@ -9181,7 +9551,7 @@ type keycloakClientManager struct {
 	logger       zerolog.Logger
 }
 
-func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEADs []cipher.AEAD, serverURL *url.URL) error {
+func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEADs []cipher.AEAD, serverURL *url.URL) error {
 	apiURL := serverURL.JoinPath("api")
 
 	// Use the last available encryption password for encrypting new values
@@ -9216,7 +9586,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 
 		api := humachi.New(r, config)
 
-		api.UseMiddleware(newAPIAuthMiddleware(api, dbc, argon2Mutex, loginCache, jwkCache, jwtIssuer, oiConf))
+		api.UseMiddleware(newAPIAuthMiddleware(api, dbc, a2Slots, loginLimiter, loginCache, jwkCache, jwtIssuer, oiConf))
 
 		huma.Get(api, "/v1/users", func(ctx context.Context, _ *struct{},
 		) (*usersOutput, error) {
@@ -9334,8 +9704,15 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
 			}
 
-			_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userID, input.Body.OldPassword, input.Body.NewPassword)
+			// Only Basic auth requests carry a client IP key. It is only
+			// used to rate limit the old password verification of a
+			// local non-superuser, and Bearer clients have no UserID so
+			// setLocalPassword refuses them before that.
+			ipKey, _ := ctx.Value(clientIPKeyCtxKey{}).(netip.Prefix)
+
+			_, err = setLocalPassword(ctx, logger, ad, dbc, a2Slots, loginLimiter, loginCache, ipKey, userID, input.Body.OldPassword, input.Body.NewPassword)
 			if err != nil {
+				rateLimitedErr, isRateLimited := errors.AsType[*cdnerrors.LoginRateLimitedError](err)
 				switch {
 				case errors.Is(err, cdnerrors.ErrOldPasswordRequired):
 					return nil, huma.Error400BadRequest("old password is required for non-superusers")
@@ -9347,6 +9724,16 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, argon2Mutex *sync.Mutex, login
 					return nil, huma.Error404NotFound(userNotFound)
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
+				case isRateLimited:
+					return nil, huma.ErrorWithHeaders(
+						huma.Error429TooManyRequests("too many password attempts, try again later"),
+						http.Header{headerRetryAfter: {retryAfterSeconds(rateLimitedErr.RetryAfter)}},
+					)
+				case errors.Is(err, cdnerrors.ErrLoginBusy):
+					return nil, huma.ErrorWithHeaders(
+						huma.Error503ServiceUnavailable("server busy, try again shortly"),
+						http.Header{headerRetryAfter: {retryAfterSeconds(a2Slots.waitTimeout)}},
+					)
 				default:
 					return nil, fmt.Errorf("unable to set password: %w", err)
 				}
@@ -11200,12 +11587,12 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 	}
 	defer dbPool.Close()
 
-	// We get away with a local version of the argon2 mutex here because
-	// Init() is only called when first initializing the database, so there
-	// is no possibility of concurrent calls to argon2 calculations.
-	var initArgon2Mutex sync.Mutex
+	// We get away with local argon2 slots here because Init() is only
+	// called when first initializing the database, so there is no
+	// possibility of concurrent calls to argon2 calculations.
+	initArgon2Slots := newArgon2Slots(1, time.Minute)
 
-	a2Data, err := passwordToArgon2(&initArgon2Mutex, password)
+	a2Data, err := passwordToArgon2(initCtx, initArgon2Slots, password)
 	if err != nil {
 		return InitUser{}, fmt.Errorf("unable to create password data for initial user: %w", err)
 	}
@@ -11772,7 +12159,12 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return err
 	}
 
-	var argon2Mutex sync.Mutex
+	a2Slots := newArgon2Slots(conf.Login.Argon2MaxConcurrent, conf.Login.Argon2WaitTimeout)
+
+	loginLimiter, err := newLoginRateLimiter(conf.Login.IPRateInterval, conf.Login.IPRateBurst)
+	if err != nil {
+		return err
+	}
 
 	loginCache, err := lru.New[string, struct{}](128)
 	if err != nil {
@@ -11843,9 +12235,9 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return fmt.Errorf("unable to parse server URL '%s': %w", conf.Server.URL, err)
 	}
 
-	router := newChiRouter(conf, logger, dbc, &argon2Mutex, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEADs, kcClientManager, parsedTokenURL, serverURL)
+	router := newChiRouter(conf, logger, dbc, a2Slots, loginLimiter, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEADs, kcClientManager, parsedTokenURL, serverURL)
 
-	err = setupHumaAPI(router, dbc, &argon2Mutex, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEADs, serverURL)
+	err = setupHumaAPI(router, dbc, a2Slots, loginLimiter, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEADs, serverURL)
 	if err != nil {
 		return fmt.Errorf("unable to setup Huma API: %w", err)
 	}
@@ -11876,12 +12268,19 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		tlsConfig = setupACME(logger, conf)
 	}
 
+	// The WriteTimeout worst case is a superuser API password change on a
+	// cold login cache: the Basic auth check and setLocalPassword can each
+	// wait argon2_wait_timeout for a slot and then hash, before a
+	// transaction bounded by db.query_timeout. Like before, this assumes
+	// at most one database step in a request runs into db.query_timeout,
+	// each step has its own timeout so a stalled database can still make
+	// a request outlive WriteTimeout.
 	srv := &http.Server{
 		TLSConfig:    tlsConfig,
 		Addr:         conf.Server.Addr,
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: conf.DB.QueryTimeout + 5*time.Second,
+		WriteTimeout: conf.DB.QueryTimeout + 2*conf.Login.Argon2WaitTimeout + 5*time.Second,
 		ErrorLog:     log.New(&zerologErrorWriter{&logger}, "", 0),
 	}
 
@@ -14010,7 +14409,7 @@ func consoleUserDeleteHandler(dbc *dbConn) http.HandlerFunc {
 	}
 }
 
-func consoleCreateUserHandler(dbc *dbConn, argon2Mutex *sync.Mutex) http.HandlerFunc {
+func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -14112,10 +14511,14 @@ func consoleCreateUserHandler(dbc *dbConn, argon2Mutex *sync.Mutex) http.Handler
 			}
 
 			// Hash password before the transaction (same pattern as setLocalPassword)
-			a2Data, err := passwordToArgon2(argon2Mutex, formFields.Password)
+			a2Data, err := passwordToArgon2(ctx, a2Slots, formFields.Password)
 			if err != nil {
 				logger.Err(err).Msg("create user: unable to hash password")
-				formData.Errors.ServerError = "User creation failed"
+				if errors.Is(err, cdnerrors.ErrLoginBusy) {
+					formData.Errors.ServerError = consoleServerBusy
+				} else {
+					formData.Errors.ServerError = "User creation failed"
+				}
 				renderCreateForm(formData)
 				return
 			}
@@ -14323,7 +14726,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 	}
 }
 
-func consoleUserResetPasswordHandler(dbc *dbConn, argon2Mutex *sync.Mutex, loginCache *lru.Cache[string, struct{}]) http.HandlerFunc {
+func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}]) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
@@ -14450,7 +14853,9 @@ func consoleUserResetPasswordHandler(dbc *dbConn, argon2Mutex *sync.Mutex, login
 			return
 		}
 
-		_, err = setLocalPassword(ctx, logger, ad, dbc, argon2Mutex, loginCache, userID, "", formFields.Password)
+		// No client IP key needed: superusers skip the rate limited old
+		// password verification.
+		_, err = setLocalPassword(ctx, logger, ad, dbc, a2Slots, loginLimiter, loginCache, netip.Prefix{}, userID, "", formFields.Password)
 		if err != nil {
 			logger.Err(err).Msg("reset password: unable to set password")
 			switch {
@@ -14471,6 +14876,9 @@ func consoleUserResetPasswordHandler(dbc *dbConn, argon2Mutex *sync.Mutex, login
 				}
 			case errors.Is(err, cdnerrors.ErrForbidden):
 				passwordResetData.Errors.ServerError = "Not allowed to reset password for this user."
+				renderEditWithPasswordError(passwordResetData)
+			case errors.Is(err, cdnerrors.ErrLoginBusy):
+				passwordResetData.Errors.ServerError = consoleServerBusy
 				renderEditWithPasswordError(passwordResetData)
 			default:
 				passwordResetData.Errors.ServerError = consolePasswordResetFailed

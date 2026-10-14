@@ -29,6 +29,7 @@ require (
 	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/time v0.16.0
 )
 
 require (

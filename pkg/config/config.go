@@ -24,6 +24,7 @@ type Config struct {
 	CertMagic           certmagicSettings
 	AcmeDNS             acmeDNSConfig
 	KeycloakClientAdmin keycloakClientAdminSettings `mapstructure:"keycloak_client_admin" validate:"required"`
+	Login               loginSettings
 }
 
 type serverSettings struct {
@@ -32,6 +33,34 @@ type serverSettings struct {
 	VCLValidationURL     string        `mapstructure:"vcl_validation_url" validate:"required"`
 	ConsoleSessionMaxAge time.Duration `mapstructure:"console_session_max_age" validate:"required,min=1s"`
 	ConsoleSessionCapAge time.Duration `mapstructure:"console_session_cap_age" validate:"required,min=1s,gtefield=ConsoleSessionMaxAge"`
+}
+
+// loginSettings controls the cost of local password verification. All keys
+// are optional, see setLoginDefaults().
+type loginSettings struct {
+	// Max number of concurrent argon2 hash calculations, each one uses
+	// about 64 MiB of memory with the default argon2 settings
+	Argon2MaxConcurrent int `mapstructure:"argon2_max_concurrent" validate:"min=1"`
+	// Max time to wait for a free argon2 slot before answering "busy". A
+	// password change shares this budget between its two hashes. The
+	// server WriteTimeout grows with this value, the upper bound is there
+	// because a login hanging for longer than that before saying "busy"
+	// is not useful to anyone.
+	Argon2WaitTimeout time.Duration `mapstructure:"argon2_wait_timeout" validate:"min=100ms,max=4s"`
+	// Number of password verifications needing a hash that a single
+	// client IP (IPv6 /64) can do in a burst
+	IPRateBurst int `mapstructure:"ip_rate_burst" validate:"min=1"`
+	// One more such verification is allowed per interval
+	IPRateInterval time.Duration `mapstructure:"ip_rate_interval" validate:"gt=0s"`
+}
+
+// setLoginDefaults makes the [login] table optional so existing configs keep
+// working.
+func setLoginDefaults(localViper *viper.Viper) {
+	localViper.SetDefault("login.argon2_max_concurrent", 1)
+	localViper.SetDefault("login.argon2_wait_timeout", 3*time.Second)
+	localViper.SetDefault("login.ip_rate_burst", 10)
+	localViper.SetDefault("login.ip_rate_interval", 6*time.Second)
 }
 
 type dbSettings struct {
@@ -84,6 +113,8 @@ type acmeDNSDomainSettings struct {
 }
 
 func GetConfig(localViper *viper.Viper) (Config, error) {
+	setLoginDefaults(localViper)
+
 	var conf Config
 	err := localViper.Unmarshal(&conf)
 	if err != nil {
