@@ -13,7 +13,7 @@ import (
 func loadSampleConfig(t *testing.T) *viper.Viper {
 	t.Helper()
 
-	v := viper.New()
+	v := viper.NewWithOptions(viper.KeyDelimiter(KeyDelimiter))
 	v.SetConfigFile(filepath.Join("..", "..", "sunet-cdn-manager.toml.sample"))
 	// The ".sample" extension is not a known config type
 	v.SetConfigType("toml")
@@ -45,10 +45,10 @@ func TestGetConfigLoginDefaults(t *testing.T) {
 
 func TestGetConfigLoginOverride(t *testing.T) {
 	v := loadSampleConfig(t)
-	v.Set("login.argon2_max_concurrent", 2)
-	v.Set("login.argon2_wait_timeout", "2s")
-	v.Set("login.ip_rate_burst", 3)
-	v.Set("login.ip_rate_interval", "1m")
+	v.Set(key("login", "argon2_max_concurrent"), 2)
+	v.Set(key("login", "argon2_wait_timeout"), "2s")
+	v.Set(key("login", "ip_rate_burst"), 3)
+	v.Set(key("login", "ip_rate_interval"), "1m")
 
 	conf, err := GetConfig(v)
 	if err != nil {
@@ -73,11 +73,11 @@ func TestGetConfigLoginInvalid(t *testing.T) {
 		key         string
 		value       any
 	}{
-		{description: "zero argon2 slots", key: "login.argon2_max_concurrent", value: 0},
-		{description: "too short argon2 wait", key: "login.argon2_wait_timeout", value: "10ms"},
-		{description: "too long argon2 wait", key: "login.argon2_wait_timeout", value: "5s"},
-		{description: "zero burst", key: "login.ip_rate_burst", value: 0},
-		{description: "zero interval", key: "login.ip_rate_interval", value: "0s"},
+		{description: "zero argon2 slots", key: key("login", "argon2_max_concurrent"), value: 0},
+		{description: "too short argon2 wait", key: key("login", "argon2_wait_timeout"), value: "10ms"},
+		{description: "too long argon2 wait", key: key("login", "argon2_wait_timeout"), value: "5s"},
+		{description: "zero burst", key: key("login", "ip_rate_burst"), value: 0},
+		{description: "zero interval", key: key("login", "ip_rate_interval"), value: "0s"},
 	}
 
 	for _, test := range tests {
@@ -109,7 +109,7 @@ func TestGetConfigWriteTimeoutDefault(t *testing.T) {
 
 func TestGetConfigWriteTimeoutOverride(t *testing.T) {
 	v := loadSampleConfig(t)
-	v.Set("server.write_timeout", "2m")
+	v.Set(key("server", "write_timeout"), "2m")
 
 	conf, err := GetConfig(v)
 	if err != nil {
@@ -129,27 +129,27 @@ func TestGetConfigWriteTimeoutMinimum(t *testing.T) {
 	}{
 		{
 			description: "below minimum",
-			settings:    map[string]any{"server.write_timeout": "25s"},
+			settings:    map[string]any{key("server", "write_timeout"): "25s"},
 			wantErr:     true,
 		},
 		{
 			description: "at minimum",
-			settings:    map[string]any{"server.write_timeout": "26s"},
+			settings:    map[string]any{key("server", "write_timeout"): "26s"},
 			wantErr:     false,
 		},
 		{
 			description: "negative",
-			settings:    map[string]any{"server.write_timeout": "-1s"},
+			settings:    map[string]any{key("server", "write_timeout"): "-1s"},
 			wantErr:     true,
 		},
 		{
 			description: "minimum follows argon2 wait",
-			settings:    map[string]any{"server.write_timeout": "25s", "login.argon2_wait_timeout": "2s"},
+			settings:    map[string]any{key("server", "write_timeout"): "25s", key("login", "argon2_wait_timeout"): "2s"},
 			wantErr:     false,
 		},
 		{
 			description: "minimum follows query timeout",
-			settings:    map[string]any{"server.write_timeout": "26s", "db.query_timeout": "16s"},
+			settings:    map[string]any{key("server", "write_timeout"): "26s", key("db", "query_timeout"): "16s"},
 			wantErr:     true,
 		},
 	}

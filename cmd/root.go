@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/SUNET/sunet-cdn-manager/pkg/config"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -56,8 +57,9 @@ func initConfig() {
 	//
 	// Solution to change delimiter found via
 	// https://github.com/spf13/viper/issues/1074, using "::" inspired by
-	// README at https://github.com/spf13/viper
-	localViper = viper.NewWithOptions(viper.KeyDelimiter("::"))
+	// README at https://github.com/spf13/viper. The delimiter lives in the
+	// config package because it also has to build the keys for its defaults.
+	localViper = viper.NewWithOptions(viper.KeyDelimiter(config.KeyDelimiter))
 
 	if cfgFile != "" {
 		// Use config file from the flag.
