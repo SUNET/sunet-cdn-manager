@@ -7105,7 +7105,7 @@ func allocateServiceIPs(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID, r
 
 	usedAddrSet, err := usedAddrBuilder.IPSet()
 	if err != nil {
-		log.Fatalf("failed creating IPset of used addresses")
+		return nil, fmt.Errorf("failed creating IPset of used addresses: %w", err)
 	}
 
 	allocatedV4 := []serviceIPAddr{}
