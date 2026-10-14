@@ -178,8 +178,16 @@ const (
 	// Sent with 429 and 503 responses from login and password checks
 	headerRetryAfter = "Retry-After"
 
-	headerContentType = "Content-Type"
-	contentTypeHTML   = "text/html; charset=utf-8"
+	headerContentType    = "Content-Type"
+	contentTypeHTML      = "text/html; charset=utf-8"
+	contentTypeTextPlain = "text/plain; charset=utf-8"
+
+	// Timeout for HTTP requests to keycloak: OIDC discovery and login,
+	// and creating and deleting org client credentials
+	keycloakTimeout = 15 * time.Second
+
+	// Timeout for HTTP requests to the VCL validator
+	vclValidatorTimeout = 15 * time.Second
 
 	// Used for TXT domain verification
 	sunetTxtTag       = "sunet-cdn-verification"
@@ -246,7 +254,7 @@ type vclValidatorClient struct {
 
 func newVclValidator(u *url.URL) *vclValidatorClient {
 	c := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: vclValidatorTimeout,
 	}
 
 	return &vclValidatorClient{
@@ -255,7 +263,7 @@ func newVclValidator(u *url.URL) *vclValidatorClient {
 	}
 }
 
-func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplates configTemplates, iSvc cdntypes.InputServiceVersion) error {
+func (vclValidator *vclValidatorClient) validateServiceVersionConfig(ctx context.Context, confTemplates configTemplates, iSvc cdntypes.InputServiceVersion) error {
 	err := validate.Struct(iSvc)
 	if err != nil {
 		if validationErrors, ok := err.(validator.ValidationErrors); ok {
@@ -293,9 +301,13 @@ func (vclValidator *vclValidatorClient) validateServiceVersionConfig(confTemplat
 		return fmt.Errorf("unable to generate vcl from svc: %w", err)
 	}
 
-	r := strings.NewReader(vcl)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, vclValidator.url.String(), strings.NewReader(vcl))
+	if err != nil {
+		return fmt.Errorf("unable to create svc validation request: %w", err)
+	}
+	req.Header.Set(headerContentType, contentTypeTextPlain)
 
-	resp, err := vclValidator.client.Post(vclValidator.url.String(), "text/plain; charset=utf-8", r)
+	resp, err := vclValidator.client.Do(req) // #nosec G704 -- The URL comes from server config, not user input, so not susceptible to SSRF
 	if err != nil {
 		return fmt.Errorf("svc validation request failed: %w", err)
 	}
@@ -5667,8 +5679,8 @@ type keycloakClientRegistrationData struct {
 	RegistrationAccessToken string `json:"registrationAccessToken"`
 }
 
-func sendHTTPReq(client *http.Client, method string, url string, headers map[string]string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (respBody []byte, err error) {
-	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
+func sendHTTPReq(ctx context.Context, client *http.Client, method string, url string, headers map[string]string, reqBody []byte, queryParams url.Values, expectedStatusCode int) (respBody []byte, err error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -5768,7 +5780,21 @@ type keycloakClientScopeAttributes struct {
 	GuiOrder               string `json:"gui.order"`
 }
 
-func (kccm *keycloakClientManager) createClientCred(clientID string) (string, string, string, error) {
+// keycloakCleanupContext is used for removing a keycloak client again after
+// the database side of creating it failed. That failure may be the request
+// running out of time, so the cleanup is detached from the request and gets
+// its own timeout.
+func keycloakCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), keycloakTimeout) // #nosec G118 -- caller is responsible for cancelling the context
+}
+
+// errKeycloakClientMaybeCreated is returned by createClientCred() when the
+// registration request failed but keycloak may still have created the client,
+// e.g. because the response never arrived. Without the registration access
+// token from the response the client can not be deleted by us.
+var errKeycloakClientMaybeCreated = errors.New("keycloak client may have been created")
+
+func (kccm *keycloakClientManager) createClientCred(ctx context.Context, clientID string) (string, string, string, error) {
 	ckBody := newKeycloakClientReq(clientID, []string{clientScopeName})
 
 	regURL, err := url.JoinPath(kccm.baseURL.String(), "realms", kccm.realm, "clients-registrations/default")
@@ -5781,42 +5807,68 @@ func (kccm *keycloakClientManager) createClientCred(clientID string) (string, st
 		return "", "", "", fmt.Errorf("createClientCred: unable to marshal json: %w", err)
 	}
 
+	// Fetch the admin token with ctx for each request instead of keeping
+	// a long lived token source around. A long lived token source caches
+	// the admin token but refreshes it with the context it was created
+	// with, so a refresh would not stop at the request deadline. The
+	// cost is one admin token request for each client credential
+	// created. Fetching it separately also means a failure here is known
+	// to have happened before the registration request was sent.
+	tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, kccm.client)
+	token, err := kccm.clientCreds.Token(tokenCtx)
+	if err != nil {
+		return "", "", "", fmt.Errorf("createClientCred: unable to get admin token: %w", err)
+	}
+
 	regBody, err := sendHTTPReq(
-		kccm.createClient,
+		ctx,
+		kccm.client,
 		http.MethodPost,
 		regURL,
-		map[string]string{headerContentType: "application/json"},
+		map[string]string{
+			headerContentType: "application/json",
+			// The same header oauth2.Transport would set
+			"Authorization": token.Type() + " " + token.AccessToken,
+		},
 		ckBytes,
 		nil,
 		http.StatusCreated,
 	)
 	if err != nil {
-		return "", "", "", fmt.Errorf("createClientCred: unable to POST registration request: %w", err)
+		// Once the request has been sent keycloak may have created
+		// the client, e.g. if there was no response or a server error
+		// from a proxy that gave up waiting. Rather than depend on
+		// which statuses keycloak uses for a rejection, any failure
+		// here is reported as maybe created and the client ID gets
+		// logged. If that turns out to be noisy, statuses keycloak is
+		// known to reject with can be excluded, each one backed by a
+		// test against a real keycloak.
+		return "", "", "", fmt.Errorf("createClientCred: unable to POST registration request: %w: %w", errKeycloakClientMaybeCreated, err)
 	}
 
 	var regData keycloakClientRegistrationData
 
 	err = json.Unmarshal(regBody, &regData)
 	if err != nil {
-		return "", "", "", fmt.Errorf("createClientCred: unable to unmarshal client registration JSON: %w", err)
+		return "", "", "", fmt.Errorf("createClientCred: unable to unmarshal client registration JSON: %w: %w", errKeycloakClientMaybeCreated, err)
 	}
 
 	return regData.ID, regData.Secret, regData.RegistrationAccessToken, nil
 }
 
-func (kccm *keycloakClientManager) deleteClientCred(clientID string, registrationAccessToken string) error {
+func (kccm *keycloakClientManager) deleteClientCred(ctx context.Context, clientID string, registrationAccessToken string) error {
 	deleteURL, err := url.JoinPath(kccm.baseURL.String(), "realms", kccm.realm, "clients-registrations/default", clientID)
 	if err != nil {
 		return fmt.Errorf("deleteClientCred: unable to create DELETE URL: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, deleteURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
 	if err != nil {
 		return fmt.Errorf("deleteClientCred: unable to create DELETE request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+registrationAccessToken)
 
-	resp, err := kccm.deleteClient.Do(req) // #nosec G704 -- The URL comes from server config, not user input, so not susceptible to SSRF
+	resp, err := kccm.client.Do(req) // #nosec G704 -- The URL comes from server config, not user input, so not susceptible to SSRF
 	if err != nil {
 		return fmt.Errorf("deleteClientCred: unable to do DELETE request: %w", err)
 	}
@@ -5827,7 +5879,20 @@ func (kccm *keycloakClientManager) deleteClientCred(clientID string, registratio
 		}
 	}()
 
-	if resp.StatusCode != http.StatusNoContent {
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+	case http.StatusUnauthorized:
+		// Keycloak answers 401 both for a client that no longer exists
+		// and for an invalid registration access token, with the same
+		// body (seen with keycloak 26.0.7). Since we can not tell which,
+		// fail so the database row is kept, it then needs an operator:
+		// * Client already deleted, e.g. by an earlier delete whose
+		//   response never arrived: remove the database row.
+		// * Token no longer valid, e.g. if the realm keys used for
+		//   signing it were removed: remove the client in keycloak, then
+		//   the database row.
+		return fmt.Errorf("deleteClientCred: keycloak rejected the registration access token for client ID %s, it is either already deleted or the token is no longer valid", clientID)
+	default:
 		return fmt.Errorf("deleteClientCred: unexpected status code for client deletion: %d", resp.StatusCode)
 	}
 
@@ -5837,7 +5902,7 @@ func (kccm *keycloakClientManager) deleteClientCred(clientID string, registratio
 func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, description string, orgNameOrID string, ad cdntypes.AuthData, kcClientManager *keycloakClientManager, clientCredAEAD cipher.AEAD) (cdntypes.NewOrgClientCredential, error) {
 	var orgID, orgClientTokenID pgtype.UUID
 	var clientID, clientSecret, registrationAccessToken string
-	var clientRegistered bool
+	var clientRegistered, clientMaybeRegistered bool
 
 	if !ad.Superuser && ad.OrgID == nil {
 		return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrForbidden
@@ -5894,8 +5959,9 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		// Doing network operations inside transactions is not optimal
 		// but this way the database contents are rolled back if the
 		// keycloak operation fails.
-		_, clientSecret, registrationAccessToken, err = kcClientManager.createClientCred(clientID)
+		_, clientSecret, registrationAccessToken, err = kcClientManager.createClientCred(dbCtx, clientID)
 		if err != nil {
+			clientMaybeRegistered = errors.Is(err, errKeycloakClientMaybeCreated)
 			return fmt.Errorf("unable to register keycloak client: %w", err)
 		}
 
@@ -5925,10 +5991,28 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		logger.Err(err).Msg("insertOrgClientCredential transaction failed")
 		if clientRegistered {
 			logger.Info().Msgf("operation failed after client was successfully registered, cleanup orphaned client: %s", clientID)
-			cleanupErr := kcClientManager.deleteClientCred(clientID, registrationAccessToken)
-			if cleanupErr != nil {
-				logger.Err(cleanupErr).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
+			// The transaction may have failed because the request ran
+			// out of time, so run the cleanup in the background to not
+			// delay the error response past the server WriteTimeout.
+			// Run() waits for it on shutdown.
+			started := kcClientManager.goCleanup(func() {
+				cleanupCtx, cleanupCancel := keycloakCleanupContext(ctx)
+				defer cleanupCancel()
+				cleanupErr := kcClientManager.deleteClientCred(cleanupCtx, clientID, registrationAccessToken)
+				if cleanupErr != nil {
+					logger.Err(cleanupErr).Msgf("unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
+				}
+			})
+			if !started {
+				logger.Error().Msgf("server is shutting down, unable to cleanup orphaned client credential from keycloak service, client ID: %s", clientID)
 			}
+		}
+		if clientMaybeRegistered {
+			// There is no registration access token to delete it
+			// with, and the keycloak admin client is deliberately not
+			// allowed to look up or delete clients, so leave it to an
+			// operator.
+			logger.Error().Msgf("keycloak client may have been registered without a response, remove it manually if it exists, client ID: %s", clientID)
 		}
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
@@ -6040,7 +6124,7 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 		// transaction but if the request fails we probably want to
 		// roll back the DELETE so we do not get orphaned clients in
 		// keycloak
-		err = kccm.deleteClientCred(clientID, string(registrationAccessToken))
+		err = kccm.deleteClientCred(dbCtx, clientID, string(registrationAccessToken))
 		if err != nil {
 			return fmt.Errorf("unable to delete org client credential from keycloak service: %w", err)
 		}
@@ -6065,9 +6149,11 @@ func reEncryptOrgClientCredentials(ctx context.Context, logger *zerolog.Logger, 
 		return cdntypes.OrgClientRegistrationTokenReEncryptResult{}, cdnerrors.ErrReEncryptionMissingPassword
 	}
 
-	// Use custom timeout here rather than calling dbc.detachedContext()
-	// since it might take longer
-	dbCtx, cancel := dbc.detachedContextWithDuration(ctx, time.Minute*2)
+	// The re-encryption is one transaction over all client credentials
+	// which can take longer than db.query_timeout, so it is only bounded by
+	// the request deadline. If it runs out of time it is rolled back, raise
+	// server.write_timeout temporarily and run it again.
+	dbCtx, cancel := detachedRequestContext(ctx)
 	defer cancel()
 
 	// We use the last encryption password in the configuration file for
@@ -8555,6 +8641,7 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		// lookups to fill in stuff and the idea is that the validator
 		// software is running on the same host as the manager.
 		err = vclValidator.validateServiceVersionConfig(
+			dbCtx,
 			confTemplates,
 			cdntypes.InputServiceVersion{
 				VCLTemplate:             vclTemplate,
@@ -9218,6 +9305,45 @@ func refererHandler(fieldKey string) func(next http.Handler) http.Handler {
 	}
 }
 
+// writeTimeoutResponseMargin is the part of server.write_timeout that
+// requestDeadlineMiddleware keeps back from the request, so there is time
+// left to send a response, usually an error, after the request deadline.
+const writeTimeoutResponseMargin = 2 * time.Second
+
+// shutdownGracePeriod is how long Shutdown() waits beyond
+// server.write_timeout, the longest a request handler can run, for handlers
+// to return after writing their response.
+const shutdownGracePeriod = 5 * time.Second
+
+// requestDeadlineMiddleware gives every request a deadline after budget. All
+// work done for the request, including writes using detachedContext() or
+// detachedRequestContext(), ends by then, so there is time left to send a
+// response before the server WriteTimeout cuts the connection.
+func requestDeadlineMiddleware(budget time.Duration) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ctx, cancel := context.WithTimeout(r.Context(), budget)
+			defer cancel()
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+
+			// Check the elapsed time rather than ctx.Err(): if the
+			// client went away first ctx.Err() is context.Canceled, but
+			// writes using detachedContext() or
+			// detachedRequestContext() keep running until the deadline.
+			if elapsed := time.Since(start); elapsed >= budget {
+				hlog.FromRequest(r).Warn().
+					Str("method", r.Method).
+					Stringer("url", sanitizeURL(r.URL)).
+					Dur("elapsed", elapsed).
+					Dur("budget", budget).
+					Msg("request exceeded time budget")
+			}
+		})
+	}
+}
+
 func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
@@ -9238,6 +9364,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 		hlog.RequestIDHandler("req_id", "Request-Id"),
 	)
 	router.Use(hlogChain...)
+	router.Use(requestDeadlineMiddleware(conf.Server.WriteTimeout - writeTimeoutResponseMargin))
 
 	router.Get("/", rootHandler)
 	router.Handle("/css/*", http.FileServerFS(components.CSSFS))
@@ -9325,7 +9452,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 	})
 
 	oauth2HTTPClient := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: keycloakTimeout,
 	}
 	if devMode {
 		logger.Info().Msg("disabling cert validation for oauth2 callback handler due to dev mode")
@@ -9544,11 +9671,47 @@ const (
 )
 
 type keycloakClientManager struct {
-	realm        string
-	createClient *http.Client // The createClient uses automatic token refreshing
-	deleteClient *http.Client // ... where deleteClient uses a registration_access_token from the database
-	baseURL      *url.URL
-	logger       zerolog.Logger
+	realm string
+	// Admin credentials used for creating client credentials, see
+	// createClientCred()
+	clientCreds clientcredentials.Config
+	// Used for all requests to keycloak: the admin token requests,
+	// registering clients with that admin token and deleting them with
+	// their registration_access_token from the database. Each request
+	// sets its own Authorization header.
+	client  *http.Client
+	baseURL *url.URL
+	logger  zerolog.Logger
+	// Cleanups of orphaned keycloak clients running in the background,
+	// see goCleanup() and waitCleanups(). cleanupsMu makes every
+	// cleanups.Go() either happen before cleanupsClosed is set, and so
+	// before cleanups.Wait(), or not at all.
+	cleanupsMu     sync.Mutex
+	cleanupsClosed bool
+	cleanups       sync.WaitGroup
+}
+
+// goCleanup runs f in the background. Once waitCleanups() has been called it
+// returns false instead and f is not run.
+func (kccm *keycloakClientManager) goCleanup(f func()) bool {
+	kccm.cleanupsMu.Lock()
+	defer kccm.cleanupsMu.Unlock()
+	if kccm.cleanupsClosed {
+		return false
+	}
+	kccm.cleanups.Go(f)
+	return true
+}
+
+// waitCleanups stops goCleanup() from starting new cleanups and waits for the
+// ones already running. Request handlers can still be running when Run()
+// calls this: Shutdown() may have timed out, and over HTTP/2 it does not wait
+// for handlers of streams the client has reset.
+func (kccm *keycloakClientManager) waitCleanups() {
+	kccm.cleanupsMu.Lock()
+	kccm.cleanupsClosed = true
+	kccm.cleanupsMu.Unlock()
+	kccm.cleanups.Wait()
 }
 
 func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], vclValidator *vclValidatorClient, confTemplates configTemplates, kcClientManager *keycloakClientManager, jwkCache *jwk.Cache, jwtIssuer string, oiConf openidConfig, clientCredAEADs []cipher.AEAD, serverURL *url.URL) error {
@@ -12002,13 +12165,13 @@ func fetchKeyCloakOpenIDConfig(ctx context.Context, client *http.Client, issuer 
 	return oiConf, nil
 }
 
-func newKeycloakClientManager(logger zerolog.Logger, baseURL *url.URL, realm string, createClient *http.Client, deleteClient *http.Client) *keycloakClientManager {
+func newKeycloakClientManager(logger zerolog.Logger, baseURL *url.URL, realm string, clientCreds clientcredentials.Config, client *http.Client) *keycloakClientManager {
 	return &keycloakClientManager{
-		realm:        realm,
-		createClient: createClient,
-		deleteClient: deleteClient,
-		baseURL:      baseURL,
-		logger:       logger,
+		realm:       realm,
+		clientCreds: clientCreds,
+		client:      client,
+		baseURL:     baseURL,
+		logger:      logger,
 	}
 }
 
@@ -12030,13 +12193,28 @@ func newDBConn(dbPool *pgxpool.Pool, queryTimeout time.Duration) (*dbConn, error
 
 // detachedContext is used in functions that want to modify the database. We
 // give such functions a chance to complete the database requests instead of
-// instantly getting cancelled in case the server is told to shut down.
+// instantly getting cancelled in case the server is told to shut down or the
+// client goes away. The deadline of parent, set by requestDeadlineMiddleware
+// for HTTP requests, is kept: a write that can not finish within the request
+// budget is rolled back instead of committing after the client got an error.
 func (dbc *dbConn) detachedContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), dbc.queryTimeout) // #nosec G118 -- caller is responsible for cancelling the context
+	deadline := time.Now().Add(dbc.queryTimeout)
+	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	return context.WithDeadline(context.WithoutCancel(parent), deadline) // #nosec G118 -- caller is responsible for cancelling the context
 }
 
-func (dbc *dbConn) detachedContextWithDuration(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), timeout) // #nosec G118 -- caller is responsible for cancelling the context
+// detachedRequestContext is like detachedContext but without the
+// db.query_timeout limit, for a write that is legitimately one long
+// transaction. It is only bounded by the deadline of parent, which for HTTP
+// requests comes from server.write_timeout.
+func detachedRequestContext(parent context.Context) (context.Context, context.CancelFunc) {
+	parentDeadline, ok := parent.Deadline()
+	if !ok {
+		return context.WithCancel(context.WithoutCancel(parent)) // #nosec G118 -- caller is responsible for cancelling the context
+	}
+	return context.WithDeadline(context.WithoutCancel(parent), parentDeadline) // #nosec G118 -- caller is responsible for cancelling the context
 }
 
 func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode bool, shutdownDelay time.Duration, disableDomainVerification bool, disableAcme bool, tlsCertFile string, tlsKeyFile string) error {
@@ -12104,7 +12282,7 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	}
 
 	client := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: keycloakTimeout,
 	}
 	if devMode {
 		logger.Info().Msg("disabling cert validation for OIDC discovery due to dev mode")
@@ -12144,8 +12322,8 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return fmt.Errorf("parsing Keycloak base URL failed: %w", err)
 	}
 
-	// Client used for creating client credentials in keycloak
-	kcClientManager := newKeycloakClientManager(logger, kcClientBaseURL, conf.KeycloakClientAdmin.Realm, cc.Client(providerCtx), client)
+	// Used for creating and deleting client credentials in keycloak
+	kcClientManager := newKeycloakClientManager(logger, kcClientBaseURL, conf.KeycloakClientAdmin.Realm, cc, client)
 
 	vclValidationURL, err := url.Parse(conf.Server.VCLValidationURL)
 	if err != nil {
@@ -12268,41 +12446,45 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		tlsConfig = setupACME(logger, conf)
 	}
 
-	// The WriteTimeout worst case is a superuser API password change on a
-	// cold login cache: the Basic auth check and setLocalPassword can each
-	// wait argon2_wait_timeout for a slot and then hash, before a
-	// transaction bounded by db.query_timeout. Like before, this assumes
-	// at most one database step in a request runs into db.query_timeout,
-	// each step has its own timeout so a stalled database can still make
-	// a request outlive WriteTimeout.
+	// server.write_timeout (see config.GetConfig()) is the time a request
+	// has for both its work and writing the response.
+	// requestDeadlineMiddleware gives the work all but
+	// writeTimeoutResponseMargin of it, and writes using
+	// detachedContext() or detachedRequestContext() stop at that
+	// deadline too. A write that can not finish in time is rolled back
+	// and the client still gets an error, instead of the connection being
+	// cut after the write committed.
 	srv := &http.Server{
 		TLSConfig:    tlsConfig,
 		Addr:         conf.Server.Addr,
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: conf.DB.QueryTimeout + 2*conf.Login.Argon2WaitTimeout + 5*time.Second,
+		WriteTimeout: conf.Server.WriteTimeout,
 		ErrorLog:     log.New(&zerologErrorWriter{&logger}, "", 0),
 	}
 
 	// Handle graceful shutdown of HTTP server when receiving signal
 	idleConnsClosed := make(chan struct{})
 
-	go func(ctx context.Context, logger zerolog.Logger, shutdownDelay time.Duration) {
+	go func(ctx context.Context, logger zerolog.Logger, shutdownDelay time.Duration, shutdownTimeout time.Duration) {
 		<-ctx.Done()
 
 		logger.Info().Msgf("sleeping for %s then calling Shutdown()", shutdownDelay)
 		time.Sleep(shutdownDelay)
 
-		// Do not wait indefinitely for shutdown
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// Do not wait indefinitely for shutdown. Shutdown() stops
+		// accepting new requests first, and a request already running
+		// is done within server.write_timeout, so waiting longer than
+		// that only helps a handler stuck beyond its deadline.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer shutdownCancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			// Error from closing listeners, or context timeout:
-			logger.Err(err).Msg("HTTP server Shutdown() failure")
+			logger.Err(err).Msg("HTTP server Shutdown() failure, requests still running and their keycloak cleanups may be cut off")
 		}
 		close(idleConnsClosed)
-	}(runCtx, logger, shutdownDelay)
+	}(runCtx, logger, shutdownDelay, conf.Server.WriteTimeout+shutdownGracePeriod)
 
 	logger.Info().Str("addr", conf.Server.Addr).Msg("starting HTTPS listener")
 
@@ -12314,6 +12496,11 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 
 	// Wait for workers to complete
 	wg.Wait()
+
+	// Wait for keycloak cleanups started by requests. A request still
+	// running can not start new ones after this, it logs the orphaned
+	// client instead.
+	kcClientManager.waitCleanups()
 
 	return nil
 }
