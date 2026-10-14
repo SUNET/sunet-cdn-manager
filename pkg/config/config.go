@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -15,6 +16,18 @@ import (
 
 // use a single instance of Validate, it caches struct info
 var validate = validator.New(validator.WithRequiredStructEnabled())
+
+// KeyDelimiter is the viper key delimiter the config is read with. It is not
+// the default "." because config such as [acmedns."manager-test.cdn.sunet.se"]
+// has keys containing dots. Every viper instance passed to GetConfig must be
+// created with viper.KeyDelimiter(KeyDelimiter), and keys set programmatically
+// (defaults, overrides) must be built with key() so they nest correctly.
+const KeyDelimiter = "::"
+
+// key builds a nested viper key using KeyDelimiter.
+func key(parts ...string) string {
+	return strings.Join(parts, KeyDelimiter)
+}
 
 type Config struct {
 	Server              serverSettings
@@ -61,10 +74,10 @@ type loginSettings struct {
 // setLoginDefaults makes the [login] table optional so existing configs keep
 // working.
 func setLoginDefaults(localViper *viper.Viper) {
-	localViper.SetDefault("login.argon2_max_concurrent", 1)
-	localViper.SetDefault("login.argon2_wait_timeout", 3*time.Second)
-	localViper.SetDefault("login.ip_rate_burst", 10)
-	localViper.SetDefault("login.ip_rate_interval", 6*time.Second)
+	localViper.SetDefault(key("login", "argon2_max_concurrent"), 1)
+	localViper.SetDefault(key("login", "argon2_wait_timeout"), 3*time.Second)
+	localViper.SetDefault(key("login", "ip_rate_burst"), 10)
+	localViper.SetDefault(key("login", "ip_rate_interval"), 6*time.Second)
 }
 
 type dbSettings struct {
