@@ -11,7 +11,6 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,6 +38,7 @@ import (
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
 	"github.com/SUNET/sunet-cdn-manager/pkg/components"
 	"github.com/SUNET/sunet-cdn-manager/pkg/config"
+	"github.com/SUNET/sunet-cdn-manager/pkg/consolesession"
 	"github.com/SUNET/sunet-cdn-manager/pkg/managerutils"
 	"github.com/SUNET/sunet-cdn-manager/pkg/migrations"
 	"github.com/a-h/templ"
@@ -49,8 +49,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/gorilla/schema"
-	"github.com/gorilla/securecookie"
-	"github.com/gorilla/sessions"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -75,35 +73,30 @@ import (
 	"golang.org/x/time/rate"
 )
 
-func init() {
-	gob.Register(cdntypes.AuthData{})
-	gob.Register(oidcCallbackData{})
-}
-
 //go:embed templates
 var templateFS embed.FS
 
-// Keys used for flash message storing
+// flashMessageKeys lists every flash message category.
 var flashMessageKeys = struct {
-	apiTokens  string
-	domains    string
-	services   string
-	cacheNodes string
-	l4lbNodes  string
-	nodeGroups string
-	ipNetworks string
-	orgs       string
-	users      string
+	apiTokens  consolesession.FlashCategory
+	domains    consolesession.FlashCategory
+	services   consolesession.FlashCategory
+	cacheNodes consolesession.FlashCategory
+	l4lbNodes  consolesession.FlashCategory
+	nodeGroups consolesession.FlashCategory
+	ipNetworks consolesession.FlashCategory
+	orgs       consolesession.FlashCategory
+	users      consolesession.FlashCategory
 }{
-	apiTokens:  "_flash_api_tokens",
-	domains:    "_flash_domains",
-	services:   "_flash_services",
-	cacheNodes: "_flash_cache_nodes",
-	l4lbNodes:  "_flash_l4lb_nodes",
-	nodeGroups: "_flash_node_groups",
-	ipNetworks: "_flash_ip_networks",
-	orgs:       "_flash_orgs",
-	users:      "_flash_users",
+	apiTokens:  "api_tokens",
+	domains:    "domains",
+	services:   "services",
+	cacheNodes: "cache_nodes",
+	l4lbNodes:  "l4lb_nodes",
+	nodeGroups: "node_groups",
+	ipNetworks: "ip_networks",
+	orgs:       "orgs",
+	users:      "users",
 }
 
 const (
@@ -208,10 +201,6 @@ const (
 	// form fields)
 	formMaxSize = 4 * 1024 * 1024
 
-	// Checking for exact error string is not great but securecookie does
-	// not seem to expose better sentinels
-	cookieExpirationError = "securecookie: expired timestamp"
-
 	keycloakPath         = "/oidc/keycloak"
 	keycloakCallbackPath = keycloakPath + "/callback"
 )
@@ -233,13 +222,6 @@ var (
 	// generation, and surface as a raw vinyl compiler error instead of
 	// a clean form re-render. See mapCreateServiceVersionForm.
 	originGroupNamePattern = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
-
-	// pendingReturnToKey holds the path the user was trying to reach
-	// when an unauthenticated request was redirected to /auth/login.
-	// Set by redirectToLoginPage; consumed-and-deleted by loginHandler
-	// POST and oauth2CallbackHandler.
-	pendingReturnToKey = "pending_return_to"
-	selectedOrgKey     = "selected_org"
 
 	validNetworkFamilies = map[int]struct{}{
 		4: {},
@@ -481,7 +463,7 @@ func consoleDashboardHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -507,26 +489,25 @@ func consoleDashboardHandler(dbc *dbConn) http.HandlerFunc {
 			// org dashboard so they land on a useful page rather than
 			// the generic "select an organization" prompt. This fires
 			// on every fresh login since logout destroys the session.
-			// We check key presence (not value) to distinguish "never
-			// selected" from "explicitly unselected via OrgNotSelected".
-			_, hasSelectedOrg := session.Values[selectedOrgKey]
-			if ad.OrgName != nil && !hasSelectedOrg {
+			// We check org_selected (not the selected org) to
+			// distinguish "never selected" from "explicitly unselected
+			// via OrgNotSelected".
+			if ad.OrgName != nil && !sh.orgSelected {
 				orgConsole, err := url.JoinPath(consolePath, "org", *ad.OrgName)
 				if err != nil {
 					logger.Err(err).Msg("unable to create org console path")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
-				session.Values[selectedOrgKey] = *ad.OrgName
-				if err := session.Save(r, w); err != nil {
-					logger.Err(err).Msg("unable to save session after setting default org")
+				if err := sh.setSelectedOrg(ctx, ad.OrgID); err != nil {
+					logger.Err(err).Msg("unable to store default selected org")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					return
 				}
 				validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
 				return
 			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sessionSelectedOrg(session), components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sh.selectedOrgName, components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render console home page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -785,23 +766,12 @@ func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 	}
 }
 
-func getFlashMessageStrings(flashMessages []any) []string {
-	flashMessageStrings := []string{}
-	for _, message := range flashMessages {
-		if stringMessage, ok := message.(string); ok {
-			flashMessageStrings = append(flashMessageStrings, stringMessage)
-		}
-	}
-
-	return flashMessageStrings
-}
-
 func consoleDomainsHandler(dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -844,16 +814,12 @@ func consoleDomainsHandler(dbc *dbConn) http.HandlerFunc {
 
 		// If someone has been redirected from domain creation we will
 		// have a flash message to tell the user so.
-		flashMessages := session.Flashes(flashMessageKeys.domains)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("domains console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.domains, orgName)
+		if err != nil {
+			logger.Err(err).Msg("domains console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
 		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings, ""))
 		if err != nil {
@@ -869,7 +835,7 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -958,9 +924,9 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Domain '%s' deleted!", domainName), flashMessageKeys.domains)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.domains, &orgIdent.id, fmt.Sprintf("Domain '%s' deleted!", domainName))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -983,7 +949,7 @@ func consoleAPITokensHandler(dbc *dbConn, tokenURL *url.URL, serverURL *url.URL)
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1027,16 +993,12 @@ func consoleAPITokensHandler(dbc *dbConn, tokenURL *url.URL, serverURL *url.URL)
 
 		// If someone has been redirected from api token creation we will
 		// have a flash message to tell the user so.
-		flashMessages := session.Flashes(flashMessageKeys.apiTokens)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("consoleAPITokensHandler: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.apiTokens, orgName)
+		if err != nil {
+			logger.Err(err).Msg("consoleAPITokensHandler: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
 		err = renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgName, components.APITokensContent(orgName, orgClientCreds, flashMessageStrings, tokenURL, serverURL, ""))
 		if err != nil {
@@ -1052,7 +1014,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1144,9 +1106,9 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("API token '%s' deleted!", apiTokenName), flashMessageKeys.apiTokens)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.apiTokens, &orgIdent.id, fmt.Sprintf("API token '%s' deleted!", apiTokenName))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -1185,7 +1147,7 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 
 		title := "Add API token"
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1312,9 +1274,9 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("API token '%s' added!", formData.Name), flashMessageKeys.apiTokens)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.apiTokens, &orgIdent.id, fmt.Sprintf("API token '%s' added!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -1525,7 +1487,7 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1616,16 +1578,12 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 
 		// If someone has been redirected from service creation we will
 		// have a flash message to tell the user so.
-		flashMessages := session.Flashes(flashMessageKeys.services)
-		if flashMessages != nil {
-			err := session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("services console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.services, orgName)
+		if err != nil {
+			logger.Err(err).Msg("services console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
 		err = renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ServicesContent(orgName, serviceEntries, ad.Superuser, serviceQuota, flashMessageStrings, ""))
 		if err != nil {
@@ -1643,7 +1601,7 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 
 		title := "Add domain"
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1778,9 +1736,9 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Domain '%s' added!", formData.FQDN), flashMessageKeys.domains)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.domains, &orgIdent.id, fmt.Sprintf("Domain '%s' added!", formData.FQDN))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -1808,7 +1766,7 @@ func consoleCreateServiceHandler(dbc *dbConn) http.HandlerFunc {
 
 		title := "Create service"
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1912,9 +1870,9 @@ func consoleCreateServiceHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Service '%s' added!", formData.Name), flashMessageKeys.services)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.services, &orgIdent.id, fmt.Sprintf("Service '%s' added!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -2136,7 +2094,7 @@ func consoleOrgSwitcherHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 		if !ok {
 			logger.Error().Msg(consoleMissingSessionData)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2158,14 +2116,15 @@ func consoleOrgSwitcherHandler(dbc *dbConn) http.HandlerFunc {
 		}
 
 		var orgURL string
+		var selectedOrgID *pgtype.UUID
 
 		if orgStr == cdntypes.OrgNotSelected {
 			// The special "not selected" option leads to the root console path.
-			// Store empty string rather than deleting the key so that
-			// consoleDashboardHandler can distinguish "explicitly unselected"
-			// from "never selected" (key absent on fresh login).
+			// selectedOrgID stays nil, so setSelectedOrg below stores
+			// "selected, no org" rather than nothing. That lets
+			// consoleDashboardHandler distinguish "explicitly unselected"
+			// from "never selected" (fresh login).
 			orgURL = consolePath
-			session.Values[selectedOrgKey] = ""
 		} else {
 			// Use the same error for validateOrgName() as the user
 			// permission check so we don't give away if an org exists or
@@ -2200,11 +2159,11 @@ func consoleOrgSwitcherHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.Values[selectedOrgKey] = orgIdent.name
+			selectedOrgID = &orgIdent.id
 		}
 
-		if err := session.Save(r, w); err != nil {
-			logger.Err(err).Msg("unable to save session after org switch")
+		if err := sh.setSelectedOrg(ctx, selectedOrgID); err != nil {
+			logger.Err(err).Msg("unable to store selected org")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -3176,36 +3135,21 @@ type nodeGroupAssignForm struct {
 	NodeGroup string `schema:"node-group"`
 }
 
-func consumePendingReturnTo(session *sessions.Session) string {
-	// Consume any pending return-to that was stashed by
-	// redirectToLoginPage when the user originally hit a
-	// protected page.
-	target := consolePath
-	if rtVal, ok := session.Values[pendingReturnToKey]; ok {
-		if rt, isString := rtVal.(string); isString && rt != "" {
-			target = rt
-		}
-		delete(session.Values, pendingReturnToKey)
-	}
-
-	return target
-}
-
 // Endpoint used for console login
-func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) http.HandlerFunc {
+func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], store *consolesession.Store, preLogin *preLoginCookies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 		switch r.Method {
 		case http.MethodGet:
-			session := getSession(r, cookieStore)
-			adRef, err := authFromSession(logger, session, consoleSessionCapAge, r, w)
+			_, sh, err := authenticateConsoleRequest(w, r, dbc, store)
 			if err != nil {
-				// We have already written a failure response to the client, just return
+				logger.Err(err).Msg("login: unable to check existing session")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			if adRef != nil {
-				logger.Info().Msg("login: session already has ad data, redirecting to console")
+			if sh != nil {
+				logger.Info().Msg("login: request already has a valid session, redirecting to console")
 				validatedRedirect(consolePath, w, r, http.StatusFound)
 				return
 			}
@@ -3251,7 +3195,14 @@ func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimi
 				return
 			}
 
-			ad, err := verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, formData.Username, formData.Password)
+			ad, verifiedKey, err := verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, formData.Username, formData.Password)
+			if err == nil {
+				addUserToRequestLog(logger, ad)
+				// Fails with cdnerrors.ErrBadPassword, answered below
+				// like a wrong password, if the password was changed
+				// since it was verified above.
+				err = startConsoleSession(w, r, dbc, store, preLogin, *ad.UserID, loginMethodLocal, verifiedKey)
+			}
 			if err != nil {
 				rateLimitedErr, isRateLimited := errors.AsType[*cdnerrors.LoginRateLimitedError](err)
 				switch {
@@ -3281,26 +3232,12 @@ func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimi
 						logger.Err(err).Msg("unable to render login page for busy login")
 					}
 				default:
-					logger.Err(err).Msg("unable to verify POST login request")
+					logger.Err(err).Msg("unable to verify POST login request or start the session")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 				return
 			}
-
-			addUserToRequestLog(logger, ad)
-
-			session := getSession(r, cookieStore)
-
-			target := consumePendingReturnTo(session)
-
-			logger.Info().Msg("loginHandler: saving login session")
-			err = setSessionAuth(logger, session, ad, r, w)
-			if err != nil {
-				return
-			}
-
-			logger.Info().Str("return_to", target).Msg("redirecting logged-in user")
-			validatedRedirect(target, w, r, http.StatusFound)
+			// startConsoleSession has redirected to the return-to path
 			return
 		default:
 			logger.Error().Str("method", r.Method).Msg("method not supported for login handler")
@@ -3311,18 +3248,31 @@ func loginHandler(dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimi
 }
 
 // Endpoint used for console logout
-func logoutHandler(cookieStore *sessions.CookieStore) http.HandlerFunc {
+func logoutHandler(dbc *dbConn, store *consolesession.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 
-		session := logoutSession(r, cookieStore)
+		dbCtx, cancel := dbc.detachedContext(r.Context())
+		defer cancel()
 
-		logger.Info().Msg("logout: saving expired login session")
-		err := session.Save(r, w)
+		// Only a session whose secret matches is ended
+		err := destroyRequestSession(dbCtx, r, store, "logout")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logger.Err(err).Msg("logout: unable to end session")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
+
+		// Clear both console cookies. The pre-login cookie is normally
+		// gone after login, but a login started and abandoned since then,
+		// e.g. in another tab, leaves one behind.
+		clearCookie(w, sessionCookieName)
+		clearCookie(w, preLoginCookieName)
+
+		// Clear cached console pages. Never send "cookies" here: it
+		// clears every cookie of the registrable domain (e.g. all of
+		// sunet.se), not just ours.
+		w.Header().Set("Clear-Site-Data", `"cache"`)
 
 		// User is logged out; send them to the console (which will
 		// redirect them through the auth flow if they hit a protected
@@ -3347,49 +3297,12 @@ func oidcRandString() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func logoutSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Session {
-	logger := hlog.FromRequest(r)
-	session, err := cookieStore.Get(r, cookieName)
-	if err != nil {
-		var scErr securecookie.Error
-		if errors.As(err, &scErr) && scErr.IsDecode() && scErr.Error() == cookieExpirationError {
-			logger.Debug().Err(err).Msg("logoutSession: cookie is expired")
-		} else {
-			logger.Err(err).Msg("logoutSession: unable to decode existing cookie")
-		}
-	}
-
-	// Individual sessions can be deleted by setting Options.MaxAge = -1 for that session.
-	session.Options.MaxAge = -1
-
-	return session
-}
-
-func getSession(r *http.Request, cookieStore *sessions.CookieStore) *sessions.Session {
-	logger := hlog.FromRequest(r)
-	session, err := cookieStore.Get(r, cookieName)
-	if err != nil {
-		var scErr securecookie.Error
-		if errors.As(err, &scErr) && scErr.IsDecode() && scErr.Error() == cookieExpirationError {
-			logger.Debug().Err(err).Msg("getSession: cookie is expired")
-		} else {
-			logger.Err(err).Msg("getSession: unable to decode existing cookie, using new one")
-		}
-	}
-
-	return session
-}
-
 // Endpoint used for initiating OIDC auth against keycloak
-func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.Config) http.HandlerFunc {
+func keycloakOIDCHandler(preLogin *preLoginCookies, oauth2Config oauth2.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		var err error
 
-		// Note: pendingReturnToKey may already be in the session
-		// (set by redirectToLoginPage before the user clicked the
-		// Keycloak link). It is consumed by oauth2CallbackHandler
-		// after a successful round-trip; no need to read it here.
 		ocd := oidcCallbackData{}
 
 		ocd.State, err = oidcRandString()
@@ -3406,13 +3319,19 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.
 
 		ocd.PKCEVerifier = oauth2.GenerateVerifier()
 
-		// Add items to session that we access to check in the callback handler
-		session := getSession(r, cookieStore)
-		session.Values["ocd"] = ocd
-		err = session.Save(r, w)
+		// Add the OIDC data to the existing pre-login cookie instead of
+		// writing a new one, which would drop the return-to path stored by
+		// redirectToLoginPage. A missing or invalid cookie reads as empty.
+		pre, err := preLogin.read(r)
+		if err != nil && !errors.Is(err, http.ErrNoCookie) {
+			logger.Info().Err(err).Msg("keycloakOIDCHandler: ignoring invalid pre-login cookie")
+		}
+		pre.OIDC = &ocd
+
+		err = preLogin.write(w, pre)
 		if err != nil {
-			logger.Err(err).Msg("unable to save keycloak OIDC session")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logger.Err(err).Msg("unable to write pre-login cookie for keycloak OIDC login")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -3421,28 +3340,27 @@ func keycloakOIDCHandler(cookieStore *sessions.CookieStore, oauth2Config oauth2.
 }
 
 // Endpoint used for receiving callback from keycloak server
-func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.CookieStore, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbc *dbConn) http.HandlerFunc {
+func oauth2CallbackHandler(oauth2HTTPClient *http.Client, preLogin *preLoginCookies, store *consolesession.Store, oauth2Config oauth2.Config, idTokenVerifier *oidc.IDTokenVerifier, dbc *dbConn) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		session := getSession(r, cookieStore)
-		if session.IsNew {
-			http.Error(w, "session data not available", http.StatusBadRequest)
+		// The OIDC state, nonce and PKCE verifier written by
+		// keycloakOIDCHandler. A missing, tampered or expired cookie
+		// means the login has to be started again.
+		pre, err := preLogin.read(r)
+		if err != nil || pre.OIDC == nil {
+			logger.Info().Err(err).Msg("OIDC callback without valid pre-login cookie")
+			http.Error(w, oidcLoginExpired, http.StatusBadRequest)
 			return
 		}
+		ocd := *pre.OIDC
 
-		ocdInt, ok := session.Values["ocd"]
-		if !ok {
-			http.Error(w, "OIDC callback data not present in session", http.StatusInternalServerError)
-			return
-		}
-
-		ocd := ocdInt.(oidcCallbackData)
-
-		err := validate.Struct(ocd)
+		err = validate.Struct(ocd)
 		if err != nil {
 			logger.Err(err).Msg("OIDC callback struct did not validate")
+			http.Error(w, oidcLoginExpired, http.StatusBadRequest)
+			return
 		}
 
 		if r.URL.Query().Get("state") != ocd.State {
@@ -3543,32 +3461,15 @@ func oauth2CallbackHandler(oauth2HTTPClient *http.Client, cookieStore *sessions.
 
 		addUserToRequestLog(logger, ad)
 
-		target := consumePendingReturnTo(session)
-
-		logger.Info().Msg("oauth2CallbackHandler: saving login session")
-		err = setSessionAuth(logger, session, ad, r, w)
+		// startConsoleSession also clears the pre-login cookie: the OIDC
+		// state, nonce and PKCE verifier in it belong to this login only.
+		err = startConsoleSession(w, r, dbc, store, preLogin, *ad.UserID, loginMethodKeycloak, nil)
 		if err != nil {
+			logger.Err(err).Msg("oauth2CallbackHandler: unable to start console session")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-
-		logger.Info().Str("return_to", target).Msg("redirecting logged-in user (OIDC)")
-		validatedRedirect(target, w, r, http.StatusFound)
 	}
-}
-
-func setSessionAuth(logger *zerolog.Logger, s *sessions.Session, ad cdntypes.AuthData, r *http.Request, w http.ResponseWriter) error {
-	s.Values["login_at"] = time.Now().Unix()
-
-	s.Values["ad"] = ad
-
-	err := s.Save(r, w)
-	if err != nil {
-		logger.Err(err).Msg("setSessionAuth: unable to save session")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return err
-	}
-
-	return nil
 }
 
 type keycloakClaims struct {
@@ -3646,50 +3547,14 @@ func keycloakUser(ctx context.Context, dbc *dbConn, logger *zerolog.Logger, subj
 		if err != nil {
 			return cdntypes.AuthData{}, fmt.Errorf("renaming user based on keycloak data failed: %w", err)
 		}
-
-		displayName = kcc.PreferredUsername
 	}
 
-	var roleID pgtype.UUID
-	var orgID *pgtype.UUID // can be nil if not belonging to a organization
-	var orgName *string    // same as above
-	var superuser bool
-	var roleName string
-	err = dbc.dbPool.QueryRow(
-		dbCtx,
-		`SELECT
-			users.id,
-			users.org_id,
-			orgs.name,
-			users.role_id,
-			roles.name,
-			roles.superuser
-		FROM users
-		JOIN roles ON users.role_id = roles.id
-		LEFT JOIN orgs ON users.org_id = orgs.id
-		WHERE users.id=$1`,
-		userID,
-	).Scan(
-		&userID,
-		&orgID,
-		&orgName,
-		&roleID,
-		&roleName,
-		&superuser,
-	)
+	ad, err := loadUserAuth(dbCtx, dbc, userID)
 	if err != nil {
-		return cdntypes.AuthData{}, err
+		return cdntypes.AuthData{}, fmt.Errorf("unable to load keycloak user: %w", err)
 	}
 
-	return cdntypes.AuthData{
-		Username:  &displayName,
-		UserID:    &userID,
-		OrgID:     orgID,
-		OrgName:   orgName,
-		RoleID:    roleID,
-		RoleName:  roleName,
-		Superuser: superuser,
-	}, nil
+	return ad, nil
 }
 
 type argon2Settings struct {
@@ -3895,7 +3760,6 @@ func retryAfterSeconds(d time.Duration) string {
 
 type (
 	authDataKey       struct{}
-	sessionDataKey    struct{}
 	clientIPKeyCtxKey struct{}
 )
 
@@ -3924,8 +3788,17 @@ func renderLoginPage(w http.ResponseWriter, r *http.Request, msg components.Logi
 	return err
 }
 
-func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessions.Session) {
+func redirectToLoginPage(w http.ResponseWriter, r *http.Request, preLogin *preLoginCookies) {
 	logger := hlog.FromRequest(r)
+
+	// Change only the return-to path in the existing pre-login cookie
+	// instead of writing a new one, which would drop the OIDC data of a
+	// Keycloak login in progress, e.g. in another tab, and make its
+	// callback fail. A missing or invalid cookie reads as empty.
+	pre, err := preLogin.read(r)
+	if err != nil && !errors.Is(err, http.ErrNoCookie) {
+		logger.Info().Err(err).Msg("redirectToLoginPage: ignoring invalid pre-login cookie")
+	}
 
 	// If this was a GET, store the target so we can send the user back to
 	// where they were trying to go. For other methods like POST or PUT we
@@ -3939,10 +3812,11 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessio
 		// in Last-write-wins which should be good enough: a single browser
 		// session has a single most-recent intent.
 		//
-		// The main reason of storing the return-to path in the session over
-		// using e.g. a return_to query param is that this means we can trust
-		// that the value was written by our server rather than whatever free-form
-		// input was forged by a client via e.g. "?return_to=https://evil.example..."
+		// The main reason of storing the return-to path in the signed
+		// pre-login cookie over using e.g. a return_to query param is that
+		// this means we can trust that the value was written by our server
+		// rather than whatever free-form input was forged by a client via
+		// e.g. "?return_to=https://evil.example..."
 		requestURI := r.URL.RequestURI()
 
 		// Try to not exceed cookie size limits
@@ -3951,21 +3825,22 @@ func redirectToLoginPage(w http.ResponseWriter, r *http.Request, session *sessio
 			return
 		}
 
-		session.Values[pendingReturnToKey] = requestURI
-		if err := session.Save(r, w); err != nil {
+		pre.ReturnTo = requestURI
+		if err := preLogin.write(w, pre); err != nil {
 			// Losing the deep-link is acceptable degradation; failing
 			// the response is not.
-			logger.Err(err).Msg("redirectToLoginPage: failed to save pending return-to in session")
+			logger.Err(err).Msg("redirectToLoginPage: failed to store pending return-to in pre-login cookie")
 		}
-	} else {
+	} else if pre.ReturnTo != "" {
 		// For other methods clean up potentially stale redirect
 		// target to make sure we end up at the default location
-		// instead.
-		if _, ok := session.Values[pendingReturnToKey]; ok {
-			delete(session.Values, pendingReturnToKey)
-			if err := session.Save(r, w); err != nil {
-				logger.Err(err).Msg("redirectToLoginPage: failed to clear return-to in session")
-			}
+		// instead. Without one there is nothing to write: rewriting
+		// the cookie would only extend the lifetime of its OIDC data.
+		pre.ReturnTo = ""
+		if pre.OIDC == nil {
+			clearCookie(w, preLoginCookieName)
+		} else if err := preLogin.write(w, pre); err != nil {
+			logger.Err(err).Msg("redirectToLoginPage: failed to clear return-to in pre-login cookie")
 		}
 	}
 
@@ -4010,7 +3885,8 @@ var dummyArgon2Salt = []byte("sunet-cdn-dummy!") // 16 bytes, like real salts
 
 // verifyLocalUserPassword checks username and password for a user of the
 // "local" auth provider, see checkArgon2Password.
-func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, username string, password string) (cdntypes.AuthData, error) {
+// It also returns the stored argon2 key the password was checked against.
+func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, username string, password string) (cdntypes.AuthData, []byte, error) {
 	var userID, roleID pgtype.UUID
 	var orgID *pgtype.UUID // can be nil if not belonging to a organization
 	var orgName *string    // same as above
@@ -4062,7 +3938,7 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 	)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return cdntypes.AuthData{}, fmt.Errorf("verifyLocalUserPassword: unable to look up user: %w", err)
+			return cdntypes.AuthData{}, nil, fmt.Errorf("verifyLocalUserPassword: unable to look up user: %w", err)
 		}
 		// No such user, not a local user or no password set: hashed
 		// against dummy values by checkArgon2Password().
@@ -4072,7 +3948,7 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 
 	_, err = checkArgon2Password(ctx, logger, a2Slots, loginLimiter, loginCache, ipKey, found, userID, stored, password)
 	if err != nil {
-		return cdntypes.AuthData{}, err
+		return cdntypes.AuthData{}, nil, err
 	}
 
 	ad := cdntypes.AuthData{
@@ -4085,7 +3961,9 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 		Superuser: superuser,
 	}
 
-	return ad, nil
+	// The key is checked again when a console session is created, see
+	// argon2KeyStillCurrent
+	return ad, stored.key, nil
 }
 
 // checkArgon2Password checks password against the stored argon2 data of a
@@ -4255,54 +4133,6 @@ func jwtToAuthData(ctx context.Context, tx pgx.Tx, jwtToken jwt.Token) (cdntypes
 	}, nil
 }
 
-const (
-	cookieName = "sunet-cdn-manager"
-)
-
-func authFromSession(logger *zerolog.Logger, session *sessions.Session, consoleSessionCapAge time.Duration, r *http.Request, w http.ResponseWriter) (*cdntypes.AuthData, error) {
-	adInt, ok := session.Values["ad"]
-	if !ok {
-		return nil, nil
-	}
-
-	loginAt, ok := session.Values["login_at"].(int64)
-	var expireReason string
-	if !ok {
-		expireReason = "login_at missing or unexpected type in session"
-	} else if time.Since(time.Unix(loginAt, 0)) > consoleSessionCapAge {
-		expireReason = "session exceeded cap age"
-	}
-	if expireReason != "" {
-		// The user has been logged in for the maximum allowed duration, force re-auth
-		logger.Info().Str("reason", expireReason).Msg("expiring user session")
-		session.Options.MaxAge = -1
-		err := session.Save(r, w)
-		if err != nil {
-			logger.Err(err).Msg("authFromSession: unable to save expired session")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return nil, err
-		}
-		// Redirect to login (or just display the loginform if already at the login handler)
-		return nil, nil
-	}
-
-	// Slide inactivity window by re-saving (MaxAge is reset)
-	// This could lead to duplicate Set-Cookie headers if further handlers
-	// call Save() but as the last header is expected to win it should be
-	// fine.
-	err := session.Save(r, w)
-	if err != nil {
-		logger.Err(err).Msg("authFromSession: unable to slide session window")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil, err
-	}
-
-	ad := adInt.(cdntypes.AuthData)
-	addUserToRequestLog(logger, ad)
-	logger.Info().Msg("using authentication data from session")
-	return &ad, nil
-}
-
 func addUserToRequestLog(logger *zerolog.Logger, ad cdntypes.AuthData) {
 	logger.UpdateContext(func(c zerolog.Context) zerolog.Context {
 		if ad.Username != nil {
@@ -4326,31 +4156,6 @@ func addUserToRequestLog(logger *zerolog.Logger, ad cdntypes.AuthData) {
 		c = c.Bool("superuser", ad.Superuser)
 		return c
 	})
-}
-
-func consoleAuthMiddleware(cookieStore *sessions.CookieStore, consoleSessionCapAge time.Duration) func(next http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			logger := hlog.FromRequest(r)
-
-			session := getSession(r, cookieStore)
-			adRef, err := authFromSession(logger, session, consoleSessionCapAge, r, w)
-			if err != nil {
-				// We have already written a failure response to the client, just return
-				return
-			}
-			if adRef == nil {
-				logger.Info().Msg("consoleAuthMiddleware: redirecting to login page")
-				redirectToLoginPage(w, r, session)
-				return
-			}
-
-			ctx := context.WithValue(r.Context(), authDataKey{}, *adRef)
-			ctx = context.WithValue(ctx, sessionDataKey{}, session)
-
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
 }
 
 func selectUsers(ctx context.Context, dbPool *pgxpool.Pool, logger *zerolog.Logger, ad cdntypes.AuthData) ([]user, error) {
@@ -4625,6 +4430,7 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 	defer cancel()
 
 	var keyID pgtype.UUID
+	var revoked int64
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Lock the user and its auth provider, we only allow the
 		// setting of passwords for users using the "local" auth provider
@@ -4655,6 +4461,17 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 			return fmt.Errorf("unable to UPDATE user argon2 data: %w", err)
 		}
 
+		// End all console sessions of the user. This has to come after
+		// upsertArgon2Tx, which locks the argon2 row: a login that
+		// verified the old password either created its session before
+		// that lock and it is deleted here, or it waits for this
+		// transaction and then sees the new key, see
+		// argon2KeyStillCurrent().
+		revoked, err = consolesession.DeleteForUserTx(dbCtx, tx, userID)
+		if err != nil {
+			return fmt.Errorf("unable to end console sessions after password change: %w", err)
+		}
+
 		// Clear the login cache if the password is updated correctly. This should not be strictly
 		// needed because the random salt added to the account should make sure even reuse of
 		// the same password results in a different cache hash, but be careful just in case.
@@ -4668,6 +4485,8 @@ func setLocalPassword(ctx context.Context, logger *zerolog.Logger, ad cdntypes.A
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("setLocalPassword: transaction failed: %w", err)
 	}
+
+	logger.Info().Str("reason", "password_change").Str("target_user_id", userID.String()).Int64("count", revoked).Msg("session_revoked")
 
 	return keyID, nil
 }
@@ -5215,7 +5034,7 @@ func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, displayNam
 	return nil
 }
 
-func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID, displayName string, org *string, role string) (user, error) {
+func updateUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID, displayName string, org *string, role string) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -5224,6 +5043,7 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 	defer cancel()
 
 	var u user
+	var revoked int64
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Resolve the role and org before locking the users row. deleteOrg
 		// locks the orgs row and then, inside its DELETE, takes FOR KEY SHARE
@@ -5247,10 +5067,12 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 		}
 
 		var currentDisplayName string
+		var currentRoleID pgtype.UUID
+		var currentOrgID *pgtype.UUID
 		// FOR UPDATE rather than FOR SHARE: this transaction goes on to write
 		// this very row, and taking the shared lock first would mean upgrading
 		// it. See the lockUpdate const for why that deadlocks.
-		err = tx.QueryRow(dbCtx, "SELECT display_name FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentDisplayName)
+		err = tx.QueryRow(dbCtx, "SELECT display_name, role_id, org_id FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentDisplayName, &currentRoleID, &currentOrgID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
@@ -5279,6 +5101,18 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 			return fmt.Errorf("update failed: %w", err)
 		}
 
+		// OWASP: renew the session id after a privilege level change.
+		// The admin's request can not give the user's browser a new id,
+		// so end the user's console sessions instead: they log in again
+		// and get one, and a token from before the change never gains
+		// the new rights. A display name change keeps the sessions.
+		if currentRoleID != roleIdent.id || !sameOrgID(currentOrgID, orgID) {
+			revoked, err = consolesession.DeleteForUserTx(dbCtx, tx, userID)
+			if err != nil {
+				return fmt.Errorf("unable to end console sessions after role or org change: %w", err)
+			}
+		}
+
 		u.ID = userID
 		u.DisplayName = updateDisplayName
 		u.RoleID = roleIdent.id
@@ -5290,7 +5124,20 @@ func updateUser(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, userID p
 		return user{}, fmt.Errorf("user PUT transaction failed: %w", err)
 	}
 
+	if revoked > 0 {
+		logger.Info().Str("reason", "role_or_org_change").Str("target_user_id", userID.String()).Int64("count", revoked).Msg("session_revoked")
+	}
+
 	return u, nil
+}
+
+// sameOrgID reports whether two optional org ids are the same, nil meaning
+// no org.
+func sameOrgID(a *pgtype.UUID, b *pgtype.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func selectUserListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.UserListItem, error) {
@@ -9344,7 +9191,7 @@ func requestDeadlineMiddleware(budget time.Duration) func(next http.Handler) htt
 	}
 }
 
-func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], cookieStore *sessions.CookieStore, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
+func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], sessionStore *consolesession.Store, preLogin *preLoginCookies, provider *oidc.Provider, vclValidator *vclValidatorClient, confTemplates configTemplates, devMode bool, clientCredAEADs []cipher.AEAD, kccm *keycloakClientManager, tokenURL *url.URL, serverURL *url.URL) *chi.Mux {
 	router := chi.NewMux()
 
 	hlogChain := chi.Chain(
@@ -9378,9 +9225,10 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 
 	// Authenticated console releated routes
 	router.Route(consolePath, func(r chi.Router) {
+		r.Use(noStoreMiddleware)
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Use(consoleAuthMiddleware(cookieStore, conf.Server.ConsoleSessionCapAge))
+		r.Use(consoleSessionMiddleware(dbc, sessionStore, preLogin))
 		r.Get("/", consoleDashboardHandler(dbc))
 		r.Get("/org/{org}", consoleOrgDashboardHandler(dbc))
 		r.Get("/org/{org}/domains", consoleDomainsHandler(dbc))
@@ -9464,11 +9312,12 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 
 	// Console login related routes
 	router.Route("/auth", func(r chi.Router) {
+		r.Use(noStoreMiddleware)
 		r.Use(strictFetch.Handler)
 		r.Use(antiCSRF.Handler)
-		r.Get("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
-		r.Post("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, cookieStore, conf.Server.ConsoleSessionCapAge))
-		r.Post("/logout", logoutHandler(cookieStore))
+		r.Get("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, sessionStore, preLogin))
+		r.Post("/login", loginHandler(dbc, a2Slots, loginLimiter, loginCache, sessionStore, preLogin))
+		r.Post("/logout", logoutHandler(dbc, sessionStore))
 		if provider != nil {
 			idTokenVerifier := provider.Verifier(&oidc.Config{ClientID: conf.OIDC.ClientID})
 
@@ -9485,8 +9334,8 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 				Scopes: []string{oidc.ScopeOpenID},
 			}
 
-			r.Get(keycloakPath, keycloakOIDCHandler(cookieStore, oauth2Config))
-			r.Get(keycloakCallbackPath, oauth2CallbackHandler(oauth2HTTPClient, cookieStore, oauth2Config, idTokenVerifier, dbc))
+			r.Get(keycloakPath, keycloakOIDCHandler(preLogin, oauth2Config))
+			r.Get(keycloakCallbackPath, oauth2CallbackHandler(oauth2HTTPClient, preLogin, sessionStore, oauth2Config, idTokenVerifier, dbc))
 		}
 	})
 
@@ -9590,7 +9439,7 @@ func newAPIAuthMiddleware(api huma.API, dbc *dbConn, a2Slots *argon2Slots, login
 				return
 			}
 
-			ad, err = verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, username, password)
+			ad, _, err = verifyLocalUserPassword(ctx, logger, dbc, a2Slots, loginLimiter, loginCache, ipKey, username, password)
 			if err != nil {
 				rateLimitedErr, isRateLimited := errors.AsType[*cdnerrors.LoginRateLimitedError](err)
 				switch {
@@ -9918,7 +9767,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
 			}
 
-			user, err := updateUser(ctx, dbc, ad, userID, input.Body.DisplayName, input.Body.Org, input.Body.Role)
+			user, err := updateUser(ctx, logger, dbc, ad, userID, input.Body.DisplayName, input.Body.Org, input.Body.Role)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
@@ -11881,7 +11730,7 @@ func insertGorillaSessionKey(ctx context.Context, tx pgx.Tx, authKey []byte, enc
 
 type sessionKey struct {
 	TimeCreated time.Time `db:"time_created"`
-	AuthKey     []byte    `db:"auth_key"` // #nosec G117 -- Used for carrying key to session.NewCookieStore(), never used for serialized output
+	AuthKey     []byte    `db:"auth_key"` // #nosec G117 -- Used for carrying the key to the pre-login cookie codecs, never used for serialized output
 	EncKey      []byte    `db:"enc_key"`
 }
 
@@ -11901,48 +11750,6 @@ func getSessionKeys(ctx context.Context, dbPool *pgxpool.Pool) ([]sessionKey, er
 	}
 
 	return sessionKeys, nil
-}
-
-func getSessionStore(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool, consoleSessionMaxAge time.Duration) (*sessions.CookieStore, error) {
-	sessionKeys, err := getSessionKeys(ctx, dbPool)
-	if err != nil {
-		return nil, fmt.Errorf("unable to find session keys in database, make sure the database is initialized via the 'init' command: %w", err)
-	}
-
-	if sessionKeys[0].EncKey == nil {
-		logger.Info().Msg("gorilla session encryption key is nil, using unencrypted cookies")
-	} else {
-		logger.Info().Msg("gorilla session encryption key is present, using encrypted cookies")
-	}
-
-	sessionKeyPairs := [][]byte{}
-	for _, sk := range sessionKeys {
-		sessionKeyPairs = append(sessionKeyPairs, sk.AuthKey)
-		sessionKeyPairs = append(sessionKeyPairs, sk.EncKey)
-	}
-
-	sessionStore := sessions.NewCookieStore(sessionKeyPairs...)
-
-	sessionStore.Options = &sessions.Options{
-		Path:     "/",
-		Secure:   true,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	}
-
-	// This controls how long the cookie will be valid from the last time
-	// Save() was called on it.
-	maxAgeSeconds := int(consoleSessionMaxAge / time.Second)
-	// Make sure we don't accidentally set a 0 MaxAge which makes it long
-	// lived, preferring either 1 or -1
-	if consoleSessionMaxAge > 0 && maxAgeSeconds == 0 {
-		maxAgeSeconds = 1
-	} else if consoleSessionMaxAge < 0 && maxAgeSeconds == 0 {
-		maxAgeSeconds = -1
-	}
-	sessionStore.MaxAge(maxAgeSeconds)
-
-	return sessionStore, nil
 }
 
 type domainVerifyData struct {
@@ -12028,9 +11835,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 	return errors.New("validation failed")
 }
 
-func domainVerifier(ctx context.Context, wg *sync.WaitGroup, logger zerolog.Logger, dbPool *pgxpool.Pool, resolverAddr string, verifyInterval time.Duration) {
-	defer wg.Done()
-
+func domainVerifier(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool, resolverAddr string, verifyInterval time.Duration) {
 	udpClient := &dns.Client{}
 	tcpClient := &dns.Client{Net: "tcp"}
 
@@ -12276,9 +12081,9 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return errors.New("we expect there to exist at least one role in the database, make sure the database is initialized via the 'init' command")
 	}
 
-	cookieStore, err := getSessionStore(runCtx, logger, dbPool, conf.Server.ConsoleSessionMaxAge)
+	sessionStore, preLogin, err := newConsoleSessions(runCtx, logger, dbPool, conf.Server.ConsoleSessionMaxAge, conf.Server.ConsoleSessionCapAge, preLoginMaxAge)
 	if err != nil {
-		return fmt.Errorf("getSessionStore failed: %w", err)
+		return fmt.Errorf("unable to set up console sessions: %w", err)
 	}
 
 	client := &http.Client{
@@ -12413,7 +12218,7 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		return fmt.Errorf("unable to parse server URL '%s': %w", conf.Server.URL, err)
 	}
 
-	router := newChiRouter(conf, logger, dbc, a2Slots, loginLimiter, loginCache, cookieStore, provider, vclValidator, confTemplates, devMode, clientCredAEADs, kcClientManager, parsedTokenURL, serverURL)
+	router := newChiRouter(conf, logger, dbc, a2Slots, loginLimiter, loginCache, sessionStore, preLogin, provider, vclValidator, confTemplates, devMode, clientCredAEADs, kcClientManager, parsedTokenURL, serverURL)
 
 	err = setupHumaAPI(router, dbc, a2Slots, loginLimiter, loginCache, vclValidator, confTemplates, kcClientManager, jwkCache, conf.OIDC.Issuer, oiConf, clientCredAEADs, serverURL)
 	if err != nil {
@@ -12425,9 +12230,14 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 		logger.Info().Msg("domain verification is disabled")
 	} else {
 		logger.Info().Msg("domain verification is enabled")
-		wg.Add(1)
-		go domainVerifier(runCtx, &wg, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
+		wg.Go(func() {
+			domainVerifier(runCtx, logger, dbPool, conf.Domains.ResolverAddr, conf.Domains.VerifyInterval)
+		})
 	}
+
+	wg.Go(func() {
+		consoleSessionSweeper(runCtx, logger, sessionStore, consoleSessionSweepInterval)
+	})
 
 	var tlsConfig *tls.Config
 
@@ -12522,8 +12332,8 @@ func isOrgMember(ad cdntypes.AuthData, orgParam string) bool {
 }
 
 // consoleSuperuserCheck validates that the session user is a superuser.
-// Returns the AuthData and true if ok, or writes a 403 if not superuser or a 500 if auth data is missing, and returns false.
-func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request) (cdntypes.AuthData, *sessions.Session, bool) {
+// Returns the AuthData, the session and true if ok, or writes a 403 if not superuser or a 500 if auth data is missing, and returns false.
+func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request) (cdntypes.AuthData, *sessionHandle, bool) {
 	logger := hlog.FromRequest(r)
 	ctx := r.Context()
 
@@ -12534,7 +12344,7 @@ func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request) (cdntypes.Aut
 		return cdntypes.AuthData{}, nil, false
 	}
 
-	session, ok := ctx.Value(sessionDataKey{}).(*sessions.Session)
+	sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
 	if !ok {
 		logger.Error().Msg("consoleSuperuserCheck: unable to read session data from context")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12546,19 +12356,7 @@ func consoleSuperuserCheck(w http.ResponseWriter, r *http.Request) (cdntypes.Aut
 		return cdntypes.AuthData{}, nil, false
 	}
 
-	return ad, session, true
-}
-
-// sessionSelectedOrg returns the last org name the superuser selected via the
-// org switcher, or "" if none has been selected yet. This keeps the org
-// dropdown populated while viewing superuser pages.
-func sessionSelectedOrg(session *sessions.Session) string {
-	if v, ok := session.Values[selectedOrgKey]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return ad, sh, true
 }
 
 func consoleOrgsHandler(dbc *dbConn) http.HandlerFunc {
@@ -12566,7 +12364,7 @@ func consoleOrgsHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12578,18 +12376,14 @@ func consoleOrgsHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.orgs)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("orgs console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.orgs, nil)
+		if err != nil {
+			logger.Err(err).Msg("orgs console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sessionSelectedOrg(session), components.OrgsContent(orgs, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sh.selectedOrgName, components.OrgsContent(orgs, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render organizations page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12603,7 +12397,7 @@ func consoleOrgDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12638,7 +12432,7 @@ func consoleOrgDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sessionSelectedOrg(session), components.OrgsContent(orgs, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Organizations", sh.selectedOrgName, components.OrgsContent(orgs, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render organizations page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12646,9 +12440,9 @@ func consoleOrgDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Organization '%s' deleted!", orgName), flashMessageKeys.orgs)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.orgs, nil, fmt.Sprintf("Organization '%s' deleted!", orgName))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -12663,14 +12457,14 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 		ctx := r.Context()
 		title := "Add organization"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(components.OrgFormData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateOrgContent(components.OrgFormData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render org creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12728,7 +12522,7 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 						}
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(orgFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateOrgContent(orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render org creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12747,7 +12541,7 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 					orgFormData.Errors.ServerError = "Organization creation failed"
 				}
 				logger.Err(err).Msg("org creation failed")
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateOrgContent(orgFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateOrgContent(orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render org creation page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12755,9 +12549,9 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Organization '%s' created!", formData.Name), flashMessageKeys.orgs)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.orgs, nil, fmt.Sprintf("Organization '%s' created!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -12776,7 +12570,7 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12796,13 +12590,13 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("edit org: unable to fetch organization")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit org error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					}
 				case errors.Is(err, cdnerrors.ErrNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleOrgNotFound))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleOrgNotFound))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit org error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12820,7 +12614,7 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 				ClientTokenQuota: fmt.Sprintf("%d", org.ClientTokenQuota),
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, formData))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditOrgContent(orgName, formData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render edit org page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12878,7 +12672,7 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 						}
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, orgFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditOrgContent(orgName, orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit org page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12913,7 +12707,7 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 				default:
 					orgFormData.Errors.ServerError = "Organization update failed"
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditOrgContent(orgName, orgFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditOrgContent(orgName, orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit org page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12921,9 +12715,9 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Organization '%s' updated!", formData.Name), flashMessageKeys.orgs)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.orgs, nil, fmt.Sprintf("Organization '%s' updated!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -12942,7 +12736,7 @@ func consoleCacheNodesHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -12961,18 +12755,14 @@ func consoleCacheNodesHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.cacheNodes)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("cache nodes console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.cacheNodes, nil)
+		if err != nil {
+			logger.Err(err).Msg("cache nodes console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(cacheNodes, nodeGroups, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sh.selectedOrgName, components.CacheNodesContent(cacheNodes, nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render cache nodes page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -12986,7 +12776,7 @@ func consoleCacheNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13023,7 +12813,7 @@ func consoleCacheNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sh.selectedOrgName, components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render cache nodes page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13031,9 +12821,9 @@ func consoleCacheNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Cache node '%s' deleted!", cacheNodeNameOrID), flashMessageKeys.cacheNodes)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.cacheNodes, nil, fmt.Sprintf("Cache node '%s' deleted!", cacheNodeNameOrID))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13048,14 +12838,14 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 		ctx := r.Context()
 		title := "Add cache node"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(components.CacheNodeFormData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateCacheNodeContent(components.CacheNodeFormData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render cache node creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13092,7 +12882,7 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 						nodeFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateCacheNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render cache node creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13103,7 +12893,7 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 			addresses, err := parseAddressesFromText(formData.Addresses)
 			if err != nil {
 				nodeFormData.Errors.Addresses = err.Error()
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateCacheNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render cache node creation page on address error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13123,7 +12913,7 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 					nodeFormData.Errors.ServerError = "Cache node creation failed"
 				}
 				logger.Err(err).Msg("cache node creation failed")
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateCacheNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateCacheNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render cache node creation page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13131,9 +12921,9 @@ func consoleCreateCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Cache node '%s' created!", formData.Name), flashMessageKeys.cacheNodes)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.cacheNodes, nil, fmt.Sprintf("Cache node '%s' created!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -13152,7 +12942,7 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13172,13 +12962,13 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("edit cache node: unable to fetch cache node")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNotAllowedModifyCacheNode))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleNotAllowedModifyCacheNode))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit cache node error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					}
 				case errors.Is(err, pgx.ErrNoRows):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleCacheNodeNotFound))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleCacheNodeNotFound))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit cache node error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13195,7 +12985,7 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 				Addresses:   components.AddressesString(cacheNode.Node),
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeNameOrID, formData))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditCacheNodeContent(cacheNodeNameOrID, formData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render edit cache node page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13232,7 +13022,7 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 						nodeFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit cache node page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13243,7 +13033,7 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 			addresses, err := parseAddressesFromText(formData.Addresses)
 			if err != nil {
 				nodeFormData.Errors.Addresses = err.Error()
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit cache node page on address error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13267,7 +13057,7 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 				default:
 					nodeFormData.Errors.ServerError = "Cache node update failed"
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditCacheNodeContent(cacheNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit cache node page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13275,9 +13065,9 @@ func consoleEditCacheNodeHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Cache node '%s' updated!", formData.Name), flashMessageKeys.cacheNodes)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.cacheNodes, nil, fmt.Sprintf("Cache node '%s' updated!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -13296,7 +13086,7 @@ func consoleCacheNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13341,7 +13131,7 @@ func consoleCacheNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sh.selectedOrgName, components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render cache nodes page with maintenance error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13353,9 +13143,9 @@ func consoleCacheNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 		if maintenance {
 			state = "enabled"
 		}
-		session.AddFlash(fmt.Sprintf("Maintenance mode %s for '%s'", state, cacheNodeNameOrID), flashMessageKeys.cacheNodes)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.cacheNodes, nil, fmt.Sprintf("Maintenance mode %s for '%s'", state, cacheNodeNameOrID))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13369,7 +13159,7 @@ func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13399,16 +13189,13 @@ func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		}
 
 		var groupErr error
+		var flashMsg string
 		if formData.NodeGroup == "" {
 			groupErr = unsetCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID)
-			if groupErr == nil {
-				session.AddFlash(fmt.Sprintf("Node group removed from '%s'", cacheNodeNameOrID), flashMessageKeys.cacheNodes)
-			}
+			flashMsg = fmt.Sprintf("Node group removed from '%s'", cacheNodeNameOrID)
 		} else {
 			groupErr = setCacheNodeGroup(ctx, ad, dbc, cacheNodeNameOrID, formData.NodeGroup)
-			if groupErr == nil {
-				session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, cacheNodeNameOrID), flashMessageKeys.cacheNodes)
-			}
+			flashMsg = fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, cacheNodeNameOrID)
 		}
 		if groupErr != nil {
 			var errorMessage string
@@ -13435,7 +13222,7 @@ func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sessionSelectedOrg(session), components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleCacheNodesTitle, sh.selectedOrgName, components.CacheNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render cache nodes page with group error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13443,8 +13230,9 @@ func consoleCacheNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		err := session.Save(r, w)
+		err := sh.addFlash(ctx, flashMessageKeys.cacheNodes, nil, flashMsg)
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13458,7 +13246,7 @@ func consoleL4LBNodesHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13477,18 +13265,14 @@ func consoleL4LBNodesHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.l4lbNodes)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("l4lb nodes console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.l4lbNodes, nil)
+		if err != nil {
+			logger.Err(err).Msg("l4lb nodes console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(l4lbNodes, nodeGroups, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sh.selectedOrgName, components.L4LBNodesContent(l4lbNodes, nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render l4lb nodes page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13502,7 +13286,7 @@ func consoleL4LBNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13539,7 +13323,7 @@ func consoleL4LBNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sh.selectedOrgName, components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render L4LB nodes page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13547,9 +13331,9 @@ func consoleL4LBNodeDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("L4LB node '%s' deleted!", l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.l4lbNodes, nil, fmt.Sprintf("L4LB node '%s' deleted!", l4lbNodeNameOrID))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13564,14 +13348,14 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 		ctx := r.Context()
 		title := "Add L4LB node"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(components.L4LBNodeFormData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateL4LBNodeContent(components.L4LBNodeFormData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render l4lb node creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13608,7 +13392,7 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 						nodeFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateL4LBNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render l4lb node creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13619,7 +13403,7 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 			addresses, err := parseAddressesFromText(formData.Addresses)
 			if err != nil {
 				nodeFormData.Errors.Addresses = err.Error()
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateL4LBNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render l4lb node creation page on address error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13639,7 +13423,7 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 					nodeFormData.Errors.ServerError = "L4LB node creation failed"
 				}
 				logger.Err(err).Msg("l4lb node creation failed")
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateL4LBNodeContent(nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateL4LBNodeContent(nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render l4lb node creation page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13647,9 +13431,9 @@ func consoleCreateL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("L4LB node '%s' created!", formData.Name), flashMessageKeys.l4lbNodes)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.l4lbNodes, nil, fmt.Sprintf("L4LB node '%s' created!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -13668,7 +13452,7 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13688,13 +13472,13 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("edit l4lb node: unable to fetch l4lb node")
 				switch {
 				case errors.Is(err, cdnerrors.ErrForbidden):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNotAllowedModifyL4LBNode))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleNotAllowedModifyL4LBNode))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit l4lb node error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 					}
 				case errors.Is(err, pgx.ErrNoRows):
-					err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleL4LBNodeNotFound))
+					err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleL4LBNodeNotFound))
 					if err != nil {
 						logger.Err(err).Msg("unable to render edit l4lb node error page")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13711,7 +13495,7 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 				Addresses:   components.AddressesString(l4lbNode.Node),
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeNameOrID, formData))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditL4LBNodeContent(l4lbNodeNameOrID, formData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render edit l4lb node page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13748,7 +13532,7 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 						nodeFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit l4lb node page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13759,7 +13543,7 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 			addresses, err := parseAddressesFromText(formData.Addresses)
 			if err != nil {
 				nodeFormData.Errors.Addresses = err.Error()
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit l4lb node page on address error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13783,7 +13567,7 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 				default:
 					nodeFormData.Errors.ServerError = "L4LB node update failed"
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditL4LBNodeContent(l4lbNodeNameOrID, nodeFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit l4lb node page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13791,9 +13575,9 @@ func consoleEditL4LBNodeHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("L4LB node '%s' updated!", formData.Name), flashMessageKeys.l4lbNodes)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.l4lbNodes, nil, fmt.Sprintf("L4LB node '%s' updated!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -13812,7 +13596,7 @@ func consoleL4LBNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13857,7 +13641,7 @@ func consoleL4LBNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sh.selectedOrgName, components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render L4LB nodes page with maintenance error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13869,9 +13653,9 @@ func consoleL4LBNodeMaintenanceHandler(dbc *dbConn) http.HandlerFunc {
 		if maintenance {
 			state = "enabled"
 		}
-		session.AddFlash(fmt.Sprintf("Maintenance mode %s for '%s'", state, l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.l4lbNodes, nil, fmt.Sprintf("Maintenance mode %s for '%s'", state, l4lbNodeNameOrID))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13885,7 +13669,7 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13915,16 +13699,13 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		}
 
 		var groupErr error
+		var flashMsg string
 		if formData.NodeGroup == "" {
 			groupErr = unsetL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID)
-			if groupErr == nil {
-				session.AddFlash(fmt.Sprintf("Node group removed from '%s'", l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
-			}
+			flashMsg = fmt.Sprintf("Node group removed from '%s'", l4lbNodeNameOrID)
 		} else {
 			groupErr = setL4LBNodeGroup(ctx, ad, dbc, l4lbNodeNameOrID, formData.NodeGroup)
-			if groupErr == nil {
-				session.AddFlash(fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, l4lbNodeNameOrID), flashMessageKeys.l4lbNodes)
-			}
+			flashMsg = fmt.Sprintf("Node group '%s' assigned to '%s'", formData.NodeGroup, l4lbNodeNameOrID)
 		}
 		if groupErr != nil {
 			var errorMessage string
@@ -13951,7 +13732,7 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sessionSelectedOrg(session), components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleL4LBNodesTitle, sh.selectedOrgName, components.L4LBNodesContent(nodes, nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render L4LB nodes page with group error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -13959,8 +13740,9 @@ func consoleL4LBNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		err := session.Save(r, w)
+		err := sh.addFlash(ctx, flashMessageKeys.l4lbNodes, nil, flashMsg)
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -13974,7 +13756,7 @@ func consoleNodeGroupsHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -13986,18 +13768,14 @@ func consoleNodeGroupsHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.nodeGroups)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("node groups console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.nodeGroups, nil)
+		if err != nil {
+			logger.Err(err).Msg("node groups console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sh.selectedOrgName, components.NodeGroupsContent(nodeGroups, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render node groups page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14011,7 +13789,7 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14048,7 +13826,7 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sessionSelectedOrg(session), components.NodeGroupsContent(nodeGroups, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Node groups", sh.selectedOrgName, components.NodeGroupsContent(nodeGroups, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render node groups page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14056,9 +13834,9 @@ func consoleNodeGroupDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Node group '%s' deleted!", nodeGroupNameOrID), flashMessageKeys.nodeGroups)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.nodeGroups, nil, fmt.Sprintf("Node group '%s' deleted!", nodeGroupNameOrID))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -14073,14 +13851,14 @@ func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		ctx := r.Context()
 		title := "Add node group"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(components.NodeGroupFormData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateNodeGroupContent(components.NodeGroupFormData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render node group creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14116,7 +13894,7 @@ func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 						groupFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(groupFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateNodeGroupContent(groupFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render node group creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14132,7 +13910,7 @@ func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 					groupFormData.Errors.ServerError = "Node group creation failed"
 				}
 				logger.Err(err).Msg("node group creation failed")
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateNodeGroupContent(groupFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateNodeGroupContent(groupFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render node group creation page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14140,9 +13918,9 @@ func consoleCreateNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Node group '%s' created!", formData.Name), flashMessageKeys.nodeGroups)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.nodeGroups, nil, fmt.Sprintf("Node group '%s' created!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -14161,7 +13939,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14179,7 +13957,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 			nodeGroup, err := selectNodeGroup(ctx, dbc, ad, nodeGroupNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("edit node group: unable to fetch node group")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleNodeGroupNotFound))
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.ConsoleErrorContent(consoleNodeGroupNotFound))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit node group error page")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14192,7 +13970,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				Description: nodeGroup.Description,
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupNameOrID, formData))
+			err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditNodeGroupContent(nodeGroupNameOrID, formData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render edit node group page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14228,7 +14006,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 						groupFormData.Errors.Description = fieldError.Error()
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupNameOrID, groupFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditNodeGroupContent(nodeGroupNameOrID, groupFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit node group page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14249,7 +14027,7 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				default:
 					groupFormData.Errors.ServerError = "Node group update failed"
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditNodeGroupContent(nodeGroupNameOrID, groupFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditNodeGroupContent(nodeGroupNameOrID, groupFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit node group page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14257,9 +14035,9 @@ func consoleEditNodeGroupHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("Node group '%s' updated!", formData.Name), flashMessageKeys.nodeGroups)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.nodeGroups, nil, fmt.Sprintf("Node group '%s' updated!", formData.Name))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -14278,7 +14056,7 @@ func consoleIPNetworksHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14290,20 +14068,16 @@ func consoleIPNetworksHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.ipNetworks)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("ip networks console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.ipNetworks, nil)
+		if err != nil {
+			logger.Err(err).Msg("ip networks console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
 		listItems := ipNetworksToListItems(networks)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sessionSelectedOrg(session), components.IPNetworksContent(listItems, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sh.selectedOrgName, components.IPNetworksContent(listItems, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render ip networks page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14343,7 +14117,7 @@ func consoleIPNetworkDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14380,7 +14154,7 @@ func consoleIPNetworkDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 			listItems := ipNetworksToListItems(networks)
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sessionSelectedOrg(session), components.IPNetworksContent(listItems, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleIPNetworksTitle, sh.selectedOrgName, components.IPNetworksContent(listItems, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render ip networks page with delete error")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14388,9 +14162,9 @@ func consoleIPNetworkDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("IP network '%s' deleted!", deletedNetwork.String()), flashMessageKeys.ipNetworks)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.ipNetworks, nil, fmt.Sprintf("IP network '%s' deleted!", deletedNetwork.String()))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -14405,14 +14179,14 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 		ctx := r.Context()
 		title := "Add IP network"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(components.IPNetworkFormData{}))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateIPNetworkContent(components.IPNetworkFormData{}))
 			if err != nil {
 				logger.Err(err).Msg("unable to render ip network creation page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14445,7 +14219,7 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 						ipFormData.Errors.Network = "network prefix is required"
 					}
 				}
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateIPNetworkContent(ipFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render ip network creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14456,7 +14230,7 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 			parsedPrefix, parseErr := netip.ParsePrefix(formData.Network)
 			if parseErr != nil {
 				ipFormData.Errors.Network = "not a valid network prefix (e.g. 198.51.100.0/24)"
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateIPNetworkContent(ipFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render ip network creation page on validation error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14479,7 +14253,7 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 					ipFormData.Errors.ServerError = "IP network creation failed"
 				}
 				logger.Err(err).Msg("ip network creation failed")
-				err = renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateIPNetworkContent(ipFormData))
+				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateIPNetworkContent(ipFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render ip network creation page on error")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14487,9 +14261,9 @@ func consoleCreateIPNetworkHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("IP network '%s' added!", prefix.String()), flashMessageKeys.ipNetworks)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.ipNetworks, nil, fmt.Sprintf("IP network '%s' added!", prefix.String()))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -14507,7 +14281,7 @@ func consoleUsersHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14519,18 +14293,14 @@ func consoleUsersHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		flashMessages := session.Flashes(flashMessageKeys.users)
-		if flashMessages != nil {
-			err = session.Save(r, w)
-			if err != nil {
-				logger.Err(err).Msg("users console: updating session with flash message failed")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		flashMessageStrings, err := sh.popFlashes(ctx, flashMessageKeys.users, nil)
+		if err != nil {
+			logger.Err(err).Msg("users console: reading flash messages failed")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		flashMessageStrings := getFlashMessageStrings(flashMessages)
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sessionSelectedOrg(session), components.UsersContent(users, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sh.selectedOrgName, components.UsersContent(users, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg(consoleUsersRenderErr)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14544,7 +14314,7 @@ func consoleUserDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14577,7 +14347,7 @@ func consoleUserDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sessionSelectedOrg(session), components.UsersContent(users, nil, errorMessage))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleUsersTitle, sh.selectedOrgName, components.UsersContent(users, nil, errorMessage))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg(consoleUsersRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14585,9 +14355,9 @@ func consoleUserDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("User '%s' deleted!", displayName), flashMessageKeys.users)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.users, nil, fmt.Sprintf("User '%s' deleted!", displayName))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
@@ -14602,7 +14372,7 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 		ctx := r.Context()
 		title := "Add user"
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14620,7 +14390,7 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.CreateUserContent(formData, roles, orgs))
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateUserContent(formData, roles, orgs))
 			if err != nil {
 				logger.Err(err).Msg(consoleCreateUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14727,9 +14497,9 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("User '%s' created!", formFields.DisplayName), flashMessageKeys.users)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.users, nil, fmt.Sprintf("User '%s' created!", formFields.DisplayName))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -14748,7 +14518,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14774,7 +14544,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, authProvider, userID.String(), passwordResetData), displayName)
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditUserContent(formData, roles, orgs, authProvider, userID.String(), passwordResetData), displayName)
 			if err != nil {
 				logger.Err(err).Msg(consoleEditUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14788,7 +14558,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("edit user: unable to fetch user")
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+					renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sh.selectedOrgName, components.ConsoleErrorContent(consoleUserNotFound))
 					if renderErr != nil {
 						logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14820,7 +14590,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("edit user POST: unable to fetch user")
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+					renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sh.selectedOrgName, components.ConsoleErrorContent(consoleUserNotFound))
 					if renderErr != nil {
 						logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14874,7 +14644,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				org = &formFields.Org
 			}
 
-			_, err = updateUser(ctx, dbc, ad, userID, formFields.DisplayName, org, formFields.Role)
+			_, err = updateUser(ctx, logger, dbc, ad, userID, formFields.DisplayName, org, formFields.Role)
 			if err != nil {
 				logger.Err(err).Msg("user update failed")
 				switch {
@@ -14897,9 +14667,9 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			session.AddFlash(fmt.Sprintf("User '%s' updated!", formFields.DisplayName), flashMessageKeys.users)
-			err = session.Save(r, w)
+			err = sh.addFlash(ctx, flashMessageKeys.users, nil, fmt.Sprintf("User '%s' updated!", formFields.DisplayName))
 			if err != nil {
+				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 				return
 			}
@@ -14918,7 +14688,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 		logger := hlog.FromRequest(r)
 		ctx := r.Context()
 
-		ad, session, ok := consoleSuperuserCheck(w, r)
+		ad, sh, ok := consoleSuperuserCheck(w, r)
 		if !ok {
 			return
 		}
@@ -14968,7 +14738,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sessionSelectedOrg(session), components.EditUserContent(formData, roles, orgs, userData.AuthProvider, userID.String(), passwordResetData), userData.DisplayName)
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditUserContent(formData, roles, orgs, userData.AuthProvider, userID.String(), passwordResetData), userData.DisplayName)
 			if renderErr != nil {
 				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14980,7 +14750,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 		if err != nil {
 			logger.Err(err).Msg("reset password: unable to fetch user")
 			if errors.Is(err, cdnerrors.ErrNotFound) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sh.selectedOrgName, components.ConsoleErrorContent(consoleUserNotFound))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -14992,7 +14762,7 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 		}
 
 		if userData.AuthProvider != cdntypes.LocalAuthProvider {
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consolePasswordLocalOnly))
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sh.selectedOrgName, components.ConsoleErrorContent(consolePasswordLocalOnly))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -15050,13 +14820,13 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 				// Race condition: auth provider changed after the check above.
 				// The template won't render the password section for non-local
 				// users, so use ConsoleErrorContent instead.
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, fmt.Sprintf(consoleEditUserTitleFmt, userData.DisplayName), sessionSelectedOrg(session), components.ConsoleErrorContent(consolePasswordLocalOnly))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, fmt.Sprintf(consoleEditUserTitleFmt, userData.DisplayName), sh.selectedOrgName, components.ConsoleErrorContent(consolePasswordLocalOnly))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 			case errors.Is(err, cdnerrors.ErrNotFound):
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sessionSelectedOrg(session), components.ConsoleErrorContent(consoleUserNotFound))
+				renderErr := renderConsolePage(ctx, dbc, w, r, ad, errorTitle, sh.selectedOrgName, components.ConsoleErrorContent(consoleUserNotFound))
 				if renderErr != nil {
 					logger.Err(renderErr).Msg(consoleEditUserRenderErr)
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -15074,9 +14844,9 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 			return
 		}
 
-		session.AddFlash(fmt.Sprintf("Password for user '%s' has been reset!", userData.DisplayName), flashMessageKeys.users)
-		err = session.Save(r, w)
+		err = sh.addFlash(ctx, flashMessageKeys.users, nil, fmt.Sprintf("Password for user '%s' has been reset!", userData.DisplayName))
 		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
 			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
 			return
 		}
