@@ -8449,27 +8449,31 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		conditionalGroups[i].Condition = normalizeVCLLineEndings(conditionalGroups[i].Condition)
 	}
 
-	var serviceVersionResult serviceVersionInsertResult
+	// The VCL validator is called between two transactions rather than
+	// inside one. A transaction held open across that HTTP round-trip ties
+	// up a pooled connection, and the services row lock taken for the
+	// insert, for as long as the validator takes (up to
+	// vclValidatorTimeout), so a burst of submissions could exhaust the pool
+	// for every other request. Validation only reads the submitted input and
+	// confTemplates, so nothing looked up here needs to survive into it.
+	// The lookup transaction exists so that authorization still comes before
+	// any validator work, keeping the 403 and 422 responses a caller gets for
+	// a service it cannot use ahead of VCL errors.
+	var orgIdent orgIdentifier
+	var serviceIdent serviceIdentifier
 
-	dbCtx, cancel := dbc.detachedContext(ctx)
-	defer cancel()
+	lookupCtx, lookupCancel := dbc.detachedContext(ctx)
+	defer lookupCancel()
 
-	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+	err := pgx.BeginFunc(lookupCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		var err error
+		orgIdent, err = newOrgIdentifier(lookupCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
 			return cdnerrors.ErrUnprocessable
 		}
 
-		// ForUpdate because insertServiceVersionTx below bumps
-		// services.version_counter in this same transaction.
-		//
-		// The exclusive lock is now held across the VCL validator round-trip
-		// noted below, so concurrent version creations for the same service
-		// serialise behind it rather than running in parallel. That is the
-		// intended trade: with a shared lock they ran in parallel only to have
-		// one abort with a deadlock error.
-		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgIdent.id)
+		serviceIdent, err = newServiceIdentifier(lookupCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("looking up service failed")
 			return cdnerrors.ErrUnprocessable
@@ -8483,25 +8487,55 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 			}
 		}
 
-		// It is not optimal to do network connections while holding a
-		// database transaction open, but it is either this or duplicating
-		// lookups to fill in stuff and the idea is that the validator
-		// software is running on the same host as the manager.
-		err = vclValidator.validateServiceVersionConfig(
-			dbCtx,
-			confTemplates,
-			cdntypes.InputServiceVersion{
-				VCLTemplate:             vclTemplate,
-				ConditionalOriginGroups: conditionalGroups,
-				DefaultOriginGroup:      defaultGroup,
-				Domains:                 domains,
-			},
-		)
+		return nil
+	})
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("service version lookup transaction failed: %w", err)
+	}
+
+	// The request context rather than a detached one: nothing has been
+	// written yet, so a client that goes away should not keep a validator
+	// request running on its behalf.
+	err = vclValidator.validateServiceVersionConfig(
+		ctx,
+		confTemplates,
+		cdntypes.InputServiceVersion{
+			VCLTemplate:             vclTemplate,
+			ConditionalOriginGroups: conditionalGroups,
+			DefaultOriginGroup:      defaultGroup,
+			Domains:                 domains,
+		},
+	)
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("VCL validation failed: %w", err)
+	}
+
+	var serviceVersionResult serviceVersionInsertResult
+
+	writeCtx, writeCancel := dbc.detachedContext(ctx)
+	defer writeCancel()
+
+	err = pgx.BeginFunc(writeCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		// The service may have been deleted or moved while the VCL was
+		// validated. Resolving it again by the UUIDs pinned in the lookup
+		// transaction, rather than by orgNameOrID and serviceNameOrID,
+		// means a rename cannot point this insert at a different service.
+		// The org_id constraint also re-confirms the authorization decision
+		// made above, which compared the caller's org with this same org.
+		// Domains need no re-check here: insertServiceVersionTx only accepts
+		// domains that are verified in this transaction.
+		//
+		// ForUpdate because insertServiceVersionTx bumps
+		// services.version_counter. Concurrent version creations for the same
+		// service validate in parallel and serialize only here. With a shared
+		// lock they would deadlock on the upgrade instead (see lockUpdate).
+		lockedService, err := newServiceIdentifierForUpdate(writeCtx, tx, serviceIdent.id.String(), orgIdent.id)
 		if err != nil {
-			return fmt.Errorf("VCL validation failed: %w", err)
+			logger.Err(err).Msg("service changed during VCL validation")
+			return cdnerrors.ErrUnprocessable
 		}
 
-		serviceVersionResult, err = insertServiceVersionTx(dbCtx, tx, orgIdent, serviceIdent, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
+		serviceVersionResult, err = insertServiceVersionTx(writeCtx, tx, orgIdent, lockedService, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service version with org ID: %w", err)
 		}
