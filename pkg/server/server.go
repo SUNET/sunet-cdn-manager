@@ -12276,7 +12276,7 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	var tlsConfig *tls.Config
 
 	if disableAcme {
-		logger.Info().Str("cert_file", tlsCertFile).Str("key_file", tlsCertFile).Msg("ACME is disabled, using files for TLS")
+		logger.Info().Str("cert_file", tlsCertFile).Str("key_file", tlsKeyFile).Msg("ACME is disabled, using files for TLS")
 		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
 		if err != nil {
 			return fmt.Errorf("failed to load key pair: %w", err)
