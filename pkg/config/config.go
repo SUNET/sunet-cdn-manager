@@ -41,10 +41,14 @@ type Config struct {
 }
 
 type serverSettings struct {
-	URL                  string        `validate:"required,https_url"`
-	Addr                 string        `validate:"required"`
-	VCLValidationURL     string        `mapstructure:"vcl_validation_url" validate:"required"`
+	URL              string `validate:"required,https_url"`
+	Addr             string `validate:"required"`
+	VCLValidationURL string `mapstructure:"vcl_validation_url" validate:"required"`
+	// Idle timeout of console sessions, enforced on the server: a session
+	// that has not been used for this long is ended
 	ConsoleSessionMaxAge time.Duration `mapstructure:"console_session_max_age" validate:"required,min=1s"`
+	// Absolute timeout of console sessions, enforced on the server and
+	// counted from login
 	ConsoleSessionCapAge time.Duration `mapstructure:"console_session_cap_age" validate:"required,min=1s,gtefield=ConsoleSessionMaxAge"`
 	// Server WriteTimeout. Optional, it defaults to and can not be lower
 	// than minWriteTimeout(), see GetConfig(). Each request gets this minus

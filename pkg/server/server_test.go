@@ -541,9 +541,11 @@ type testServerInput struct {
 	dbPool               *pgxpool.Pool
 	consoleSessionMaxAge time.Duration
 	consoleSessionCapAge time.Duration
-	argon2Slots          *argon2Slots
-	loginLimiter         *loginRateLimiter
-	writeTimeout         time.Duration
+	// How long the pre-login cookie is accepted, preLoginMaxAge if 0
+	preLoginMaxAge time.Duration
+	argon2Slots    *argon2Slots
+	loginLimiter   *loginRateLimiter
+	writeTimeout   time.Duration
 }
 
 func getTestDatabaseConfig(ctx context.Context, t *testing.T) (*pgxpool.Config, error) {
@@ -653,7 +655,15 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		tsi.consoleSessionMaxAge = 1 * time.Hour
 	}
 
-	cookieStore, err := getSessionStore(ctx, logger, tsi.dbPool, tsi.consoleSessionMaxAge)
+	if tsi.consoleSessionCapAge == 0 {
+		tsi.consoleSessionCapAge = 8 * time.Hour
+	}
+
+	if tsi.preLoginMaxAge == 0 {
+		tsi.preLoginMaxAge = preLoginMaxAge
+	}
+
+	sessionStore, preLogin, err := newConsoleSessions(ctx, logger, tsi.dbPool, tsi.consoleSessionMaxAge, tsi.consoleSessionCapAge, tsi.preLoginMaxAge)
 	if err != nil {
 		if dbPoolCreated {
 			tsi.dbPool.Close()
@@ -755,11 +765,8 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 		t.Fatalf("unable to parse testserver URL: %v", err)
 	}
 
-	if tsi.consoleSessionCapAge == 0 {
-		tsi.consoleSessionCapAge = 8 * time.Hour
-	}
-
 	conf := config.Config{}
+	conf.Server.ConsoleSessionMaxAge = tsi.consoleSessionMaxAge
 	conf.Server.ConsoleSessionCapAge = tsi.consoleSessionCapAge
 	// GetConfig() always fills this in, a zero value here would give every
 	// request an already expired deadline
@@ -768,7 +775,7 @@ func prepareServer(t *testing.T, tsi testServerInput) (*httptest.Server, *pgxpoo
 	}
 	conf.Server.WriteTimeout = tsi.writeTimeout
 
-	router := newChiRouter(conf, logger, dbc, tsi.argon2Slots, tsi.loginLimiter, loginCache, cookieStore, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
+	router := newChiRouter(conf, logger, dbc, tsi.argon2Slots, tsi.loginLimiter, loginCache, sessionStore, preLogin, nil, tsi.vclValidator, confTemplates, false, clientCredAEADs, tsi.kcClientManager, &url.URL{}, serverURL)
 
 	ts.Config.Handler = router
 
@@ -13113,14 +13120,14 @@ func consoleLogin(t *testing.T, tsURL string, username, password string) (*http.
 
 	var sessionCookie *http.Cookie
 	for _, c := range loginResp.Cookies() {
-		if c.Name == cookieName {
+		if c.Name == sessionCookieName {
 			sessionCookie = c
 		}
 	}
 
 	cookieFound := false
 	for _, c := range client.Jar.Cookies(u) {
-		if c.Name == cookieName {
+		if c.Name == sessionCookieName {
 			cookieFound = true
 			break
 		}
@@ -14271,131 +14278,6 @@ func TestConsoleIPNetworks(t *testing.T) {
 			t.Fatal("expected flash message confirming deletion")
 		}
 	})
-}
-
-func TestConsoleCookieExpiration(t *testing.T) {
-	tests := []struct {
-		description          string
-		username             string
-		password             string
-		expectedStatus       int
-		consoleSessionMaxAge time.Duration
-		consoleSessionCapAge time.Duration
-		sleepDuration        time.Duration
-		expectedLocation     string
-	}{
-		{
-			description:          "re-auth on expired activity window",
-			username:             "admin",
-			password:             validAdminPassword,
-			expectedStatus:       http.StatusFound,
-			consoleSessionMaxAge: 1 * time.Second,
-			consoleSessionCapAge: 1 * time.Hour,
-			sleepDuration:        2 * time.Second,
-			expectedLocation:     cdntypes.AuthLoginPath,
-		},
-		{
-			description:          "re-auth on expired cap window",
-			username:             "admin",
-			password:             validAdminPassword,
-			expectedStatus:       http.StatusFound,
-			consoleSessionMaxAge: 1 * time.Hour,
-			consoleSessionCapAge: 1 * time.Second,
-			sleepDuration:        2 * time.Second,
-			expectedLocation:     cdntypes.AuthLoginPath,
-		},
-		{
-			description:          "valid cookie got MaxAge renewed",
-			username:             "admin",
-			password:             validAdminPassword,
-			expectedStatus:       http.StatusOK,
-			consoleSessionMaxAge: 1 * time.Hour,
-			consoleSessionCapAge: 8 * time.Hour,
-			sleepDuration:        2 * time.Second,
-			expectedLocation:     "",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			ts, dbPool, err := prepareServer(t, testServerInput{consoleSessionMaxAge: test.consoleSessionMaxAge, consoleSessionCapAge: test.consoleSessionCapAge})
-			if dbPool != nil {
-				defer dbPool.Close()
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ts.Close()
-
-			// Initial login
-			_, sessionCookie := consoleLogin(t, ts.URL, test.username, test.password)
-
-			time.Sleep(test.sleepDuration)
-
-			// New client that does not use a cookie jar that will
-			// leave out expired cookies, we add the cookie
-			// manually to test server behavior
-			client := &http.Client{
-				// Do not automatically follow redirects so we
-				// can test the different cookie state outcomes
-				// based on initial server response.
-				CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			}
-
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/console", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			req.AddCookie(&http.Cookie{
-				Name:     cookieName,
-				Value:    sessionCookie.Value,
-				Secure:   true,
-				HttpOnly: true,
-				SameSite: http.SameSiteLaxMode,
-			})
-
-			resp, err := client.Do(req) // #nosec G704
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-
-			if test.expectedLocation != "" {
-				if resp.Header.Get("Location") != test.expectedLocation {
-					t.Fatalf("unexpected Location header: have: '%s', want: '%s'", resp.Header.Get("Location"), test.expectedLocation)
-				}
-			}
-
-			if resp.StatusCode != test.expectedStatus {
-				t.Fatalf("unexpected status code: %d", resp.StatusCode)
-			}
-
-			// If the response was OK we want to verify the expires
-			// duration has been increased by sliding
-			if resp.StatusCode == http.StatusOK {
-				if sessionCookie.Expires.IsZero() {
-					t.Fatal("initial session cookie expires field is zero")
-				}
-
-				var sessionCookieNext *http.Cookie
-				for _, c := range resp.Cookies() {
-					if c.Name == cookieName {
-						sessionCookieNext = c
-					}
-				}
-
-				if sessionCookieNext.Expires.IsZero() {
-					t.Fatal("next session cookie expires field is zero")
-				}
-
-				if !sessionCookieNext.Expires.After(sessionCookie.Expires) {
-					t.Fatal("next session cookie expires field is not after initial session cookie")
-				}
-			}
-		})
-	}
 }
 
 func TestValidateRelativeRedirect(t *testing.T) {

@@ -2,7 +2,11 @@
 url = "https://manager.sunet-cdn.localhost:8444"
 addr = "127.0.0.1:8444"
 vcl_validation_url = "http://localhost:8888/validate-vcl"
-console_session_max_age = "1h"
+# Console sessions end after this long without use (idle timeout) and this
+# long after login (absolute timeout), whichever comes first. Both are
+# enforced on the server. Closing the browser does not end a session, use
+# the logout button.
+console_session_max_age = "30m"
 console_session_cap_age = "8h"
 # Optional, defaults to (and can not be lower than) db.query_timeout +
 # 2*login.argon2_wait_timeout + 5s. Each request gets this minus 2s to do its
