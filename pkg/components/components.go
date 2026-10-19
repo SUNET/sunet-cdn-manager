@@ -212,6 +212,16 @@ func ipAllocationErrMsg(err error) string {
 	return cdnerrors.ErrNoServiceIPAddresses.Error()
 }
 
+// serviceQuotaErrMsg extracts the user-facing message from a service
+// QuotaError, bypassing any fmt.Errorf wrapping from intermediate functions.
+// Falls back to the sentinel text if err is a bare ErrServiceQuotaHit.
+func serviceQuotaErrMsg(err error) string {
+	if quotaErr, ok := errors.AsType[*cdnerrors.QuotaError](err); ok {
+		return quotaErr.Error()
+	}
+	return cdnerrors.ErrServiceQuotaHit.Error()
+}
+
 // AddressesString formats a node's addresses as newline-separated text for
 // display in textarea form fields.
 func AddressesString(node cdntypes.Node) string {

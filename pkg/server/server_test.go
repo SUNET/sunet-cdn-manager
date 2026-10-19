@@ -12867,6 +12867,125 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 	}
 }
 
+func TestConsoleExpectedErrors(t *testing.T) {
+	ctx := context.Background()
+
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer ts.Close()
+
+	// With all quotas at zero any attempt to create something in org4 hits a quota.
+	_, err = dbPool.Exec(ctx, "UPDATE orgs SET service_quota = 0, domain_quota = 0, client_token_quota = 0 WHERE name = 'org4'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		method         string
+		path           string
+		formBody       string
+		expectedStatus int
+		// errorSelector finds the error text in the page, defaults to
+		// span.error-text. The create service form renders its errors
+		// in an alert article instead.
+		errorSelector    string
+		expectedErrorMsg string
+	}{
+		{
+			description:      "create service over quota shows specific in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           http.MethodPost,
+			path:             "/console/org/org4/create/service",
+			formBody:         "name=quota-svc",
+			expectedStatus:   http.StatusOK,
+			errorSelector:    "article#error-message",
+			expectedErrorMsg: "service quota reached (0 of 0)",
+		},
+		{
+			description:      "create domain over quota shows specific in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           http.MethodPost,
+			path:             "/console/org/org4/create/domain",
+			formBody:         "fqdn=quota.example.se",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Domain quota reached (0 of 0)",
+		},
+		{
+			description:      "create API token over quota shows specific in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           http.MethodPost,
+			path:             "/console/org/org4/create/api-token",
+			formBody:         "name=quota-token&description=quota+test",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "Client credential quota reached (0 of 0)",
+		},
+		{
+			description:      "delete domain used by a service version shows specific in-page error",
+			username:         "admin",
+			password:         validAdminPassword,
+			method:           http.MethodDelete,
+			path:             "/console/org/org1/domains/example.com",
+			expectedStatus:   http.StatusOK,
+			expectedErrorMsg: "org1-service1 version 3",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			client, _ := consoleLogin(t, ts.URL, test.username, test.password)
+
+			req, err := http.NewRequest(test.method, ts.URL+test.path, strings.NewReader(test.formBody))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			resp, err := client.Do(req) // #nosec G704
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != test.expectedStatus {
+				body, readErr := io.ReadAll(resp.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				t.Fatalf("unexpected status code: got %d, want %d (%s)", resp.StatusCode, test.expectedStatus, string(body))
+			}
+
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			if err != nil {
+				t.Fatalf("failed to parse response HTML: %v", err)
+			}
+
+			errorSelector := test.errorSelector
+			if errorSelector == "" {
+				errorSelector = "span.error-text"
+			}
+
+			errorText := strings.TrimSpace(doc.Find(errorSelector).Text())
+			if !strings.Contains(errorText, test.expectedErrorMsg) {
+				t.Fatalf("expected error text to contain %q, got %q", test.expectedErrorMsg, errorText)
+			}
+		})
+	}
+}
+
 func TestConsolePhase2ErrorRendering(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
@@ -15543,5 +15662,279 @@ func TestKeycloakCleanupsAfterWait(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("expected a refused cleanup not to run")
+	}
+}
+
+// TestIdentifierBadIdentifier makes sure the identifier helpers mark only
+// failures caused by the identifier itself with errBadIdentifier, so
+// server-side failures while resolving an identifier stay a 500 instead of
+// being reported as bad input.
+func TestIdentifierBadIdentifier(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	tests := []struct {
+		name   string
+		lookup func(tx pgx.Tx) error
+		want   bool
+		// also is an error that must stay in the chain next to
+		// errBadIdentifier for callers that check for it
+		also error
+	}{
+		{
+			name: "empty identifier",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newOrgIdentifier(ctx, tx, "")
+				return err
+			},
+			want: true,
+		},
+		{
+			name: "no matching name",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newOrgIdentifier(ctx, tx, "nosuch-org")
+				return err
+			},
+			want: true,
+			also: pgx.ErrNoRows,
+		},
+		{
+			name: "no matching ID",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newDomainIdentifierForUpdate(ctx, tx, "00000015-0000-0000-0000-900000000001")
+				return err
+			},
+			want: true,
+			also: pgx.ErrNoRows,
+		},
+		{
+			name: "service by name without org",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newServiceIdentifier(ctx, tx, "org1-service1", pgtype.UUID{})
+				return err
+			},
+			want: true,
+			also: cdnerrors.ErrServiceByNameNeedsOrg,
+		},
+		{
+			name: "credential by name without org",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newOrgClientCredentialIdentifierForUpdate(ctx, tx, "some-cred", pgtype.UUID{})
+				return err
+			},
+			want: true,
+			also: cdnerrors.ErrUnprocessable,
+		},
+		{
+			name: "malformed network prefix",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newIPNetworkIdentifierForUpdate(ctx, tx, "not-a-prefix")
+				return err
+			},
+			want: true,
+		},
+		{
+			name: "cancelled context",
+			lookup: func(tx pgx.Tx) error {
+				_, err := newOrgIdentifier(cancelledCtx, tx, "org1")
+				return err
+			},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx, err := dbPool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+					t.Logf("unable to roll back lookup transaction: %v", rbErr)
+				}
+			}()
+
+			lookupErr := test.lookup(tx)
+			if lookupErr == nil {
+				t.Fatal("expected lookup to fail")
+			}
+			if got := errors.Is(lookupErr, errBadIdentifier); got != test.want {
+				t.Errorf("errors.Is(%v, errBadIdentifier) = %t, want %t", lookupErr, got, test.want)
+			}
+			if test.also != nil && !errors.Is(lookupErr, test.also) {
+				t.Errorf("expected %v to still match %v", lookupErr, test.also)
+			}
+		})
+	}
+}
+
+// TestAPIExpectedErrors makes sure expected errors that are not handled by a
+// specific case in an API handler end up as 4xx with a readable message
+// instead of a generic 500.
+func TestAPIExpectedErrors(t *testing.T) {
+	ctx := context.Background()
+
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// With all quotas at zero any attempt to create something in org4 hits a quota.
+	_, err = dbPool.Exec(ctx, "UPDATE orgs SET service_quota = 0, domain_quota = 0, client_token_quota = 0 WHERE name = 'org4'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// example.se is already used by the active version 3 of org1-service1,
+	// also link it to the inactive version 1 since inactive versions block
+	// deletion as well.
+	_, err = dbPool.Exec(ctx, "INSERT INTO service_domains (service_version_id, domain_id) VALUES ('00000004-0000-0000-0000-000000000001', '00000015-0000-0000-0000-000000000001')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		description    string
+		username       string
+		password       string
+		method         string
+		path           string
+		query          string
+		body           string
+		expectedStatus int
+		expectedDetail string
+	}{
+		{
+			description:    "domain quota hit",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodPost,
+			path:           "/api/v1/domains",
+			query:          "org=org4",
+			body:           `{"fqdn":"quota.example.se"}`,
+			expectedStatus: http.StatusConflict,
+			expectedDetail: "domain quota reached (0 of 0)",
+		},
+		{
+			description:    "client credential quota hit",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodPost,
+			path:           "/api/v1/orgs/org4/client-credentials",
+			body:           `{"name":"quota-cred","description":"quota test"}`,
+			expectedStatus: http.StatusConflict,
+			expectedDetail: "client credential quota reached (0 of 0)",
+		},
+		{
+			description:    "service quota hit",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodPost,
+			path:           "/api/v1/services",
+			body:           `{"name":"quota-svc","org":"org4"}`,
+			expectedStatus: http.StatusConflict,
+			expectedDetail: "service quota reached (0 of 0)",
+		},
+		{
+			description:    "service version activation in other org is forbidden",
+			username:       "username2",
+			password:       "password2",
+			method:         http.MethodPut,
+			path:           "/api/v1/services/org1-service1/service-versions/1/active",
+			query:          "org=org1",
+			body:           `{"active":true}`,
+			expectedStatus: http.StatusForbidden,
+			expectedDetail: "access to resource is not allowed",
+		},
+		{
+			description:    "delete domain used by active and inactive service versions",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodDelete,
+			path:           "/api/v1/domains/example.se",
+			expectedStatus: http.StatusConflict,
+			expectedDetail: `cannot delete "example.se": used by org1-service1 versions 1, 3`,
+		},
+		{
+			description:    "delete domain used by a single service version",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodDelete,
+			path:           "/api/v1/domains/example.com",
+			expectedStatus: http.StatusConflict,
+			expectedDetail: "org1-service1 version 3",
+		},
+		{
+			// An unknown org is a failed identifier lookup (no rows),
+			// which must still be answered as a client error.
+			description:    "unknown org",
+			username:       "admin",
+			password:       validAdminPassword,
+			method:         http.MethodGet,
+			path:           "/api/v1/orgs/nosuch-org",
+			expectedStatus: http.StatusBadRequest,
+			expectedDetail: "unable to parse name or ID",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			u := ts.URL + test.path
+			if test.query != "" {
+				u += "?" + test.query
+			}
+
+			req, err := http.NewRequest(test.method, u, strings.NewReader(test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth(test.username, test.password)
+
+			resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if resp.StatusCode != test.expectedStatus {
+				t.Fatalf("unexpected status code: %d (%s)", resp.StatusCode, string(respBody))
+			}
+
+			var errResp struct {
+				Detail string `json:"detail"`
+			}
+
+			err = json.Unmarshal(respBody, &errResp)
+			if err != nil {
+				t.Fatalf("unable to unmarshal error response %q: %s", string(respBody), err)
+			}
+
+			if !strings.Contains(errResp.Detail, test.expectedDetail) {
+				t.Fatalf("expected detail to contain %q, got %q", test.expectedDetail, errResp.Detail)
+			}
+		})
 	}
 }
