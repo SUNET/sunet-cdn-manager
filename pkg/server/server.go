@@ -7335,6 +7335,25 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	return d, nil
 }
 
+const (
+	// uidRangeStart is the first UID handed out to services, and must
+	// match the lower bound in the services.uid_range CHECK constraint.
+	uidRangeStart int64 = 1000010000
+
+	// uidRangeSize is the number of UIDs allocated to each service.
+	uidRangeSize int64 = 10000
+)
+
+// advisoryLockID is a key for pg_advisory_xact_lock. Every key the server
+// takes is listed in the block below so iota keeps them distinct. It starts
+// at 1 so an unset value is never a valid key.
+type advisoryLockID int64
+
+const (
+	// uidRangeAllocLockID is held while insertService picks a uid_range.
+	uidRangeAllocLockID advisoryLockID = iota + 1
+)
+
 func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (pgtype.UUID, error) {
 	var serviceID pgtype.UUID
 
@@ -7391,12 +7410,31 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 			return &cdnerrors.QuotaError{Quota: cdnerrors.ServiceQuota, Used: numServices, Limit: serviceQuota}
 		}
 
-		// Figure out the next available uid range (or default to
-		// 1000010000-1000019999 for the first created service). This
-		// SELECT is protected by the FOR UPDATE select above, so is
-		// safe from concurrent service creation.
+		// uid_range is unique across all orgs, so the org row lock above
+		// does not protect it: two orgs creating a service at the same
+		// time would both pick the same free range and one would fail on
+		// the services exclusion constraint. Serialize allocation across
+		// all orgs for the rest of the transaction.
+		_, err = tx.Exec(dbCtx, "SELECT pg_advisory_xact_lock($1)", uidRangeAllocLockID)
+		if err != nil {
+			return fmt.Errorf("unable to take uid_range allocation lock: %w", err)
+		}
+
+		// Take the lowest free uidRangeSize UID block. Reusing the ranges of
+		// deleted services keeps the UID space in use bounded by the
+		// number of live services rather than by how many have ever been
+		// created, since the space has an upper bound. Reuse is safe
+		// because a service must be disabled before it can be deleted
+		// and the agent clears out old services before setting up new
+		// ones. A free block can only start at the base of the UID space
+		// or where an existing range ends, so those are the only
+		// candidates to check.
 		var uidRange pgtype.Range[pgtype.Int8]
-		err = tx.QueryRow(dbCtx, "SELECT COALESCE((SELECT int8range(upper(uid_range), upper(uid_range)+10000) FROM services ORDER BY uid_range DESC LIMIT 1), int8range(1000010000, 1000020000))").Scan(&uidRange)
+		err = tx.QueryRow(dbCtx, `
+			SELECT int8range(start, start+$2)
+			FROM (SELECT $1 AS start UNION SELECT upper(uid_range) FROM services) AS candidates
+			WHERE NOT EXISTS (SELECT 1 FROM services WHERE uid_range && int8range(start, start+$2))
+			ORDER BY start LIMIT 1`, uidRangeStart, uidRangeSize).Scan(&uidRange)
 		if err != nil {
 			return err
 		}
