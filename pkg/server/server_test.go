@@ -137,18 +137,18 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		"INSERT INTO orgs (id, name) VALUES ('00000002-0000-0000-0000-000000000004', 'org4')",
 
 		// Services
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1', '(1000010000, 1000019999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2', '(1000020000, 1000029999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3', '(1000030000, 1000039999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000010', id, 'org1-service4', '(1000040000, 1000049999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000011', id, 'org1-service5', '(1000050000, 1000059999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000012', id, 'org1-service6', '(1000060000, 1000069999)' FROM orgs WHERE name='org1'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1', '(1000070000, 1000079999)' FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2', '(1000080000, 1000089999)' FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3', '(1000090000, 1000099999)' FROM orgs WHERE name='org2'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1', '(1000100000, 1000109999)' FROM orgs WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2', '(1000110000, 1000119999)' FROM orgs WHERE name='org3'",
-		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3', '(1000120000, 1000129999)' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000001', id, 'org1-service1', '[1000010000, 1000020000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000002', id, 'org1-service2', '[1000020000, 1000030000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000003', id, 'org1-service3', '[1000030000, 1000040000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000010', id, 'org1-service4', '[1000040000, 1000050000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000011', id, 'org1-service5', '[1000050000, 1000060000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000012', id, 'org1-service6', '[1000060000, 1000070000)' FROM orgs WHERE name='org1'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000004', id, 'org2-service1', '[1000070000, 1000080000)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000005', id, 'org2-service2', '[1000080000, 1000090000)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000006', id, 'org2-service3', '[1000090000, 1000100000)' FROM orgs WHERE name='org2'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000007', id, 'org3-service1', '[1000100000, 1000110000)' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000008', id, 'org3-service2', '[1000110000, 1000120000)' FROM orgs WHERE name='org3'",
+		"INSERT INTO services (id, org_id, name, uid_range) SELECT '00000003-0000-0000-0000-000000000009', id, 'org3-service3', '[1000120000, 1000130000)' FROM orgs WHERE name='org3'",
 
 		// Service versions
 		// org1, last version is active
@@ -5439,6 +5439,134 @@ func TestDeleteService(t *testing.T) {
 				}
 			} else if test.expectVersions > 0 && versionCount != test.expectVersions {
 				t.Errorf("a refused delete must not cascade, expected %d versions got %d", test.expectVersions, versionCount)
+			}
+		})
+	}
+}
+
+func TestInsertServiceConcurrentUIDRanges(t *testing.T) {
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	dbPool, err := initDatabase(ctx, t, logger, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The shared test config limits pools to a single connection, which
+	// would serialize every insertService call and hide the race. Reopen
+	// the same database with enough connections for all goroutines to have
+	// a transaction open at once.
+	pgConfig := dbPool.Config()
+	dbPool.Close()
+	pgConfig.MaxConns = 8
+	dbPool, err = pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	_, err = dbPool.Exec(ctx, "UPDATE orgs SET service_quota = 1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dbc := &dbConn{dbPool: dbPool, queryTimeout: time.Minute}
+	ad := cdntypes.AuthData{Superuser: true}
+
+	// One service per org per round: the org row lock taken by
+	// insertService only serializes creates within an org, so the race
+	// for the same uid_range is between creates in different orgs.
+	orgs := []string{"org1", "org2", "org3", "org4"}
+	for round := range 25 {
+		var wg sync.WaitGroup
+		errs := make([]error, len(orgs))
+		for i, org := range orgs {
+			wg.Go(func() {
+				_, errs[i] = insertService(ctx, &logger, dbc, fmt.Sprintf("race-%d-%d", round, i), &org, ad)
+			})
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: concurrent insertService for %s failed: %v", round, orgs[i], err)
+			}
+		}
+	}
+}
+
+func TestInsertServiceReusesFreedUIDRange(t *testing.T) {
+	ctx := context.Background()
+	logger := zerolog.New(zerolog.NewTestWriter(t)).With().Timestamp().Caller().Logger()
+
+	dbPool, err := initDatabase(ctx, t, logger, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	dbc := &dbConn{dbPool: dbPool, queryTimeout: time.Minute}
+	ad := cdntypes.AuthData{Superuser: true}
+
+	// The expectations below rely on the ranges allocated by
+	// populateTestData: org1-service1 holds the lowest block at the base
+	// of the UID space and org1-service3 sits between org1-service2 and
+	// the ranges of the other fixture services. Freeing those two leaves
+	// one gap at the base and one in the middle with allocated ranges
+	// above it, so filling the middle gap can not be confused with
+	// extending past the highest range. Both are in org1 which has plenty
+	// of quota.
+	for _, name := range []string{"org1-service1", "org1-service3"} {
+		_, err = dbPool.Exec(ctx, "UPDATE services SET time_disabled = now() WHERE name = $1", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = deleteService(ctx, &logger, dbc, "org1", name, name, ad)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The middle gap starts where the range below it ends.
+	var middleGapStart int64
+	err = dbPool.QueryRow(ctx, "SELECT upper(uid_range) FROM services WHERE name = 'org1-service2'").Scan(&middleGapStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	org := "org1"
+	tests := []struct {
+		description   string
+		name          string
+		expectedLower int64
+	}{
+		{
+			description:   "first create takes the lowest block at the base of the UID space",
+			name:          "reuse-1",
+			expectedLower: 1000010000,
+		},
+		{
+			description:   "second create fills the middle gap instead of extending the top",
+			name:          "reuse-2",
+			expectedLower: middleGapStart,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			serviceID, err := insertService(ctx, &logger, dbc, test.name, &org, ad)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var lower, upper int64
+			err = dbPool.QueryRow(ctx, "SELECT lower(uid_range), upper(uid_range) FROM services WHERE id = $1", serviceID).Scan(&lower, &upper)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if lower != test.expectedLower || upper != test.expectedLower+10000 {
+				t.Errorf("expected uid_range [%d,%d), got [%d,%d)", test.expectedLower, test.expectedLower+10000, lower, upper)
 			}
 		})
 	}
