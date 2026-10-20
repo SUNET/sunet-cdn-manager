@@ -906,7 +906,7 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				errorMessage = "Domain not found"
 			default:
 				logger.Err(err).Msg("domains console: domain deletion failed")
-				errorMessage = "Domain deletion failed"
+				errorMessage = consoleErrorMessage(err, "Domain deletion failed")
 			}
 			// Treat ErrForbidden as non-fatal: the user may lack access to this
 			// org's domains, but we can still render the error message with an empty list.
@@ -1263,7 +1263,7 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 					apiTokenData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
 				} else {
 					logger.Err(err).Msg("unable to insert API token")
-					apiTokenData.Errors.ServerError = "unable to insert API token"
+					apiTokenData.Errors.ServerError = consoleErrorMessage(err, "unable to insert API token")
 				}
 				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateAPITokenContent(orgIdent.name, apiTokenData))
 				if err != nil {
@@ -1725,7 +1725,7 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 					domainData.Errors.FQDN = cdnerrors.ErrAlreadyExists.Error()
 				} else {
 					logger.Err(err).Msg("unable to insert domain")
-					domainData.Errors.ServerError = "unable to insert domain"
+					domainData.Errors.ServerError = consoleErrorMessage(err, "unable to insert domain")
 				}
 				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateDomainContent(orgIdent.name, domainData))
 				if err != nil {
@@ -4539,7 +4539,10 @@ func setServiceDisabled(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, 
 			}
 			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 			if err != nil {
-				return cdnerrors.ErrUnprocessable
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnprocessable
+				}
+				return fmt.Errorf("setServiceDisabled: unable to look up org identifier: %w", err)
 			}
 			orgID = orgIdent.id
 		}
@@ -5247,7 +5250,10 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 		if orgNameOrID != "" {
 			orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
 			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnableToParseNameOrID
+				}
+				return fmt.Errorf("selectDomains: unable to look up org identifier: %w", err)
 			}
 
 			lookupOrg = orgIdent.id
@@ -5318,8 +5324,42 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 			return cdnerrors.ErrNotFound
 		}
 
+		// This check cannot race with a service version being added:
+		// newDomainIdentifierForUpdate holds FOR UPDATE on the domain row
+		// and inserting a service_domains row takes FOR KEY SHARE on it
+		// through the foreign key, so the insert waits for this
+		// transaction. Inactive versions are included since the foreign
+		// key covers every version.
+		rows, err := tx.Query(dbCtx, `
+			SELECT services.name, service_versions.version
+			FROM service_domains
+			JOIN service_versions ON service_versions.id = service_domains.service_version_id
+			JOIN services ON services.id = service_versions.service_id
+			WHERE service_domains.domain_id = $1
+			ORDER BY services.name, service_versions.version`, domainIdent.id)
+		if err != nil {
+			return fmt.Errorf("deleteDomain: unable to SELECT service versions using domain: %w", err)
+		}
+
+		usedBy, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (cdnerrors.ServiceVersionRef, error) {
+			var ref cdnerrors.ServiceVersionRef
+			err := row.Scan(&ref.Service, &ref.Version)
+			return ref, err
+		})
+		if err != nil {
+			return fmt.Errorf("deleteDomain: unable to read service versions using domain: %w", err)
+		}
+
+		if len(usedBy) > 0 {
+			return &cdnerrors.DomainInUseError{Domain: domainIdent.fqdn, Versions: usedBy}
+		}
+
 		err = tx.QueryRow(dbCtx, "DELETE FROM domains WHERE id = $1 RETURNING id", domainIdent.id).Scan(&domainID)
 		if err != nil {
+			// Backstop for a reference the check above did not see.
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgForeignKeyViolation {
+				return fmt.Errorf("deleteDomain: %w: %w", cdnerrors.ErrHasDependents, err)
+			}
 			return fmt.Errorf("unable to DELETE domain: %w", err)
 		}
 
@@ -5353,7 +5393,10 @@ func selectServiceIPsTx(ctx context.Context, tx pgx.Tx, serviceNameOrID string, 
 	if orgNameOrID != "" {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
-			return serviceAddresses{}, cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return serviceAddresses{}, cdnerrors.ErrUnableToParseNameOrID
+			}
+			return serviceAddresses{}, fmt.Errorf("selectServiceIPsTx: unable to look up org identifier: %w", err)
 		}
 		orgID = orgIdent.id
 	}
@@ -5391,7 +5434,10 @@ func selectServiceIPsForOrgTx(ctx context.Context, tx pgx.Tx, orgNameOrID string
 	orgServiceAddrs := map[pgtype.UUID][]serviceAddress{}
 	orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 	if err != nil {
-		return nil, cdnerrors.ErrUnableToParseNameOrID
+		if errors.Is(err, errBadIdentifier) {
+			return nil, cdnerrors.ErrUnableToParseNameOrID
+		}
+		return nil, fmt.Errorf("selectServiceIPsForOrgTx: unable to look up org identifier: %w", err)
 	}
 
 	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
@@ -5433,7 +5479,10 @@ func selectOrg(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			return fmt.Errorf("selectOrg: unable to look up org identifier: %w", err)
 		}
 
 		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
@@ -5464,7 +5513,10 @@ func selectSafeOrgClientCredentials(ctx context.Context, dbc *dbConn, orgNameOrI
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			return fmt.Errorf("selectSafeOrgClientCredentials: unable to look up org identifier: %w", err)
 		}
 
 		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
@@ -5761,7 +5813,10 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifierForUpdate(dbCtx, tx, orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertOrgClientCredential: unable to look up org identifier: %w", err)
 		}
 
 		// A normal user must supply an org id for an org they are
@@ -5791,7 +5846,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 
 		if numClientTokens >= clientTokenQuota {
 			logger.Error().Int64("num_client_tokens", numClientTokens).Int64("client_token_quota", clientTokenQuota).Msg("unable to create additional credential as quota has been reached")
-			return cdnerrors.ErrOrgClientTokenQuotaHit
+			return &cdnerrors.QuotaError{Quota: cdnerrors.ClientCredentialQuota, Used: numClientTokens, Limit: clientTokenQuota}
 		}
 
 		// Mostly the "id" in our database is an UUIDv4 generated for us
@@ -5904,7 +5959,10 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("unable to look up org identifier")
-				return cdnerrors.ErrUnprocessable
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnprocessable
+				}
+				return fmt.Errorf("deleteOrgClientCredential: unable to look up org identifier: %w", err)
 			}
 			orgID = orgIdent.id
 		}
@@ -5915,9 +5973,12 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 			case errors.Is(err, pgx.ErrNoRows):
 				logger.Err(err).Msg("no such client credential identifier")
 				return cdnerrors.ErrNotFound
+			case errors.Is(err, errBadIdentifier):
+				logger.Err(err).Msg("bad org client credential identifier")
+				return cdnerrors.ErrUnprocessable
 			default:
 				logger.Err(err).Msg("unable to look up org client credential identifier")
-				return cdnerrors.ErrUnprocessable
+				return fmt.Errorf("deleteOrgClientCredential: unable to look up org client credential identifier: %w", err)
 			}
 		}
 
@@ -6381,7 +6442,10 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 	if orgNameOrID != "" {
 		orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
-			return []cdntypes.Service{}, cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return []cdntypes.Service{}, cdnerrors.ErrUnableToParseNameOrID
+			}
+			return []cdntypes.Service{}, fmt.Errorf("selectServicesTx: unable to look up org identifier: %w", err)
 		}
 
 		lookupOrg = orgIdent.id
@@ -6433,7 +6497,10 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 		if orgNameOrID != "" {
 			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnableToParseNameOrID
+				}
+				return fmt.Errorf("selectService: unable to look up org identifier: %w", err)
 			}
 			orgID = orgIdent.id
 		}
@@ -6442,7 +6509,10 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 		// for looking up service by name an org must be included
 		serviceIdent, err = newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			return fmt.Errorf("selectService: unable to look up service identifier: %w", err)
 		}
 
 		// Normal users are only allowed to see services belonging to the same org as they are
@@ -6510,7 +6580,36 @@ type orgClientCredentialIdentifier struct {
 	orgID pgtype.UUID
 }
 
-var errEmptyInputIdentifier = errors.New("input identifier is empty")
+// errBadIdentifier is wrapped into the error a new*Identifier helper returns
+// when the identifier given by the client is the problem: it is empty or
+// malformed, it is a name that needs an org to be resolved but none was given,
+// or nothing matches it. Any other error from a helper is a server-side
+// failure, such as a lost connection, a cancelled context or a lock timeout.
+//
+// Callers use it to answer the client's mistakes with a 4xx while server-side
+// failures stay a 500:
+//
+//	if errors.Is(err, errBadIdentifier) {
+//		return cdnerrors.ErrUnprocessable
+//	}
+//	return fmt.Errorf("...: %w", err)
+//
+// Returning cdnerrors.ErrUnprocessable or cdnerrors.ErrUnableToParseNameOrID
+// for every failed lookup would make a database problem look like a client
+// error, since api_errors.go maps both to 4xx.
+var errBadIdentifier = errors.New("bad identifier")
+
+var errEmptyInputIdentifier = fmt.Errorf("%w: input identifier is empty", errBadIdentifier)
+
+// identifierQueryErr marks a failed identifier lookup query as errBadIdentifier
+// when nothing matched. pgx.ErrNoRows stays in the chain for callers that
+// check for it, and any other query error is returned as is.
+func identifierQueryErr(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %w", errBadIdentifier, err)
+	}
+	return err
+}
 
 // rowLock selects the row lock taken while resolving a resource identifier.
 //
@@ -6583,13 +6682,13 @@ func newOrgIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
-			return orgIdentifier{}, err
+			return orgIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org names are globally unique)
 		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
-			return orgIdentifier{}, err
+			return orgIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6642,22 +6741,22 @@ func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, 
 		if inputOrgID.Valid {
 			err := tx.QueryRow(ctx, byIDInOrgQuery, *inputID, inputOrgID).Scan(&id, &name, &orgID)
 			if err != nil {
-				return serviceIdentifier{}, err
+				return serviceIdentifier{}, identifierQueryErr(err)
 			}
 		} else {
 			err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name, &orgID)
 			if err != nil {
-				return serviceIdentifier{}, err
+				return serviceIdentifier{}, identifierQueryErr(err)
 			}
 		}
 	} else {
 		if !inputOrgID.Valid {
-			return serviceIdentifier{}, cdnerrors.ErrServiceByNameNeedsOrg
+			return serviceIdentifier{}, fmt.Errorf("%w: %w", errBadIdentifier, cdnerrors.ErrServiceByNameNeedsOrg)
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (service names are only unique per org)
 		err := tx.QueryRow(ctx, byNameQuery, input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
-			return serviceIdentifier{}, err
+			return serviceIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6685,13 +6784,13 @@ func newRoleIdentifier(ctx context.Context, tx pgx.Tx, input string) (roleIdenti
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, "SELECT id, name FROM roles WHERE id = $1 FOR SHARE", *inputID).Scan(&id, &name)
 		if err != nil {
-			return roleIdentifier{}, err
+			return roleIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (role names are globally unique)
 		err := tx.QueryRow(ctx, "SELECT id, name FROM roles WHERE name = $1 FOR SHARE", input).Scan(&id, &name)
 		if err != nil {
-			return roleIdentifier{}, err
+			return roleIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6729,13 +6828,13 @@ func newCacheNodeIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
-			return cacheNodeIdentifier{}, err
+			return cacheNodeIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (cache node names are globally unique)
 		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
-			return cacheNodeIdentifier{}, err
+			return cacheNodeIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6773,13 +6872,13 @@ func newL4LBNodeIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string,
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
-			return l4lbNodeIdentifier{}, err
+			return l4lbNodeIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (l4lb node names are globally unique)
 		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
-			return l4lbNodeIdentifier{}, err
+			return l4lbNodeIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6820,13 +6919,13 @@ func newNodeGroupIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, byIDQuery, *inputID).Scan(&id, &name)
 		if err != nil {
-			return nodeGroupIdentifier{}, err
+			return nodeGroupIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (node group names are globally unique)
 		err := tx.QueryRow(ctx, byNameQuery, input).Scan(&id, &name)
 		if err != nil {
-			return nodeGroupIdentifier{}, err
+			return nodeGroupIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6855,13 +6954,13 @@ func newDomainIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) 
 		// This is a valid UUID, treat it as an ID and collect the FQDN (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &fqdn, &orgID)
 		if err != nil {
-			return domainIdentifier{}, err
+			return domainIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		// This is not a valid UUID, treat it as an FQDN and validate it by mapping it to an ID (domain FQDNs are globally unique)
 		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE fqdn = $1 FOR UPDATE", input).Scan(&id, &fqdn, &orgID)
 		if err != nil {
-			return domainIdentifier{}, err
+			return domainIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -6889,16 +6988,16 @@ func newOrgClientCredentialIdentifierForUpdate(ctx context.Context, tx pgx.Tx, i
 		// This is a valid UUID, treat it as an ID and collect the name (also verifying the id exists in the process)
 		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &name, &orgID)
 		if err != nil {
-			return orgClientCredentialIdentifier{}, err
+			return orgClientCredentialIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		if !inputOrgID.Valid {
-			return orgClientCredentialIdentifier{}, cdnerrors.ErrUnprocessable
+			return orgClientCredentialIdentifier{}, fmt.Errorf("%w: %w", errBadIdentifier, cdnerrors.ErrUnprocessable)
 		}
 		// This is not a valid UUID, treat it as a name and validate it by mapping it to an ID (org client credential names are only unique per org)
 		err := tx.QueryRow(ctx, "SELECT id, name, org_id FROM org_keycloak_client_credentials WHERE name = $1 and org_id = $2 FOR UPDATE", input, inputOrgID).Scan(&id, &name, &orgID)
 		if err != nil {
-			return orgClientCredentialIdentifier{}, err
+			return orgClientCredentialIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -7137,7 +7236,10 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertDomain: unable to look up org identifier: %w", err)
 		}
 
 		// A normal user must supply an org id for an org they are
@@ -7165,7 +7267,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 
 		if numDomains >= domainQuota {
 			logger.Error().Int64("num_domains", numDomains).Int64("domain_quota", domainQuota).Msg("unable to create additional domain as quota has been reached")
-			return cdnerrors.ErrDomainQuotaHit
+			return &cdnerrors.QuotaError{Quota: cdnerrors.DomainQuota, Used: numDomains, Limit: domainQuota}
 		}
 
 		// Generate verification token, just reuse our password generation function for now
@@ -7223,7 +7325,10 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertService: unable to look up org identifier: %w", err)
 		}
 
 		// A normal user must supply an org id for an org they are
@@ -7251,7 +7356,7 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 
 		if numServices >= serviceQuota {
 			logger.Error().Int64("num_services", numServices).Int64("service_quota", serviceQuota).Msg("unable to create additional service as quota has been reached")
-			return cdnerrors.ErrServiceQuotaHit
+			return &cdnerrors.QuotaError{Quota: cdnerrors.ServiceQuota, Used: numServices, Limit: serviceQuota}
 		}
 
 		// Figure out the next available uid range (or default to
@@ -7319,7 +7424,10 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 			if err != nil {
 				logger.Err(err).Msg("unable to look up org identifier")
-				return cdnerrors.ErrUnprocessable
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnprocessable
+				}
+				return fmt.Errorf("deleteService: unable to look up org identifier: %w", err)
 			}
 			orgID = orgIdent.id
 		}
@@ -7563,7 +7671,10 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		cacheNodeIdent, err := newCacheNodeIdentifier(ctx, tx, cacheNodeNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			return fmt.Errorf("selectCacheNodeConfig: unable to look up cache node identifier: %w", err)
 		}
 
 		cnc.L4LBNodes, err = selectL4LBMembersForCacheNode(ctx, tx, cacheNodeIdent.id)
@@ -7720,7 +7831,10 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		l4lbNodeIdent, err := newL4LBNodeIdentifier(ctx, tx, l4lbNodeNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnableToParseNameOrID
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnableToParseNameOrID
+			}
+			return fmt.Errorf("selectL4LBNodeConfig: unable to look up l4lb node identifier: %w", err)
 		}
 
 		cacheNodes, err = selectCacheMembersForL4LBNode(ctx, tx, l4lbNodeIdent.id)
@@ -7835,7 +7949,10 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		if orgNameOrID != "" {
 			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 			if err != nil {
-				return cdnerrors.ErrUnableToParseNameOrID
+				if errors.Is(err, errBadIdentifier) {
+					return cdnerrors.ErrUnableToParseNameOrID
+				}
+				return fmt.Errorf("selectServiceVersions: unable to look up org identifier: %w", err)
 			}
 			orgID = orgIdent.id
 		}
@@ -8178,12 +8295,18 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
 		if err != nil {
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("getServiceVersionConfig: unable to look up org identifier: %w", err)
 		}
 
 		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("getServiceVersionConfig: unable to look up service identifier: %w", err)
 		}
 
 		if !ad.Superuser {
@@ -8470,13 +8593,19 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		orgIdent, err = newOrgIdentifier(lookupCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("looking up org failed")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertServiceVersion: unable to look up org identifier: %w", err)
 		}
 
 		serviceIdent, err = newServiceIdentifier(lookupCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("looking up service failed")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertServiceVersion: unable to look up service identifier: %w", err)
 		}
 
 		// If the user is not a superuser they must belong to the same
@@ -8532,7 +8661,10 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		lockedService, err := newServiceIdentifierForUpdate(writeCtx, tx, serviceIdent.id.String(), orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("service changed during VCL validation")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("insertServiceVersion: unable to lock service identifier: %w", err)
 		}
 
 		serviceVersionResult, err = insertServiceVersionTx(writeCtx, tx, orgIdent, lockedService, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
@@ -8593,13 +8725,19 @@ func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdnt
 		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
 		if err != nil {
 			logger.Err(err).Msg("unable to validate org id")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("activateServiceVersion: unable to look up org identifier: %w", err)
 		}
 
 		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("unable to validate org id")
-			return cdnerrors.ErrUnprocessable
+			if errors.Is(err, errBadIdentifier) {
+				return cdnerrors.ErrUnprocessable
+			}
+			return fmt.Errorf("activateServiceVersion: unable to look up service identifier: %w", err)
 		}
 
 		// If the user is not a superuser they must belong to the same
@@ -9073,17 +9211,17 @@ func newIPNetworkIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input strin
 	if err == nil {
 		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &network)
 		if err != nil {
-			return ipNetworkIdentifier{}, err
+			return ipNetworkIdentifier{}, identifierQueryErr(err)
 		}
 	} else {
 		prefix, parseErr := netip.ParsePrefix(input)
 		if parseErr != nil {
-			return ipNetworkIdentifier{}, fmt.Errorf("invalid network prefix: %w", parseErr)
+			return ipNetworkIdentifier{}, fmt.Errorf("%w: invalid network prefix: %w", errBadIdentifier, parseErr)
 		}
 
 		err = tx.QueryRow(ctx, "SELECT id, network FROM ip_networks WHERE network = $1 FOR UPDATE", prefix.Masked()).Scan(&id, &network)
 		if err != nil {
-			return ipNetworkIdentifier{}, err
+			return ipNetworkIdentifier{}, identifierQueryErr(err)
 		}
 	}
 
@@ -9650,7 +9788,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query users")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &usersOutput{
@@ -9684,7 +9822,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound(userNotFound)
 				}
 				logger.Err(err).Msg("unable to query users")
-				return nil, err
+				return nil, apiError(err)
 			}
 			return &userOutput{Body: user}, nil
 		})
@@ -9721,7 +9859,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
 					default:
 						logger.Err(err).Msg("unable to add user")
-						return nil, err
+						return nil, apiError(err)
 					}
 				}
 				return &userOutput{
@@ -9781,7 +9919,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						http.Header{headerRetryAfter: {retryAfterSeconds(a2Slots.waitTimeout)}},
 					)
 				default:
-					return nil, fmt.Errorf("unable to set password: %w", err)
+					return nil, apiError(fmt.Errorf("unable to set password: %w", err))
 				}
 			}
 			return nil, nil
@@ -9818,7 +9956,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
 				default:
 					logger.Err(err).Msg("unable to update user")
-					return nil, err
+					return nil, apiError(err)
 				}
 			}
 			return &userOutput{Body: user}, nil
@@ -9852,7 +9990,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound(userNotFound)
 				default:
 					logger.Err(err).Msg("unable to delete user")
-					return nil, err
+					return nil, apiError(err)
 				}
 			}
 
@@ -9873,7 +10011,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			}
 			roles, err := selectRoles(ctx, dbc)
 			if err != nil {
-				return nil, fmt.Errorf("unable to get roles: %w", err)
+				return nil, apiError(fmt.Errorf("unable to get roles: %w", err))
 			}
 			return &rolesOutput{Body: roles}, nil
 		})
@@ -9893,7 +10031,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query orgs")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &orgsOutput{
@@ -9921,7 +10059,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound(orgNotFound)
 				}
 				logger.Err(err).Msg("unable to query organization")
-				return nil, err
+				return nil, apiError(err)
 			}
 			return &orgOutput{Body: org}, nil
 		})
@@ -9943,7 +10081,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound("organization client credentials not found")
 				}
 				logger.Err(err).Msg("unable to query organization client credentials")
-				return nil, err
+				return nil, apiError(err)
 			}
 			resp := &orgClientCredentialsOutput{}
 
@@ -9989,7 +10127,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("invalid client credential data")
 					}
 					logger.Err(err).Msg("unable to add client credential")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &newOrgClientCredentialOutput{}
 				resp.Body = newOrgClientCred
@@ -10040,7 +10178,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						)
 					}
 					logger.Err(err).Msg("unable to re-encrypt client credential registration tokens")
-					return nil, err
+					return nil, apiError(err)
 				}
 
 				resp := &reEncryptOrgClientCredentialsOutput{}
@@ -10068,7 +10206,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound("client-credential not found")
 				default:
-					return nil, err
+					return nil, apiError(err)
 				}
 			}
 
@@ -10094,7 +10232,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound("domain not found")
 				}
 				logger.Err(err).Msg("unable to query organization")
-				return nil, err
+				return nil, apiError(err)
 			}
 			resp := &orgDomainsOutput{}
 			resp.Body = domains
@@ -10120,7 +10258,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden("access to this domain is not allowed")
 				}
 				logger.Err(err).Msg("unable to delete domain")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			return nil, nil
@@ -10167,7 +10305,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("missing required params")
 					}
 					logger.Err(err).Msg("unable to add domain")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &orgDomainOutput{}
 				resp.Body = domain
@@ -10195,7 +10333,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound("service IPs not found")
 				}
 				logger.Err(err).Msg("unable to query organization ips")
-				return nil, err
+				return nil, apiError(err)
 			}
 			resp := &orgIPsOutput{}
 			resp.Body = oAddrs
@@ -10240,7 +10378,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("invalid organization data")
 					}
 					logger.Err(err).Msg("unable to add organization")
-					return nil, err
+					return nil, apiError(err)
 				}
 				return &orgOutput{Body: org}, nil
 			},
@@ -10281,7 +10419,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					}
 					return nil, huma.Error422UnprocessableEntity("quota is below current usage", details...)
 				default:
-					return nil, fmt.Errorf("unable to update organization: %w", err)
+					return nil, apiError(fmt.Errorf("unable to update organization: %w", err))
 				}
 			}
 			return &orgOutput{Body: org}, nil
@@ -10307,7 +10445,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.As(err, &depErr):
 					return nil, huma.Error409Conflict(depErr.Error())
 				default:
-					return nil, fmt.Errorf("unable to delete organization: %w", err)
+					return nil, apiError(fmt.Errorf("unable to delete organization: %w", err))
 				}
 			}
 			return nil, nil
@@ -10330,7 +10468,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden("not allowed to query for services")
 				}
 				logger.Err(err).Msg("unable to query services")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &servicesOutput{
@@ -10359,7 +10497,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden("access to this service is not allowed")
 				}
 				logger.Err(err).Msg("unable to query service by ID")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &serviceOutput{
@@ -10398,7 +10536,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error422UnprocessableEntity("unable to parse request to delete service")
 				}
 				logger.Err(err).Msg("unable to delete service")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			return nil, nil
@@ -10430,7 +10568,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
 				}
 				logger.Err(err).Msg("unable to set service disabled state")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			return nil, nil
@@ -10471,14 +10609,15 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden("not allowed to create this service")
 					case errors.Is(err, cdnerrors.ErrServiceQuotaHit):
-						return nil, huma.Error409Conflict("service quota hit, not allowed to create more services")
+						// Expected error, so not logged as a failure
+						return nil, apiError(err)
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error422UnprocessableEntity("invalid service data")
 					case errors.As(err, &ipAllocErr):
 						return nil, huma.Error422UnprocessableEntity(ipAllocErr.Error())
 					}
 					logger.Err(err).Msg("unable to add service")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &serviceOutput{}
 				resp.Body.ID = id
@@ -10508,7 +10647,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
 				}
 				logger.Err(err).Msg("unable to query service-versions")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &serviceVersionsOutput{
@@ -10572,7 +10711,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("VCL validation failed without details")
 					}
 					logger.Err(err).Msg("unable to add service version")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &serviceVersionOutput{}
 				resp.Body.ID = serviceVersionInsertRes.versionID
@@ -10610,7 +10749,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrUnprocessable):
 					return nil, huma.Error422UnprocessableEntity("invalid data in request")
 				}
-				return nil, fmt.Errorf("unable to update active version: %w", err)
+				return nil, apiError(fmt.Errorf("unable to update active version: %w", err))
 			}
 			return nil, nil
 		})
@@ -10641,13 +10780,13 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error404NotFound("service version not found")
 				}
 				logger.Err(err).Msg("unable to query service-versions/{version}/vcl")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			vcl, err := generateCompleteVcl(confTemplates, svc.OriginGroups, svc.Origins, svc.VCLTemplate)
 			if err != nil {
 				logger.Err(err).Msg("unable to convert service version config to VCL")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			rBody := cdntypes.ServiceVersionVCL{
@@ -10681,7 +10820,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error400BadRequest("invalid node name or id")
 				}
 				logger.Err(err).Msg("unable to query cache-node-configs")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &cacheNodeConfigOutput{
@@ -10711,7 +10850,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error400BadRequest("invalid node name or id")
 				}
 				logger.Err(err).Msg("unable to query l4lb-version-configs")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &l4lbNodeConfigOutput{
@@ -10748,7 +10887,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query IP networks")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &ipNetworksOutput{
@@ -10793,7 +10932,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error409Conflict("IP network is already covered by existing networks")
 					}
 					logger.Err(err).Msg("unable to add IP network")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &ipNetworkOutput{Body: ipNet}
 				return resp, nil
@@ -10826,7 +10965,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
 						return nil, huma.Error409Conflict("cannot delete IP network: addresses are allocated from it")
 					}
-					return nil, fmt.Errorf("unable to delete ip network: %w", err)
+					return nil, apiError(fmt.Errorf("unable to delete ip network: %w", err))
 				}
 			}
 
@@ -10847,7 +10986,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query for cache nodes")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &cacheNodesOutput{
@@ -10903,7 +11042,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("invalid cache node data")
 					default:
 						logger.Err(err).Msg("unable to add cache node")
-						return nil, err
+						return nil, apiError(err)
 					}
 				}
 				return &cacheNodeOutput{
@@ -10929,7 +11068,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to modify resource")
 				}
-				return nil, fmt.Errorf("unable to set cache maintenance: %w", err)
+				return nil, apiError(fmt.Errorf("unable to set cache maintenance: %w", err))
 			}
 			return nil, nil
 		})
@@ -10954,7 +11093,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, pgx.ErrNoRows):
 					return nil, huma.Error422UnprocessableEntity("unable to find resources")
 				}
-				return nil, fmt.Errorf("unable to set cache node group: %w", err)
+				return nil, apiError(fmt.Errorf("unable to set cache node group: %w", err))
 			}
 			return nil, nil
 		})
@@ -10973,7 +11112,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query for l4lb nodes")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &l4lbNodesOutput{
@@ -11029,7 +11168,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("invalid l4lb node data")
 					default:
 						logger.Err(err).Msg("unable to add l4lb node")
-						return nil, err
+						return nil, apiError(err)
 					}
 				}
 				return &l4lbNodeOutput{
@@ -11055,7 +11194,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				if errors.Is(err, cdnerrors.ErrForbidden) {
 					return nil, huma.Error403Forbidden("not allowed to modify resource")
 				}
-				return nil, fmt.Errorf("unable to set l4lb maintenance: %w", err)
+				return nil, apiError(fmt.Errorf("unable to set l4lb maintenance: %w", err))
 			}
 			return nil, nil
 		})
@@ -11080,7 +11219,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, pgx.ErrNoRows):
 					return nil, huma.Error422UnprocessableEntity("unable to find resources")
 				}
-				return nil, fmt.Errorf("unable to set l4lb node group: %w", err)
+				return nil, apiError(fmt.Errorf("unable to set l4lb node group: %w", err))
 			}
 			return nil, nil
 		})
@@ -11101,7 +11240,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden(api403String)
 				}
 				logger.Err(err).Msg("unable to query node-groups")
-				return nil, err
+				return nil, apiError(err)
 			}
 
 			resp := &nodeGroupsOutput{
@@ -11147,7 +11286,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("invalid node group data")
 					}
 					logger.Err(err).Msg("unable to add node group")
-					return nil, err
+					return nil, apiError(err)
 				}
 				resp := &nodeGroupOutput{}
 				resp.Body = nodeGroup
@@ -11188,7 +11327,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					return nil, huma.Error422UnprocessableEntity("invalid cache node data")
 				default:
-					return nil, fmt.Errorf("unable to update cache node: %w", err)
+					return nil, apiError(fmt.Errorf("unable to update cache node: %w", err))
 				}
 			}
 			return &cacheNodeOutput{Body: cacheNode}, nil
@@ -11212,7 +11351,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(cacheNodeNotFound)
 				default:
-					return nil, fmt.Errorf("unable to delete cache node: %w", err)
+					return nil, apiError(fmt.Errorf("unable to delete cache node: %w", err))
 				}
 			}
 			return nil, nil
@@ -11251,7 +11390,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					return nil, huma.Error422UnprocessableEntity("invalid l4lb node data")
 				default:
-					return nil, fmt.Errorf("unable to update l4lb node: %w", err)
+					return nil, apiError(fmt.Errorf("unable to update l4lb node: %w", err))
 				}
 			}
 			return &l4lbNodeOutput{Body: l4lbNode}, nil
@@ -11275,7 +11414,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(l4lbNodeNotFound)
 				default:
-					return nil, fmt.Errorf("unable to delete l4lb node: %w", err)
+					return nil, apiError(fmt.Errorf("unable to delete l4lb node: %w", err))
 				}
 			}
 			return nil, nil
@@ -11307,7 +11446,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					return nil, huma.Error422UnprocessableEntity("invalid node group data")
 				default:
-					return nil, fmt.Errorf("unable to update node group: %w", err)
+					return nil, apiError(fmt.Errorf("unable to update node group: %w", err))
 				}
 			}
 			return &nodeGroupOutput{Body: nodeGroup}, nil
@@ -11335,7 +11474,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
 						return nil, huma.Error409Conflict("cannot delete node group: nodes are still assigned to it")
 					}
-					return nil, fmt.Errorf("unable to delete node group: %w", err)
+					return nil, apiError(fmt.Errorf("unable to delete node group: %w", err))
 				}
 			}
 			return nil, nil

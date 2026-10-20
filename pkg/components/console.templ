@@ -619,6 +619,8 @@ templ CreateServiceContent(orgName string, err error) {
 					<div><strong>Error:</strong> Invalid form data</div>
 				case errors.Is(err, cdnerrors.ErrNoServiceIPAddresses):
 					<div><strong>Error:</strong> { ipAllocationErrMsg(err) }</div>
+				case errors.Is(err, cdnerrors.ErrServiceQuotaHit):
+					<div><strong>Error:</strong> { serviceQuotaErrMsg(err) }</div>
 				default:
 					<div><strong>Error:</strong> Service creation failed</div>
 			}

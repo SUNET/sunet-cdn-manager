@@ -3,6 +3,7 @@ package cdnerrors
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,6 +45,118 @@ var (
 	ErrLoginBusy                   = errors.New("server busy handling logins")
 )
 
+// UserMessager is implemented by errors whose details are safe and useful to
+// show to users as-is. It embeds error so it can be looked up in an error chain
+// with errors.AsType.
+type UserMessager interface {
+	error
+	UserMessage() string
+}
+
+// Quota is one of the per-org quotas.
+type Quota int
+
+const (
+	ServiceQuota Quota = iota
+	DomainQuota
+	ClientCredentialQuota
+)
+
+// String returns the human readable name of the resource the quota limits,
+// e.g. "domain".
+func (q Quota) String() string {
+	switch q {
+	case ServiceQuota:
+		return "service"
+	case DomainQuota:
+		return "domain"
+	case ClientCredentialQuota:
+		return "client credential"
+	default:
+		return fmt.Sprintf("Quota(%d)", int(q))
+	}
+}
+
+// hitErr returns the sentinel for having hit the quota.
+func (q Quota) hitErr() error {
+	switch q {
+	case ServiceQuota:
+		return ErrServiceQuotaHit
+	case DomainQuota:
+		return ErrDomainQuotaHit
+	case ClientCredentialQuota:
+		return ErrOrgClientTokenQuotaHit
+	default:
+		return nil
+	}
+}
+
+// QuotaError identifies as the *QuotaHit error for its Quota but also
+// includes how much of the quota is used.
+type QuotaError struct {
+	Quota Quota
+	Used  int64
+	Limit int64
+}
+
+func (e *QuotaError) Error() string {
+	return fmt.Sprintf("%s quota reached (%d of %d)", e.Quota, e.Used, e.Limit)
+}
+
+// Make it possible to use errors.Is(err, ErrDomainQuotaHit) and friends
+func (e *QuotaError) Unwrap() error {
+	return e.Quota.hitErr()
+}
+
+func (e *QuotaError) UserMessage() string {
+	return e.Error()
+}
+
+// ServiceVersionRef points out a specific version of a service by name.
+type ServiceVersionRef struct {
+	Service string
+	Version int64
+}
+
+// DomainInUseError identifies as ErrHasDependents and lists the service
+// versions that still reference the domain. Error() lists each service once,
+// in the order it first appears in Versions, with its versions in the order
+// given.
+type DomainInUseError struct {
+	Domain   string
+	Versions []ServiceVersionRef
+}
+
+func (e *DomainInUseError) Error() string {
+	services := []string{}
+	versionsByService := map[string][]string{}
+	for _, v := range e.Versions {
+		if _, seen := versionsByService[v.Service]; !seen {
+			services = append(services, v.Service)
+		}
+		versionsByService[v.Service] = append(versionsByService[v.Service], strconv.FormatInt(v.Version, 10))
+	}
+
+	parts := []string{}
+	for _, service := range services {
+		versions := versionsByService[service]
+		if len(versions) == 1 {
+			parts = append(parts, fmt.Sprintf("%s version %s", service, versions[0]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s versions %s", service, strings.Join(versions, ", ")))
+		}
+	}
+	return fmt.Sprintf("cannot delete %q: used by %s", e.Domain, joinParts(parts))
+}
+
+func (e *DomainInUseError) Unwrap() error {
+	return ErrHasDependents
+}
+
+func (e *DomainInUseError) UserMessage() string {
+	return e.Error()
+}
+
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a
 // detailed message from the failed validation
 type VCLValidationError struct {
@@ -58,6 +171,11 @@ func (e *VCLValidationError) Error() string {
 // Make it possible to use errors.Is(err, ErrInvalidVCL)
 func (e *VCLValidationError) Unwrap() error {
 	return ErrInvalidVCL
+}
+
+// The validation details are what the user needs to fix the VCL
+func (e *VCLValidationError) UserMessage() string {
+	return e.Details
 }
 
 // LoginRateLimitedError identifies as ErrLoginRateLimited error but also
@@ -97,6 +215,10 @@ func (e *AddressConflictError) Unwrap() error {
 	return ErrAlreadyExists
 }
 
+func (e *AddressConflictError) UserMessage() string {
+	return e.Error()
+}
+
 // DuplicateOriginError identifies as ErrAlreadyExists but indicates that a
 // service version's submitted origin data contains the same host:port pair
 // more than once (service_origins
@@ -112,6 +234,10 @@ func (e *DuplicateOriginError) Error() string {
 
 func (e *DuplicateOriginError) Unwrap() error {
 	return ErrAlreadyExists
+}
+
+func (e *DuplicateOriginError) UserMessage() string {
+	return e.Error()
 }
 
 // DependentsError identifies as ErrHasDependents and includes counts of
@@ -141,6 +267,10 @@ func (e *DependentsError) Unwrap() error {
 	return ErrHasDependents
 }
 
+func (e *DependentsError) UserMessage() string {
+	return e.Error()
+}
+
 // IPAllocationError identifies as ErrNoServiceIPAddresses and indicates which
 // address family (IPv4 or IPv6) could not be allocated and how many were requested.
 type IPAllocationError struct {
@@ -158,6 +288,10 @@ func (e *IPAllocationError) Error() string {
 
 func (e *IPAllocationError) Unwrap() error {
 	return ErrNoServiceIPAddresses
+}
+
+func (e *IPAllocationError) UserMessage() string {
+	return e.Error()
 }
 
 func joinParts(parts []string) string {
