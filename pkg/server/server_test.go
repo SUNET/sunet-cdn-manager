@@ -14895,6 +14895,65 @@ func TestLoginBusyDoesNotSpendToken(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	ts, _ := newSessionTestServer(t, testServerInput{})
+	jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+
+	const middlewareCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+
+	tests := []struct {
+		name string
+		jar  http.CookieJar
+		path string
+		// handlerCSP is set when the handler replaces the CSP from
+		// securityHeadersMiddleware with its own. Huma's API docs page
+		// sets a policy that depends on the huma version, so only check
+		// that it still forbids framing.
+		handlerCSP bool
+	}{
+		{name: "console page", jar: jar, path: consoleSuperuserUsers},
+		{name: "login page", jar: nil, path: cdntypes.AuthLoginPath},
+		{name: "redirect to console", jar: nil, path: "/"},
+		{name: "static file", jar: nil, path: "/css/pico-settings.css"},
+		{name: "unauthenticated API", jar: nil, path: "/api/v1/orgs"},
+		{name: "not found", jar: nil, path: "/does-not-exist"},
+		{name: "API docs", jar: nil, path: "/api/docs", handlerCSP: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := doConsole(t, test.jar, http.MethodGet, ts.URL+test.path, nil)
+			want := map[string]string{
+				"Strict-Transport-Security":  "max-age=63072000; includeSubDomains",
+				"X-Frame-Options":            "DENY",
+				"X-Content-Type-Options":     "nosniff",
+				"Referrer-Policy":            "same-origin",
+				"Cross-Origin-Opener-Policy": "same-origin",
+			}
+			for name, value := range want {
+				if got := res.header.Values(name); len(got) != 1 || got[0] != value {
+					t.Errorf("%s: got %q, want %q", name, got, value)
+				}
+			}
+
+			csp := res.header.Values("Content-Security-Policy")
+			if len(csp) != 1 {
+				t.Fatalf("expected one Content-Security-Policy header, got %q", csp)
+			}
+			if !test.handlerCSP {
+				if csp[0] != middlewareCSP {
+					t.Fatalf("Content-Security-Policy: got %q, want %q", csp[0], middlewareCSP)
+				}
+				return
+			}
+			// A handler that replaces the CSP must keep the page
+			// from being framed
+			if !slices.Contains(strings.Split(csp[0], "; "), "frame-ancestors 'none'") {
+				t.Fatalf("Content-Security-Policy is missing frame-ancestors 'none': %q", csp[0])
+			}
+		})
+	}
+}
+
 func TestRequestDeadlineMiddleware(t *testing.T) {
 	budget := time.Minute
 
