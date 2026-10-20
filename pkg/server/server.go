@@ -614,6 +614,38 @@ func (*strictFetchMetadataMiddleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
+// securityHeadersMiddleware sets response headers that harden every
+// response, including static files, API responses and 404s.
+//
+// Strict-Transport-Security is sent unconditionally because the server only
+// listens for HTTPS, so there is no plain HTTP response to keep it from. It
+// makes browsers refuse plain HTTP and certificate warning click-through for
+// the host for two years. It is not marked for preload since that is a
+// commitment for the whole registered domain, made outside this app.
+//
+// The page must never be framed by another site (clickjacking), so
+// frame-ancestors 'none' is sent along with X-Frame-Options for browsers
+// that predate CSP level 2. The rest of the CSP only restricts things the
+// app does not use, so it can not break the console. A handler may replace
+// the CSP with a stricter one of its own, like the Huma API docs page does.
+//
+// Cross-Origin-Opener-Policy keeps pages from other origins that open the
+// console, or that the console opens, from getting a handle to its window.
+// Logins move between the app and the OIDC provider with full page
+// redirects, never popups, so nothing needs the handle.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, org orgIdentifier) (cdntypes.DashboardData, error) {
 	var serviceQuota, servicesUsed, domainQuota, domainsUsed, clientTokenQuota, clientTokensUsed int64
 
@@ -9383,6 +9415,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 		hlog.RequestIDHandler("req_id", "Request-Id"),
 	)
 	router.Use(hlogChain...)
+	router.Use(securityHeadersMiddleware)
 	router.Use(requestDeadlineMiddleware(conf.Server.WriteTimeout - writeTimeoutResponseMargin))
 
 	router.Get("/", rootHandler)
