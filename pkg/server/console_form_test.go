@@ -453,9 +453,8 @@ func TestCreateServiceVersionFormSurvivesNameReuse(t *testing.T) {
 
 // TestActivateServiceVersionRequiresOrgMembership asserts that the response
 // carries no information about whether the named service exists: an existing
-// service and a made-up one must produce the same refusal. The service name
-// itself does appear in the breadcrumb, because that is built from the request
-// path. The caller supplied that string, so echoing it back reveals nothing.
+// service of another org and a made-up one must produce the same page,
+// byte for byte, because the breadcrumbs are not built from the request path.
 func TestActivateServiceVersionRequiresOrgMembership(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
@@ -491,13 +490,13 @@ func TestActivateServiceVersionRequiresOrgMembership(t *testing.T) {
 		if strings.Contains(text, "about to activate") {
 			t.Errorf("%s: a non-member was shown the activate confirmation page", name)
 		}
-		if !strings.Contains(text, consoleNotAllowedActivateSV) {
-			t.Errorf("%s: expected the not-allowed message, got:\n%s", name, text)
+		if !strings.Contains(text, consoleServiceNotFound) {
+			t.Errorf("%s: expected the service-not-found message, got:\n%s", name, text)
 		}
 	}
 
 	// No oracle: the refusal must not distinguish the two.
-	if strings.Contains(existing, "version 3") != strings.Contains(missing, "version 3") {
+	if existing != missing {
 		t.Error("the refusal differs between an existing and a non-existent service")
 	}
 }

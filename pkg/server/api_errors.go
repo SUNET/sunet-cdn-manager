@@ -60,6 +60,7 @@ var expectedErrorStatuses = []struct {
 	{cdnerrors.ErrServiceByNameNeedsOrg, http.StatusUnprocessableEntity},
 	{cdnerrors.ErrNoServiceIPAddresses, http.StatusUnprocessableEntity},
 	{cdnerrors.ErrConfirmNameMismatch, http.StatusUnprocessableEntity},
+	{cdnerrors.ErrReferencedOrgNotFound, http.StatusUnprocessableEntity},
 }
 
 // lookupExpectedError returns the HTTP status and user facing message for the

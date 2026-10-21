@@ -1579,14 +1579,14 @@ type putUserBody struct {
 }
 
 // requireOrgAccess checks whether the user of jar may view the org's
-// domains page. A refused org page is a 200 with a membership message.
+// domains page. A refused org page is a 200 with the org-not-found message.
 func requireOrgAccess(t *testing.T, tsURL string, jar http.CookieJar, org string, want bool) {
 	t.Helper()
 	res := doConsole(t, jar, http.MethodGet, tsURL+"/console/org/"+org+"/domains", nil)
 	if res.status != http.StatusOK {
 		t.Fatalf("org %s domains page: got %d to %q", org, res.status, res.location)
 	}
-	allowed := !strings.Contains(res.body, consoleNeedOrgMembershipMsg)
+	allowed := !strings.Contains(res.body, consoleOrgNotFound)
 	if allowed != want {
 		t.Fatalf("org %s domains page: allowed=%t, want %t", org, allowed, want)
 	}
@@ -1991,4 +1991,306 @@ func TestAPIBasicAuthAfterRoleChange(t *testing.T) {
 	if n := countUsers(t); n <= 1 {
 		t.Fatalf("after the promotion the user still sees %d users", n)
 	}
+}
+
+// TestConsoleOrgExistenceIsHidden checks that the org level console pages
+// answer identically for an org that does not exist and for one the caller
+// may not see.
+func TestConsoleOrgExistenceIsHidden(t *testing.T) {
+	ts, _ := newSessionTestServer(t, testServerInput{})
+
+	pages := []struct {
+		name   string
+		method string
+		suffix string
+	}{
+		{"dashboard", http.MethodGet, ""},
+		{"domains", http.MethodGet, "/domains"},
+		{"api-tokens", http.MethodGet, "/api-tokens"},
+		{"create domain", http.MethodGet, "/create/domain"},
+		{"create domain POST", http.MethodPost, "/create/domain"},
+		{"create service", http.MethodGet, "/create/service"},
+		{"create service POST", http.MethodPost, "/create/service"},
+		{"create api-token", http.MethodGet, "/create/api-token"},
+		{"create api-token POST", http.MethodPost, "/create/api-token"},
+	}
+
+	do := func(t *testing.T, tsURL string, jar http.CookieJar, method string, org string, suffix string) pageResult {
+		t.Helper()
+		var form url.Values
+		if method == http.MethodPost {
+			form = url.Values{"name": {"x"}}
+		}
+		return doConsole(t, jar, method, tsURL+"/console/org/"+url.PathEscape(org)+suffix, form)
+	}
+
+	// An org2 member asking for org1 (exists, out of scope) or for names that do
+	// not exist. The UUID of org1 must not be a way around the scoping.
+	t.Run("member of another org", func(t *testing.T) {
+		jar := loginJar(t, ts.URL, "username7", validUserPassword)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				outOfScope := do(t, ts.URL, jar, page.method, "org1", page.suffix)
+				if outOfScope.status != http.StatusOK {
+					t.Fatalf("another org: status %d, want 200 (%s)", outOfScope.status, outOfScope.body)
+				}
+				if !strings.Contains(outOfScope.body, consoleOrgNotFound) {
+					t.Fatalf("another org: expected %q in body: %s", consoleOrgNotFound, outOfScope.body)
+				}
+				if strings.Contains(outOfScope.body, consoleNeedOrgMembershipMsg) {
+					t.Fatal("another org: got the no-org membership page")
+				}
+
+				for _, unknown := range []string{"no-such-org", "Not_A_Valid-Name!", "00000002-0000-0000-0000-0000000000ff"} {
+					res := do(t, ts.URL, jar, page.method, unknown, page.suffix)
+					if res.status != outOfScope.status {
+						t.Fatalf("%q: status %d, another org gave %d", unknown, res.status, outOfScope.status)
+					}
+					if res.body != outOfScope.body {
+						t.Fatalf("%q: body differs from another org's:\n%s\n---\n%s", unknown, res.body, outOfScope.body)
+					}
+				}
+
+				byID := do(t, ts.URL, jar, page.method, csOrg1ID, page.suffix)
+				if byID.status != outOfScope.status || byID.body != outOfScope.body {
+					t.Fatalf("another org by UUID differs from another org by name: %d\n%s", byID.status, byID.body)
+				}
+			})
+		}
+	})
+
+	t.Run("no org", func(t *testing.T) {
+		ts, dbPool := newSessionTestServer(t, testServerInput{})
+		jar := loginJar(t, ts.URL, "username1", validUserPassword)
+		execSQL(t, dbPool, "UPDATE users SET org_id = NULL WHERE id = $1", username1ID)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				for _, org := range []string{"org1", "no-such-org"} {
+					res := do(t, ts.URL, jar, page.method, org, page.suffix)
+					if res.status != http.StatusOK {
+						t.Fatalf("%s: status %d (%s), want %d", org, res.status, res.body, http.StatusOK)
+					}
+					if !strings.Contains(res.body, consoleNeedOrgMembershipMsg) {
+						t.Fatalf("%s: expected the membership page: %s", org, res.body)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("superuser", func(t *testing.T) {
+		jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				res := do(t, ts.URL, jar, page.method, "no-such-org", page.suffix)
+				if res.status != http.StatusOK {
+					t.Fatalf("status %d (%s), want %d", res.status, res.body, http.StatusOK)
+				}
+				if !strings.Contains(res.body, consoleOrgNotFound) {
+					t.Fatalf("expected %q in body: %s", consoleOrgNotFound, res.body)
+				}
+			})
+		}
+	})
+}
+
+// TestConsoleEditOrgNotFoundTitleIgnoresURL checks that the edit-org error
+// page does not reflect the URL-supplied org name in its title.
+func TestConsoleEditOrgNotFoundTitleIgnoresURL(t *testing.T) {
+	ts, _ := newSessionTestServer(t, testServerInput{})
+	jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+
+	const orgName = "no-such-org"
+	res := doConsole(t, jar, http.MethodGet, ts.URL+"/console/superuser/orgs/"+orgName+"/edit", nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("status %d (%s), want %d", res.status, res.body, http.StatusOK)
+	}
+	if !strings.Contains(res.body, consoleOrgNotFound) {
+		t.Fatalf("expected %q in body: %s", consoleOrgNotFound, res.body)
+	}
+	start := strings.Index(res.body, "<title>")
+	end := strings.Index(res.body, "</title>")
+	if start < 0 || end < start {
+		t.Fatalf("no <title> in body: %s", res.body)
+	}
+	if title := res.body[start:end]; strings.Contains(title, orgName) {
+		t.Fatalf("title reflects URL-supplied org name: %q", title)
+	}
+}
+
+// TestConsoleServiceExistenceIsHidden checks that on the console service
+// pages an org or service that does not exist and one the caller may not see
+// give the same page: same status and byte-identical body. The page must take
+// nothing from the URL, which includes the breadcrumbs.
+func TestConsoleServiceExistenceIsHidden(t *testing.T) {
+	const (
+		org1Service1ID = "00000003-0000-0000-0000-000000000001"
+		unknownID      = "00000003-0000-0000-0000-0000000000ff"
+	)
+
+	ts, _ := newSessionTestServer(t, testServerInput{})
+
+	// The two %s are the org and the service as they appear in the URL.
+	pages := []struct {
+		name     string
+		method   string
+		path     string
+		notFound string
+		// ownVersion is a URL of the caller's own org2-service1 with a
+		// version that does not exist; it must give the same page.
+		ownVersion string
+	}{
+		{"service", http.MethodGet, "/console/org/%s/services/%s", consoleServiceNotFound, ""},
+		{"service version", http.MethodGet, "/console/org/%s/services/%s/3", "Service version not found", "/console/org/org2/services/org2-service1/999"},
+		{"create service version", http.MethodGet, "/console/org/%s/create/service/version/%s", consoleServiceNotFound, ""},
+		{"create service version POST", http.MethodPost, "/console/org/%s/create/service/version/%s", consoleServiceNotFound, ""},
+		{"activate", http.MethodGet, "/console/org/%s/services/%s/3/activate", consoleServiceNotFound, ""},
+		{"activate POST", http.MethodPost, "/console/org/%s/services/%s/3/activate", consoleServiceNotFound, ""},
+		{"disable", http.MethodGet, "/console/org/%s/services/%s/disable", consoleServiceNotFound, ""},
+		{"disable POST", http.MethodPost, "/console/org/%s/services/%s/disable", consoleServiceNotFound, ""},
+		{"enable POST", http.MethodPost, "/console/org/%s/services/%s/enable", consoleServiceNotFound, ""},
+	}
+
+	do := func(t *testing.T, tsURL string, jar http.CookieJar, method string, path string, org string, service string) pageResult {
+		t.Helper()
+		var form url.Values
+		if method == http.MethodPost {
+			form = url.Values{"x": {"y"}}
+		}
+		return doConsole(t, jar, method, tsURL+fmt.Sprintf(path, url.PathEscape(org), url.PathEscape(service)), form)
+	}
+
+	// As an org2 member: another org with a real service, another org with
+	// a missing service, missing org, own org with a missing service, and
+	// the UUID of another org's service under the own org.
+	targets := []struct {
+		name    string
+		org     string
+		service string
+	}{
+		{"another org, existing service", "org1", "org1-service1"},
+		{"another org by UUID, existing service by UUID", csOrg1ID, org1Service1ID},
+		{"another org, missing service", "org1", "no-such-service"},
+		{"missing org", "no-such-org", "org1-service1"},
+		{"missing org, missing service", "no-such-org", "no-such-service"},
+		{"own org, missing service", "org2", "no-such-service"},
+		{"own org, missing service UUID", "org2", unknownID},
+		{"own org, another org's service by UUID", "org2", org1Service1ID},
+		{"malformed names", "Not_A_Valid-Name!", "Not_A_Valid-Name!"},
+	}
+
+	t.Run("member of another org", func(t *testing.T) {
+		jar := loginJar(t, ts.URL, "username7", validUserPassword)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				first := do(t, ts.URL, jar, page.method, page.path, targets[0].org, targets[0].service)
+				if first.status != http.StatusOK {
+					t.Fatalf("%s: status %d, want 200 (%s)", targets[0].name, first.status, first.body)
+				}
+				if !strings.Contains(first.body, page.notFound) {
+					t.Fatalf("%s: expected %q in body: %s", targets[0].name, page.notFound, first.body)
+				}
+				if strings.Contains(first.body, consoleNeedOrgMembershipMsg) {
+					t.Fatalf("%s: got the no-org membership page", targets[0].name)
+				}
+
+				for _, target := range targets[1:] {
+					res := do(t, ts.URL, jar, page.method, page.path, target.org, target.service)
+					if res.status != first.status {
+						t.Fatalf("%s: status %d, %s gave %d", target.name, res.status, targets[0].name, first.status)
+					}
+					if res.body != first.body {
+						t.Fatalf("%s: body differs from %s:\n%s\n---\n%s", target.name, targets[0].name, res.body, first.body)
+					}
+				}
+
+				if page.ownVersion != "" {
+					res := doConsole(t, jar, page.method, ts.URL+page.ownVersion, nil)
+					if res.status != first.status || res.body != first.body {
+						t.Fatalf("unknown version of own service differs from another org's service page: %d\n%s", res.status, res.body)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("services list", func(t *testing.T) {
+		jar := loginJar(t, ts.URL, "username7", validUserPassword)
+		get := func(org string) pageResult {
+			return doConsole(t, jar, http.MethodGet, ts.URL+"/console/org/"+url.PathEscape(org)+"/services", nil)
+		}
+		outOfScope := get("org1")
+		if outOfScope.status != http.StatusOK {
+			t.Fatalf("another org: status %d, want 200 (%s)", outOfScope.status, outOfScope.body)
+		}
+		if !strings.Contains(outOfScope.body, consoleOrgNotFound) {
+			t.Fatalf("expected %q in body: %s", consoleOrgNotFound, outOfScope.body)
+		}
+		for _, org := range []string{"no-such-org", "Not_A_Valid-Name!", csOrg1ID, "00000002-0000-0000-0000-0000000000ff"} {
+			res := get(org)
+			if res.status != outOfScope.status || res.body != outOfScope.body {
+				t.Fatalf("%q differs from the page for another org: %d\n%s", org, res.status, res.body)
+			}
+		}
+	})
+
+	t.Run("no org", func(t *testing.T) {
+		ts, dbPool := newSessionTestServer(t, testServerInput{})
+		jar := loginJar(t, ts.URL, "username1", validUserPassword)
+		execSQL(t, dbPool, "UPDATE users SET org_id = NULL WHERE id = $1", username1ID)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				for _, target := range targets[:4] {
+					res := do(t, ts.URL, jar, page.method, page.path, target.org, target.service)
+					if res.status != http.StatusOK {
+						t.Fatalf("%s: status %d, want 200 (%s)", target.name, res.status, res.body)
+					}
+					if !strings.Contains(res.body, consoleNeedOrgMembershipMsg) {
+						t.Fatalf("%s: expected the membership page: %s", target.name, res.body)
+					}
+				}
+			})
+		}
+		res := doConsole(t, jar, http.MethodGet, ts.URL+"/console/org/org1/services", nil)
+		if res.status != http.StatusOK || !strings.Contains(res.body, consoleNeedOrgMembershipMsg) {
+			t.Fatalf("services list: status %d (want 200), expected the membership page: %s", res.status, res.body)
+		}
+	})
+
+	t.Run("superuser", func(t *testing.T) {
+		jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+		for _, page := range pages {
+			t.Run(page.name, func(t *testing.T) {
+				first := do(t, ts.URL, jar, page.method, page.path, "no-such-org", "no-such-service")
+				if first.status != http.StatusOK {
+					t.Fatalf("status %d, want 200 (%s)", first.status, first.body)
+				}
+				if !strings.Contains(first.body, page.notFound) {
+					t.Fatalf("expected %q in body: %s", page.notFound, first.body)
+				}
+				for _, target := range []struct{ org, service string }{{"org1", "no-such-service"}, {"no-such-org", "org1-service1"}, {"org1", unknownID}} {
+					res := do(t, ts.URL, jar, page.method, page.path, target.org, target.service)
+					if res.status != first.status || res.body != first.body {
+						t.Fatalf("%s/%s differs from the unknown org page: %d\n%s", target.org, target.service, res.status, res.body)
+					}
+				}
+			})
+		}
+
+		res := doConsole(t, jar, http.MethodGet, ts.URL+"/console/org/no-such-org/services", nil)
+		if res.status != http.StatusOK || !strings.Contains(res.body, consoleOrgNotFound) {
+			t.Fatalf("services list: status %d (want 200), expected %q: %s", res.status, consoleOrgNotFound, res.body)
+		}
+
+		// The delete page is superuser only, so it is only reachable here.
+		const deletePath = "/console/org/%s/services/%s/delete"
+		del := do(t, ts.URL, jar, http.MethodGet, deletePath, "no-such-org", "no-such-service")
+		if del.status != http.StatusOK || !strings.Contains(del.body, consoleServiceNotFound) {
+			t.Fatalf("delete: status %d (want 200), expected %q: %s", del.status, consoleServiceNotFound, del.body)
+		}
+		delOrg1 := do(t, ts.URL, jar, http.MethodGet, deletePath, "org1", "no-such-service")
+		if delOrg1.status != del.status || delOrg1.body != del.body {
+			t.Fatalf("delete of a missing service in a real org differs: %d\n%s", delOrg1.status, delOrg1.body)
+		}
+	})
 }

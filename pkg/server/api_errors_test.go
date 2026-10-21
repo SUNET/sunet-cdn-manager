@@ -113,6 +113,20 @@ func TestAPIError(t *testing.T) {
 		}
 	})
 
+	t.Run("referenced org not found is unprocessable", func(t *testing.T) {
+		got := apiError(fmt.Errorf("wrap: %w", cdnerrors.ErrReferencedOrgNotFound))
+		se, ok := got.(huma.StatusError)
+		if !ok {
+			t.Fatalf("apiError() = %v, want a huma.StatusError", got)
+		}
+		if se.GetStatus() != http.StatusUnprocessableEntity {
+			t.Errorf("status = %d, want %d", se.GetStatus(), http.StatusUnprocessableEntity)
+		}
+		if want := "referenced organization not found"; se.Error() != want {
+			t.Errorf("message = %q, want %q", se.Error(), want)
+		}
+	})
+
 	t.Run("expected error keeps only the user message", func(t *testing.T) {
 		// The context added while the error is returned up the stack,
 		// here "deleteDomain transaction failed: ", is internal detail

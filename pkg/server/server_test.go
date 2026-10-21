@@ -3954,14 +3954,14 @@ func TestGetDomains(t *testing.T) {
 			username:       "username2",
 			password:       "password2",
 			orgNameOrID:    "00000002-0000-0000-0000-000000000001",
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusNotFound,
 		},
 		{
 			description:    "failed lookup of org you do not belong to with name",
 			username:       "username2",
 			password:       "password2",
 			orgNameOrID:    "org1",
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusNotFound,
 		},
 	}
 
@@ -4274,7 +4274,7 @@ func TestGetServices(t *testing.T) {
 			username:       "username1",
 			password:       validUserPassword,
 			orgNameOrID:    "org2",
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusNotFound,
 		},
 		{
 			description:    "failed org request, bad auth",
@@ -4412,7 +4412,7 @@ func TestGetService(t *testing.T) {
 			username:        "username3-no-org",
 			password:        "password3",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
-			expectedStatus:  http.StatusNotFound,
+			expectedStatus:  http.StatusForbidden,
 		},
 		{
 			description:     "failed org request not assigned to org with name",
@@ -4420,7 +4420,7 @@ func TestGetService(t *testing.T) {
 			password:        "password3",
 			serviceNameOrID: "org1-service1",
 			orgNameOrID:     "org1",
-			expectedStatus:  http.StatusNotFound,
+			expectedStatus:  http.StatusForbidden,
 		},
 	}
 
@@ -4765,17 +4765,17 @@ func TestPutServiceDisabled(t *testing.T) {
 			serviceNameOrID: "00000003-0000-0000-0000-000000000003",
 			serviceID:       "00000003-0000-0000-0000-000000000003",
 			disabled:        true,
-			expectedStatus:  http.StatusNotFound,
+			expectedStatus:  http.StatusForbidden,
 		},
 		{
-			description:     "unresolvable org is unprocessable",
+			description:     "unresolvable org is not found",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "org1-service3",
 			orgNameOrID:     "no-such-org",
 			serviceID:       "00000003-0000-0000-0000-000000000003",
 			disabled:        true,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 		},
 		{
 			description:     "unknown service ID is not found",
@@ -4788,12 +4788,12 @@ func TestPutServiceDisabled(t *testing.T) {
 		{
 			// ?org= is documented as required when the service is addressed by
 			// name.
-			description:     "name without org is unprocessable, not a server error",
+			description:     "name without org is a bad request, not a server error",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "org1-service4",
 			disabled:        true,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusBadRequest,
 		},
 	}
 
@@ -5320,13 +5320,13 @@ func TestDeleteService(t *testing.T) {
 			// No serviceID: nothing to assert.
 		},
 		{
-			description:     "superuser gets unprocessable for an unresolvable org",
+			description:     "superuser gets not found for an unresolvable org",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "org1-service3",
 			orgNameOrID:     "no-such-org",
 			confirm:         "org1-service3",
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			serviceID:       "00000003-0000-0000-0000-000000000003",
 			expectRowGone:   false,
 		},
@@ -5349,16 +5349,16 @@ func TestDeleteService(t *testing.T) {
 		{
 			// The endpoint documents ?org= as required when the service is
 			// addressed by name. Without it the identifier lookup returns
-			// ErrServiceByNameNeedsOrg, which used to reach the generic error
-			// path and surface as a 500. No serviceID: the lookup fails on the
+			// ErrUnableToParseNameOrID (400); a missing org used to reach the
+			// generic error path and surface as a 500. No serviceID: the lookup fails on the
 			// missing org before it queries at all, so the name need not
 			// resolve and there is no row to assert.
-			description:     "name without org is unprocessable, not a server error",
+			description:     "name without org is a bad request, not a server error",
 			username:        "admin",
 			password:        validAdminPassword,
 			serviceNameOrID: "org1-service4",
 			confirm:         "org1-service4",
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusBadRequest,
 		},
 	}
 
@@ -5618,7 +5618,7 @@ func TestPostServices(t *testing.T) {
 			description:    "failed superuser request with org as invalid DNS label",
 			username:       "admin",
 			password:       validAdminPassword,
-			expectedStatus: http.StatusUnprocessableEntity,
+			expectedStatus: http.StatusBadRequest,
 			newService:     "new-admin-service",
 			org:            "org 1",
 		},
@@ -5680,7 +5680,7 @@ func TestPostServices(t *testing.T) {
 			description:    "failed org request with org not matching auth",
 			username:       "username1",
 			password:       validUserPassword,
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusUnprocessableEntity,
 			newService:     "new-username1-service3",
 			org:            "org2",
 		},
@@ -5834,14 +5834,14 @@ func TestDeleteDomain(t *testing.T) {
 			username:       "username3-no-org",
 			password:       "password3",
 			domainNameOrID: "00000015-0000-0000-0000-000000000008",
-			expectedStatus: http.StatusNotFound,
+			expectedStatus: http.StatusForbidden,
 		},
 		{
 			description:    "failed user request not assigned to org with name",
 			username:       "username3-no-org",
 			password:       "password3",
 			domainNameOrID: "example-delete-5.se",
-			expectedStatus: http.StatusNotFound,
+			expectedStatus: http.StatusForbidden,
 		},
 	}
 
@@ -6075,14 +6075,14 @@ func TestGetServiceVersions(t *testing.T) {
 			description:     "failed user request name without org",
 			username:        "username1",
 			password:        validUserPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusBadRequest,
 			serviceNameOrID: "org1-service1",
 		},
 		{
 			description:     "failed superuser request with name, missing org",
 			username:        "admin",
 			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusBadRequest,
 			serviceNameOrID: "org1-service1",
 		},
 	}
@@ -6329,7 +6329,7 @@ func TestPostServiceVersion(t *testing.T) {
 					{Host: "192.51.100.21", Port: 80, TLS: false},
 				},
 			},
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			active:          true,
 			vclTemplateFile: "testdata/vcl/template1.vcl",
 		},
@@ -7334,7 +7334,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			description:     "failed superuser request with ID, non-existant service ID",
 			username:        "admin",
 			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         1,
@@ -7344,7 +7344,7 @@ func TestActivateServiceVersion(t *testing.T) {
 			description:     "failed superuser request with ID, non-existant org",
 			username:        "admin",
 			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
 			version:         1,
@@ -7454,7 +7454,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 			description:     "failed superuser request with ID, non-existant service ID",
 			username:        "admin",
 			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-900000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-000000000001",
 			version:         1,
@@ -7463,7 +7463,7 @@ func TestGetServiceVersionVCL(t *testing.T) {
 			description:     "failed superuser request with ID, non-existant org",
 			username:        "admin",
 			password:        validAdminPassword,
-			expectedStatus:  http.StatusUnprocessableEntity,
+			expectedStatus:  http.StatusNotFound,
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			orgNameOrID:     "00000002-0000-0000-0000-900000000001",
 			version:         1,
@@ -11242,7 +11242,7 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.TrimSpace(disableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleNotAllowedDisableService) {
+		if got := strings.TrimSpace(disableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleServiceNotFound) {
 			t.Errorf("expected the disable refusal to be explained in-page, got %q", got)
 		}
 
@@ -11272,7 +11272,7 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.TrimSpace(enableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleNotAllowedEnableService) {
+		if got := strings.TrimSpace(enableDoc.Find("span.error-text").Text()); !strings.Contains(got, consoleServiceNotFound) {
 			t.Errorf("expected the enable refusal to be explained in-page, got %q", got)
 		}
 
@@ -11369,15 +11369,15 @@ func TestConsoleServiceDisableEnable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(doc.Text(), "Organization not found") {
-			t.Errorf("expected an in-page 'Organization not found' error, body was: %s", doc.Text())
+		// A service-level URL renders the one service-not-found page,
+		// whether the org or the service is missing.
+		if !strings.Contains(doc.Text(), "Service not found") {
+			t.Errorf("expected an in-page 'Service not found' error, body was: %s", doc.Text())
 		}
 	})
 
-	// consoleServiceEnableHandler has the same defect class, but reaches it
-	// through setServiceDisabled rather than validateServiceName -- that
-	// function collapses a missing service into cdnerrors.ErrNotFound
-	// rather than a raw pgx.ErrNoRows, so it needs its own assertion.
+	// consoleServiceEnableHandler has the same defect class and needs its
+	// own assertion.
 	t.Run("POST of enable for a missing service shows an in-page error", func(t *testing.T) {
 		client, _ := consoleLogin(t, ts.URL, "username1", validUserPassword)
 		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
@@ -11684,15 +11684,15 @@ func TestServiceUUIDIsConstrainedToSuppliedOrg(t *testing.T) {
 	}
 }
 
-// TestServiceIdentifierLocking proves the row lock each identifier helper
-// actually takes, rather than asserting the SQL text.
+// TestServiceIdentifierLocking proves the row lock resolveService
+// actually takes for each lock mode, rather than asserting the SQL text.
 //
 // It exists because resolving a service with FOR SHARE and then writing to the
 // row upgrades ShareLock to ExclusiveLock: two such transactions can both hold
 // the shared lock and then each wait for the other before its own upgrade,
 // which PostgreSQL breaks after deadlock_timeout by aborting one with SQLSTATE
 // 40P01. Every path that writes the services row must therefore resolve with
-// newServiceIdentifierForUpdate. If someone switches one of them back, the
+// resolveService(..., lockUpdate). If someone switches one of them back, the
 // exclusive-lock assertion below stops holding.
 func TestServiceIdentifierLocking(t *testing.T) {
 	ts, dbPool, err := prepareServer(t, testServerInput{})
@@ -11718,7 +11718,9 @@ func TestServiceIdentifierLocking(t *testing.T) {
 	defer pool.Close()
 
 	const serviceID = "00000003-0000-0000-0000-000000000001"
-	noOrg := pgtype.UUID{}
+	// A superuser resolving by UUID with no org takes the unscoped path, so
+	// the lock mode is the only thing under test.
+	ad := cdntypes.AuthData{Superuser: true}
 
 	// resolve runs one identifier lookup in its own transaction and reports
 	// how long it took and whether it failed, so "blocked" can be told apart
@@ -11746,9 +11748,9 @@ func TestServiceIdentifierLocking(t *testing.T) {
 
 		start := time.Now()
 		if forUpdate {
-			_, err = newServiceIdentifierForUpdate(callCtx, tx, serviceID, noOrg)
+			_, err = resolveService(callCtx, tx, ad, serviceID, "", lockUpdate)
 		} else {
-			_, err = newServiceIdentifier(callCtx, tx, serviceID, noOrg)
+			_, err = resolveService(callCtx, tx, ad, serviceID, "", lockShare)
 		}
 		return time.Since(start), err
 	}
@@ -12881,22 +12883,22 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			expectedErrorMsg: "API token not found",
 		},
 		{
-			description:      "org1 user deleting org2 API token shows forbidden error",
+			description:      "org1 user deleting org2 API token shows org not found",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodDelete,
 			path:             "/console/org/org2/api-tokens/nonexistent-token",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNotAllowedDeleteAPIToken,
+			expectedErrorMsg: consoleOrgNotFound,
 		},
 		{
-			description:      "org1 user deleting org2 domain shows forbidden error",
+			description:      "org1 user deleting org2 domain shows org not found",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodDelete,
 			path:             "/console/org/org2/domains/example.se",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNotAllowedDeleteDomain,
+			expectedErrorMsg: consoleOrgNotFound,
 		},
 		{
 			description:      "delete node group with assigned nodes shows conflict error",
@@ -12931,22 +12933,22 @@ func TestConsoleDeleteErrorRendering(t *testing.T) {
 			expectedErrorMsg: consoleDeleteRequiresSuperuser,
 		},
 		{
-			description:      "org1 user disabling an org2 service shows forbidden error",
+			description:      "org1 user disabling an org2 service shows service not found",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodGet,
 			path:             "/console/org/org2/services/org2-service1/disable",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNotAllowedDisableService,
+			expectedErrorMsg: consoleServiceNotFound,
 		},
 		{
-			description:      "org1 user enabling an org2 service shows forbidden error",
+			description:      "org1 user enabling an org2 service shows service not found",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodPost,
 			path:             "/console/org/org2/services/org2-service1/enable",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNotAllowedEnableService,
+			expectedErrorMsg: consoleServiceNotFound,
 		},
 	}
 
@@ -13135,31 +13137,31 @@ func TestConsolePhase2ErrorRendering(t *testing.T) {
 		expectedErrorMsg string
 	}{
 		{
-			description:      "forbidden on domains list page for non-member",
+			description:      "org not found on domains list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodGet,
 			path:             "/console/org/org2/domains",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+			expectedErrorMsg: consoleOrgNotFound,
 		},
 		{
-			description:      "forbidden on services list page for non-member",
+			description:      "org not found on services list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodGet,
 			path:             "/console/org/org2/services",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+			expectedErrorMsg: consoleOrgNotFound,
 		},
 		{
-			description:      "forbidden on api tokens list page for non-member",
+			description:      "org not found on api tokens list page for non-member",
 			username:         "username1",
 			password:         validUserPassword,
 			method:           http.MethodGet,
 			path:             "/console/org/org2/api-tokens",
 			expectedStatus:   http.StatusOK,
-			expectedErrorMsg: consoleNeedOrgMembershipMsg,
+			expectedErrorMsg: consoleOrgNotFound,
 		},
 		{
 			description:      "org not found on dashboard",
@@ -16039,15 +16041,15 @@ func TestAPIExpectedErrors(t *testing.T) {
 			expectedDetail: "service quota reached (0 of 0)",
 		},
 		{
-			description:    "service version activation in other org is forbidden",
+			description:    "service version activation in other org is hidden as not found",
 			username:       "username2",
 			password:       "password2",
 			method:         http.MethodPut,
 			path:           "/api/v1/services/org1-service1/service-versions/1/active",
 			query:          "org=org1",
 			body:           `{"active":true}`,
-			expectedStatus: http.StatusForbidden,
-			expectedDetail: "access to resource is not allowed",
+			expectedStatus: http.StatusNotFound,
+			expectedDetail: serviceVersionNotFound,
 		},
 		{
 			description:    "delete domain used by active and inactive service versions",
@@ -16068,15 +16070,15 @@ func TestAPIExpectedErrors(t *testing.T) {
 			expectedDetail: "org1-service1 version 3",
 		},
 		{
-			// An unknown org is a failed identifier lookup (no rows),
-			// which must still be answered as a client error.
+			// An unknown org is answered exactly like an org the
+			// caller may not see: a plain 404.
 			description:    "unknown org",
 			username:       "admin",
 			password:       validAdminPassword,
 			method:         http.MethodGet,
 			path:           "/api/v1/orgs/nosuch-org",
-			expectedStatus: http.StatusBadRequest,
-			expectedDetail: "unable to parse name or ID",
+			expectedStatus: http.StatusNotFound,
+			expectedDetail: orgNotFound,
 		},
 	}
 
@@ -16124,4 +16126,553 @@ func TestAPIExpectedErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertSameResponse(t *testing.T, a *http.Response, aBody []byte, b *http.Response, bBody []byte) {
+	t.Helper()
+
+	if a.StatusCode != b.StatusCode {
+		t.Fatalf("status differs between responses: %d (%s) vs %d (%s)", a.StatusCode, aBody, b.StatusCode, bBody)
+	}
+
+	if !bytes.Equal(aBody, bBody) {
+		t.Fatalf("body differs between responses: %q vs %q", aBody, bBody)
+	}
+}
+
+// TestOrgExistenceIsHidden verifies that the org level API endpoints answer
+// identically for an org the caller may not see and for one that does not
+// exist.
+func TestOrgExistenceIsHidden(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	const (
+		outOfScopeOrg = "org1"
+		unknownOrg    = "no-such-org"
+	)
+
+	// %s in path is replaced with the org under test.
+	routes := []struct {
+		description string
+		method      string
+		path        string
+		body        string
+		// status for an org the caller cannot see (out of scope or unknown).
+		hiddenStatus int
+	}{
+		{
+			description:  "get org",
+			method:       http.MethodGet,
+			path:         "/api/v1/orgs/%s",
+			hiddenStatus: http.StatusNotFound,
+		},
+		{
+			description:  "list client credentials",
+			method:       http.MethodGet,
+			path:         "/api/v1/orgs/%s/client-credentials",
+			hiddenStatus: http.StatusNotFound,
+		},
+		{
+			description:  "delete client credential",
+			method:       http.MethodDelete,
+			path:         "/api/v1/orgs/%s/client-credentials/some-cred",
+			hiddenStatus: http.StatusNotFound,
+		},
+		{
+			description:  "create client credential",
+			method:       http.MethodPost,
+			path:         "/api/v1/orgs/%s/client-credentials",
+			body:         `{"name":"my-cred","description":"desc"}`,
+			hiddenStatus: http.StatusNotFound,
+		},
+		{
+			description:  "list domains",
+			method:       http.MethodGet,
+			path:         "/api/v1/domains?org=%s",
+			hiddenStatus: http.StatusNotFound,
+		},
+		{
+			// The org comes from the ?org= query parameter, which is
+			// treated like a path lookup, so unknown and out of scope
+			// both give the same 404.
+			description:  "create domain",
+			method:       http.MethodPost,
+			path:         "/api/v1/domains?org=%s",
+			body:         `{"fqdn":"hidden.example.com"}`,
+			hiddenStatus: http.StatusNotFound,
+		},
+	}
+
+	do := func(t *testing.T, method string, path string, body string, username string, password string) (*http.Response, []byte) {
+		t.Helper()
+
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+
+		req, err := http.NewRequest(method, ts.URL+path, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth(username, password)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return resp, b
+	}
+
+	for _, route := range routes {
+		t.Run(route.description, func(t *testing.T) {
+			outOfScopeResp, outOfScopeBody := do(t, route.method, fmt.Sprintf(route.path, outOfScopeOrg), route.body, "username2", "password2")
+			unknownResp, unknownBody := do(t, route.method, fmt.Sprintf(route.path, unknownOrg), route.body, "username2", "password2")
+
+			if outOfScopeResp.StatusCode != route.hiddenStatus {
+				t.Fatalf("another org: unexpected status %d (%s), want %d", outOfScopeResp.StatusCode, outOfScopeBody, route.hiddenStatus)
+			}
+			assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+			adminResp, adminBody := do(t, route.method, fmt.Sprintf(route.path, unknownOrg), route.body, "admin", validAdminPassword)
+			if adminResp.StatusCode != route.hiddenStatus {
+				t.Fatalf("superuser unknown org: unexpected status %d (%s), want %d", adminResp.StatusCode, adminBody, route.hiddenStatus)
+			}
+			assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+
+			noOrgResp, noOrgBody := do(t, route.method, fmt.Sprintf(route.path, outOfScopeOrg), route.body, "username3-no-org", "password3")
+			if noOrgResp.StatusCode != http.StatusForbidden {
+				t.Fatalf("user without org: unexpected status %d (%s), want 403", noOrgResp.StatusCode, noOrgBody)
+			}
+
+			malformedResp, malformedBody := do(t, route.method, fmt.Sprintf(route.path, "Bad_Org!"), route.body, "username2", "password2")
+			if malformedResp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("malformed org: unexpected status %d (%s), want 400", malformedResp.StatusCode, malformedBody)
+			}
+		})
+	}
+}
+
+// TestServiceExistenceIsHidden verifies that the service level API endpoints
+// answer identically for a service the caller may not see and for one that
+// does not exist.
+func TestServiceExistenceIsHidden(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	const (
+		outOfScopeOrg         = "org1"
+		outOfScopeServiceName = "org1-service1"
+		outOfScopeServiceID   = "00000003-0000-0000-0000-000000000001"
+		unknownOrg            = "no-such-org"
+		unknownServiceName    = "no-such-service"
+		unknownServiceID      = "00000003-0000-0000-0000-0000000000ff"
+	)
+
+	do := func(t *testing.T, method string, path string, body string, username string, password string) (*http.Response, []byte) {
+		t.Helper()
+
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+
+		req, err := http.NewRequest(method, ts.URL+path, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth(username, password)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return resp, b
+	}
+
+	// The first %s is the service, the second the org.
+	pathTemplates := []struct {
+		description string
+		path        string
+	}{
+		{"get service", "/api/v1/services/%s?org=%s"},
+		{"get service IPs", "/api/v1/services/%s/ips?org=%s"},
+	}
+
+	lookups := []struct {
+		description string
+		outOfScope  [2]string
+		unknown     [2]string
+	}{
+		{"by name", [2]string{outOfScopeServiceName, outOfScopeOrg}, [2]string{unknownServiceName, outOfScopeOrg}},
+		{"by name in unknown org", [2]string{outOfScopeServiceName, outOfScopeOrg}, [2]string{outOfScopeServiceName, unknownOrg}},
+		{"by id with another org", [2]string{outOfScopeServiceID, outOfScopeOrg}, [2]string{unknownServiceID, outOfScopeOrg}},
+		{"by id", [2]string{outOfScopeServiceID, ""}, [2]string{unknownServiceID, ""}},
+	}
+
+	build := func(template string, pair [2]string) string {
+		p := fmt.Sprintf(template, pair[0], pair[1])
+		if pair[1] == "" {
+			p = strings.TrimSuffix(p, "?org=")
+		}
+		return p
+	}
+
+	for _, tmpl := range pathTemplates {
+		for _, l := range lookups {
+			t.Run(tmpl.description+" "+l.description, func(t *testing.T) {
+				outOfScopeResp, outOfScopeBody := do(t, http.MethodGet, build(tmpl.path, l.outOfScope), "", "username2", "password2")
+				unknownResp, unknownBody := do(t, http.MethodGet, build(tmpl.path, l.unknown), "", "username2", "password2")
+				if outOfScopeResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("out of scope: unexpected status %d (%s), want 404", outOfScopeResp.StatusCode, outOfScopeBody)
+				}
+				assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+				adminResp, adminBody := do(t, http.MethodGet, build(tmpl.path, l.unknown), "", "admin", validAdminPassword)
+				if adminResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("superuser unknown: unexpected status %d (%s), want 404", adminResp.StatusCode, adminBody)
+				}
+				assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+			})
+		}
+
+		t.Run(tmpl.description+" no org membership", func(t *testing.T) {
+			resp, body := do(t, http.MethodGet, build(tmpl.path, [2]string{outOfScopeServiceName, outOfScopeOrg}), "", "username3-no-org", "password3")
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("unexpected status %d (%s), want 403", resp.StatusCode, body)
+			}
+		})
+
+		t.Run(tmpl.description+" malformed", func(t *testing.T) {
+			resp, body := do(t, http.MethodGet, build(tmpl.path, [2]string{outOfScopeServiceName, "Bad_Org!"}), "", "username2", "password2")
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("malformed org: unexpected status %d (%s), want 400", resp.StatusCode, body)
+			}
+			resp, body = do(t, http.MethodGet, build(tmpl.path, [2]string{"Bad_Service!", outOfScopeOrg}), "", "username2", "password2")
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("malformed service: unexpected status %d (%s), want 400", resp.StatusCode, body)
+			}
+			resp, body = do(t, http.MethodGet, build(tmpl.path, [2]string{"org2-service1", ""}), "", "username2", "password2")
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("service by name without org: unexpected status %d (%s), want 400", resp.StatusCode, body)
+			}
+			// The name itself is valid, so the message must say what is
+			// missing rather than suggest the name could not be parsed.
+			if !strings.Contains(string(body), "looking up service by name requires org") {
+				t.Fatalf("service by name without org: missing hint about the org in %s", body)
+			}
+		})
+	}
+
+	t.Run("list services", func(t *testing.T) {
+		outOfScopeResp, outOfScopeBody := do(t, http.MethodGet, "/api/v1/services?org="+outOfScopeOrg, "", "username2", "password2")
+		unknownResp, unknownBody := do(t, http.MethodGet, "/api/v1/services?org="+unknownOrg, "", "username2", "password2")
+		if outOfScopeResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("another org: unexpected status %d (%s), want 404", outOfScopeResp.StatusCode, outOfScopeBody)
+		}
+		assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+		adminResp, adminBody := do(t, http.MethodGet, "/api/v1/services?org="+unknownOrg, "", "admin", validAdminPassword)
+		assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+
+		resp, body := do(t, http.MethodGet, "/api/v1/services?org="+outOfScopeOrg, "", "username3-no-org", "password3")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no org: unexpected status %d (%s), want 403", resp.StatusCode, body)
+		}
+
+		resp, body = do(t, http.MethodGet, "/api/v1/services?org=Bad_Org!", "", "username2", "password2")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("malformed org: unexpected status %d (%s), want 400", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("create service in body org", func(t *testing.T) {
+		// An org named in the request body is a bad reference (422), and
+		// out of scope and unknown must look the same.
+		outOfScopeResp, outOfScopeBody := do(t, http.MethodPost, "/api/v1/services", `{"name":"hidden","org":"`+outOfScopeOrg+`"}`, "username2", "password2")
+		unknownResp, unknownBody := do(t, http.MethodPost, "/api/v1/services", `{"name":"hidden","org":"`+unknownOrg+`"}`, "username2", "password2")
+		if outOfScopeResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("another org: unexpected status %d (%s), want 422", outOfScopeResp.StatusCode, outOfScopeBody)
+		}
+		assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+		adminResp, adminBody := do(t, http.MethodPost, "/api/v1/services", `{"name":"hidden","org":"`+unknownOrg+`"}`, "admin", validAdminPassword)
+		assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+
+		resp, body := do(t, http.MethodPost, "/api/v1/services", `{"name":"hidden","org":"`+outOfScopeOrg+`"}`, "username3-no-org", "password3")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no org: unexpected status %d (%s), want 403", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("set service disabled", func(t *testing.T) {
+		const disabledBody = `{"disabled":true}`
+		paths := []struct {
+			description string
+			outOfScope  string
+			unknown     string
+		}{
+			{
+				"by name",
+				"/api/v1/services/" + outOfScopeServiceName + "/disabled?org=" + outOfScopeOrg,
+				"/api/v1/services/" + unknownServiceName + "/disabled?org=" + outOfScopeOrg,
+			},
+			{
+				"by id",
+				"/api/v1/services/" + outOfScopeServiceID + "/disabled",
+				"/api/v1/services/" + unknownServiceID + "/disabled",
+			},
+			{
+				"by id with another org",
+				"/api/v1/services/" + outOfScopeServiceID + "/disabled?org=" + outOfScopeOrg,
+				"/api/v1/services/" + unknownServiceID + "/disabled?org=" + outOfScopeOrg,
+			},
+		}
+
+		for _, p := range paths {
+			outOfScopeResp, outOfScopeBody := do(t, http.MethodPut, p.outOfScope, disabledBody, "username2", "password2")
+			unknownResp, unknownBody := do(t, http.MethodPut, p.unknown, disabledBody, "username2", "password2")
+			if outOfScopeResp.StatusCode != http.StatusNotFound {
+				t.Fatalf("%s: out of scope: unexpected status %d (%s), want 404", p.description, outOfScopeResp.StatusCode, outOfScopeBody)
+			}
+			assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+			adminResp, adminBody := do(t, http.MethodPut, p.unknown, disabledBody, "admin", validAdminPassword)
+			assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+		}
+
+		resp, body := do(t, http.MethodPut, "/api/v1/services/org2-service1/disabled", disabledBody, "username2", "password2")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("name without org: unexpected status %d (%s), want 400", resp.StatusCode, body)
+		}
+
+		resp, body = do(t, http.MethodPut, "/api/v1/services/"+outOfScopeServiceName+"/disabled?org="+outOfScopeOrg, disabledBody, "username3-no-org", "password3")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no org: unexpected status %d (%s), want 403", resp.StatusCode, body)
+		}
+	})
+}
+
+// TestServiceVersionExistenceIsHidden verifies that the service version API
+// endpoints answer identically for a service the caller may not see and for
+// one that does not exist, whatever version number is asked for.
+func TestServiceVersionExistenceIsHidden(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	const (
+		outOfScopeOrg         = "org1"
+		outOfScopeServiceName = "org1-service1"
+		outOfScopeServiceID   = "00000003-0000-0000-0000-000000000001"
+		ownServiceName        = "org2-service1"
+		ownOrg                = "org2"
+		unknownOrg            = "no-such-org"
+		unknownServiceName    = "no-such-service"
+		unknownServiceID      = "00000003-0000-0000-0000-0000000000ff"
+	)
+
+	do := func(t *testing.T, method string, path string, body string, username string, password string) (*http.Response, []byte) {
+		t.Helper()
+
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+
+		req, err := http.NewRequest(method, ts.URL+path, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth(username, password)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return resp, b
+	}
+
+	const activeBody = `{"active":true}`
+	postBody := func(org string) string {
+		return `{"org":"` + org + `","vcl_template":"vcl 4.1;","domains":["example.com"],"default_origin_group":{"origins":[{"host":"198.51.100.1","port":80,"tls":false,"verify_tls":false}]}}`
+	}
+
+	// Each route is exercised with a service in another org and an unknown service. Both
+	// must give 404 with the same body, and so must the superuser asking
+	// for the unknown one.
+	routes := []struct {
+		description string
+		method      string
+		path        string // first %s is the service, second the org
+		body        string
+	}{
+		{"get versions", http.MethodGet, "/api/v1/services/%s/service-versions?org=%s", ""},
+		{"get vcl", http.MethodGet, "/api/v1/services/%s/service-versions/1/vcl?org=%s", ""},
+		{"activate", http.MethodPut, "/api/v1/services/%s/service-versions/1/active?org=%s", activeBody},
+	}
+	lookups := []struct {
+		description string
+		outOfScope  [2]string
+		unknown     [2]string
+	}{
+		{"by name", [2]string{outOfScopeServiceName, outOfScopeOrg}, [2]string{unknownServiceName, outOfScopeOrg}},
+		{"by name in unknown org", [2]string{outOfScopeServiceName, outOfScopeOrg}, [2]string{outOfScopeServiceName, unknownOrg}},
+		{"by id with another org", [2]string{outOfScopeServiceID, outOfScopeOrg}, [2]string{unknownServiceID, outOfScopeOrg}},
+		{"by id", [2]string{outOfScopeServiceID, ""}, [2]string{unknownServiceID, ""}},
+	}
+	build := func(template string, pair [2]string) string {
+		p := fmt.Sprintf(template, pair[0], pair[1])
+		return strings.TrimSuffix(p, "?org=")
+	}
+
+	for _, rt := range routes {
+		for _, l := range lookups {
+			t.Run(rt.description+" "+l.description, func(t *testing.T) {
+				outOfScopeResp, outOfScopeBody := do(t, rt.method, build(rt.path, l.outOfScope), rt.body, "username2", "password2")
+				unknownResp, unknownBody := do(t, rt.method, build(rt.path, l.unknown), rt.body, "username2", "password2")
+				if outOfScopeResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("out of scope: unexpected status %d (%s), want 404", outOfScopeResp.StatusCode, outOfScopeBody)
+				}
+				assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+
+				adminResp, adminBody := do(t, rt.method, build(rt.path, l.unknown), rt.body, "admin", validAdminPassword)
+				assertSameResponse(t, unknownResp, unknownBody, adminResp, adminBody)
+			})
+		}
+
+		t.Run(rt.description+" no org membership", func(t *testing.T) {
+			resp, body := do(t, rt.method, build(rt.path, [2]string{outOfScopeServiceName, outOfScopeOrg}), rt.body, "username3-no-org", "password3")
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("unexpected status %d (%s), want 403", resp.StatusCode, body)
+			}
+		})
+
+		t.Run(rt.description+" malformed", func(t *testing.T) {
+			for _, pair := range [][2]string{{outOfScopeServiceName, "Bad_Org!"}, {"Bad_Service!", outOfScopeOrg}, {ownServiceName, ""}} {
+				resp, body := do(t, rt.method, build(rt.path, pair), rt.body, "username2", "password2")
+				if resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("%v: unexpected status %d (%s), want 400", pair, resp.StatusCode, body)
+				}
+			}
+		})
+	}
+
+	versionRoutes := []struct {
+		description string
+		method      string
+		path        string // %s, %d, %s: service, version, org
+		body        string
+	}{
+		{"get vcl", http.MethodGet, "/api/v1/services/%s/service-versions/%d/vcl?org=%s", ""},
+		{"activate", http.MethodPut, "/api/v1/services/%s/service-versions/%d/active?org=%s", activeBody},
+	}
+	for _, vr := range versionRoutes {
+		t.Run(vr.description+" unknown version of own service", func(t *testing.T) {
+			resp, body := do(t, vr.method, fmt.Sprintf(vr.path, ownServiceName, 9999, ownOrg), vr.body, "username2", "password2")
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("unexpected status %d (%s), want 404", resp.StatusCode, body)
+			}
+		})
+
+		t.Run(vr.description+" another org's service with any version", func(t *testing.T) {
+			// A version that exists and one that does not must both
+			// answer like a nonexistent service.
+			for _, v := range []int{1, 9999} {
+				outOfScopeResp, outOfScopeBody := do(t, vr.method, fmt.Sprintf(vr.path, outOfScopeServiceName, v, outOfScopeOrg), vr.body, "username2", "password2")
+				unknownResp, unknownBody := do(t, vr.method, fmt.Sprintf(vr.path, unknownServiceName, v, outOfScopeOrg), vr.body, "username2", "password2")
+				if outOfScopeResp.StatusCode != http.StatusNotFound {
+					t.Fatalf("version %d: unexpected status %d (%s), want 404", v, outOfScopeResp.StatusCode, outOfScopeBody)
+				}
+				assertSameResponse(t, outOfScopeResp, outOfScopeBody, unknownResp, unknownBody)
+			}
+		})
+	}
+
+	t.Run("post version", func(t *testing.T) {
+		const path = "/api/v1/services/%s/service-versions"
+
+		// The org is named in the body, so another org and an unknown org
+		// are a bad reference (422) that looks the same.
+		unknownOrgResp, unknownOrgBody := do(t, http.MethodPost, fmt.Sprintf(path, ownServiceName), postBody(unknownOrg), "username2", "password2")
+		outOfScopeOrgResp, outOfScopeOrgBody := do(t, http.MethodPost, fmt.Sprintf(path, ownServiceName), postBody(outOfScopeOrg), "username2", "password2")
+		if outOfScopeOrgResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("another org: unexpected status %d (%s), want 422", outOfScopeOrgResp.StatusCode, outOfScopeOrgBody)
+		}
+		assertSameResponse(t, outOfScopeOrgResp, outOfScopeOrgBody, unknownOrgResp, unknownOrgBody)
+
+		// The service is in the path, so with the caller's own org in the
+		// body another org's service is a 404 identical to an unknown one.
+		outOfScopeSvcResp, outOfScopeSvcBody := do(t, http.MethodPost, fmt.Sprintf(path, outOfScopeServiceName), postBody(ownOrg), "username2", "password2")
+		unknownSvcResp, unknownSvcBody := do(t, http.MethodPost, fmt.Sprintf(path, unknownServiceName), postBody(ownOrg), "username2", "password2")
+		if outOfScopeSvcResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("another org's service: unexpected status %d (%s), want 404", outOfScopeSvcResp.StatusCode, outOfScopeSvcBody)
+		}
+		assertSameResponse(t, outOfScopeSvcResp, outOfScopeSvcBody, unknownSvcResp, unknownSvcBody)
+
+		// The body org is resolved before the path service, so an out-of-scope
+		// org with another org's service answers like an unknown org with an
+		// unknown service: both are a bad org reference.
+		outOfScopeBothResp, outOfScopeBothBody := do(t, http.MethodPost, fmt.Sprintf(path, outOfScopeServiceName), postBody(outOfScopeOrg), "username2", "password2")
+		unknownBothResp, unknownBothBody := do(t, http.MethodPost, fmt.Sprintf(path, unknownServiceName), postBody(unknownOrg), "username2", "password2")
+		if outOfScopeBothResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("another org and service: unexpected status %d (%s), want 422", outOfScopeBothResp.StatusCode, outOfScopeBothBody)
+		}
+		assertSameResponse(t, outOfScopeBothResp, outOfScopeBothBody, unknownBothResp, unknownBothBody)
+
+		malformedResp, malformedBody := do(t, http.MethodPost, fmt.Sprintf(path, ownServiceName), postBody("Bad_Org!"), "username2", "password2")
+		if malformedResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("malformed org: unexpected status %d (%s), want 400", malformedResp.StatusCode, malformedBody)
+		}
+
+		adminResp, adminBody := do(t, http.MethodPost, fmt.Sprintf(path, unknownServiceName), postBody(outOfScopeOrg), "admin", validAdminPassword)
+		if adminResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("superuser unknown service: unexpected status %d (%s), want 404", adminResp.StatusCode, adminBody)
+		}
+		assertSameResponse(t, unknownSvcResp, unknownSvcBody, adminResp, adminBody)
+
+		resp, body := do(t, http.MethodPost, fmt.Sprintf(path, outOfScopeServiceName), postBody(outOfScopeOrg), "username3-no-org", "password3")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no org: unexpected status %d (%s), want 403", resp.StatusCode, body)
+		}
+	})
 }
