@@ -43,6 +43,9 @@ var (
 	ErrConfirmNameMismatch         = errors.New("confirmation name does not match resource name")
 	ErrLoginRateLimited            = errors.New("too many login attempts")
 	ErrLoginBusy                   = errors.New("server busy handling logins")
+	ErrDomainRetired               = errors.New("domain is retired")
+	ErrDomainUnused                = errors.New("domain is not used by any service version, delete it instead")
+	ErrDomainNotVerified           = errors.New("domain is not verified")
 	// ErrReferencedOrgNotFound is deliberately the same for an unknown org
 	// and for an org the caller may not use, so the response cannot be used
 	// to probe for which orgs exist.
@@ -125,10 +128,14 @@ type ServiceVersionRef struct {
 // DomainInUseError identifies as ErrHasDependents and lists the service
 // versions that still reference the domain. Error() lists each service once,
 // in the order it first appears in Versions, with its versions in the order
-// given.
+// given. Error() ends by suggesting to retire the domain instead, unless
+// Retired says it already is or Active says an active version uses it,
+// which would make retiring fail as well.
 type DomainInUseError struct {
 	Domain   string
 	Versions []ServiceVersionRef
+	Retired  bool
+	Active   bool
 }
 
 func (e *DomainInUseError) Error() string {
@@ -150,7 +157,11 @@ func (e *DomainInUseError) Error() string {
 			parts = append(parts, fmt.Sprintf("%s versions %s", service, strings.Join(versions, ", ")))
 		}
 	}
-	return fmt.Sprintf("cannot delete %q: used by %s", e.Domain, joinParts(parts))
+	msg := fmt.Sprintf("cannot delete %q: used by %s", e.Domain, joinParts(parts))
+	if !e.Retired && !e.Active {
+		msg += ", retire it instead"
+	}
+	return msg
 }
 
 func (e *DomainInUseError) Unwrap() error {
@@ -158,6 +169,64 @@ func (e *DomainInUseError) Unwrap() error {
 }
 
 func (e *DomainInUseError) UserMessage() string {
+	return e.Error()
+}
+
+// UnknownDomainError identifies as ErrUnknownDomain and names the domain
+// that is not a verified domain of the org, so a version listing several
+// domains tells which one to fix.
+type UnknownDomainError struct {
+	Domain string
+}
+
+func (e *UnknownDomainError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrUnknownDomain, e.Domain)
+}
+
+// Make it possible to use errors.Is(err, ErrUnknownDomain)
+func (e *UnknownDomainError) Unwrap() error {
+	return ErrUnknownDomain
+}
+
+func (e *UnknownDomainError) UserMessage() string {
+	return e.Error()
+}
+
+// DomainActiveError identifies as ErrHasDependents and lists the services
+// whose active version references a domain that is to be retired. Only the
+// active version blocks retiring, so versions are not listed.
+type DomainActiveError struct {
+	Domain   string
+	Services []string
+}
+
+func (e *DomainActiveError) Error() string {
+	return fmt.Sprintf("cannot retire %q: used by the active version of %s", e.Domain, joinParts(e.Services))
+}
+
+func (e *DomainActiveError) Unwrap() error {
+	return ErrHasDependents
+}
+
+func (e *DomainActiveError) UserMessage() string {
+	return e.Error()
+}
+
+// DomainsNotVerifiedError identifies as ErrDomainNotVerified and lists the
+// domains of a service version that keep it from being activated.
+type DomainsNotVerifiedError struct {
+	Domains []string
+}
+
+func (e *DomainsNotVerifiedError) Error() string {
+	return "version uses domains that are not verified: " + strings.Join(e.Domains, ", ")
+}
+
+func (e *DomainsNotVerifiedError) Unwrap() error {
+	return ErrDomainNotVerified
+}
+
+func (e *DomainsNotVerifiedError) UserMessage() string {
 	return e.Error()
 }
 

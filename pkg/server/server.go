@@ -147,6 +147,7 @@ const (
 	consoleTokenQuotaBelowUsage      = "Cannot be lower than the current number of client tokens"
 	consoleDeleteRequiresSuperuser   = "Service deletion requires an operator. You can disable a service yourself, which takes it offline and clears its cache, but a disabled service keeps its IP addresses, UID range and quota slot. Only deletion releases those, and only an operator can delete. Contact an administrator if this service should be removed."
 	consoleServiceNotFound           = "Service not found"
+	consoleActivationFailed          = "Service version activation failed"
 	consoleDeleteNeedsDisabled       = "This service must be disabled before it can be deleted. Disable it first, then delete it."
 	consoleNodeGroupNotFound         = "Node group not found"
 	consoleIPNetworksTitle           = "IP networks"
@@ -436,6 +437,7 @@ const (
 	consoleMissingSessionData        = "console: request context missing session data"
 	consoleMissingServicePath        = "console: missing service path in URL"
 	consoleMissingOrgPath            = "console: missing org path in URL"
+	consoleMissingDomainPath         = "console: missing domain path in URL"
 	consoleMissingOrgParam           = "console: missing org parameter in URL"
 	consoleMissingOrgQueryParam      = "missing 'org' query parameter"
 	consoleMissingServiceQueryParam  = "missing 'service' query parameter"
@@ -612,7 +614,7 @@ func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData,
 			   orgs.service_quota,
 			   (SELECT COUNT(*) FROM services WHERE services.org_id = orgs.id),
 			   orgs.domain_quota,
-			   (SELECT COUNT(*) FROM domains WHERE domains.org_id = orgs.id),
+			   (SELECT COUNT(*) FROM domains WHERE domains.org_id = orgs.id AND domains.time_retired IS NULL),
 			   orgs.client_token_quota,
 			   (SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_keycloak_client_credentials.org_id = orgs.id)
 			 FROM orgs WHERE id=$1`,
@@ -783,7 +785,7 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 
 		orgParam := chi.URLParam(r, "org")
 		if orgParam == "" {
-			logger.Error().Msg("console: missing org name in URL")
+			logger.Error().Msg(consoleMissingOrgPath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -796,12 +798,12 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 
 		domainName := chi.URLParam(r, "domain")
 		if domainName == "" {
-			logger.Error().Msg("console: missing domain name in URL")
+			logger.Error().Msg(consoleMissingDomainPath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 
-		_, err = deleteDomain(ctx, logger, dbc, ad, domainName)
+		_, err = deleteDomain(ctx, logger, dbc, ad, domainName, orgIdent.id.String())
 		if err != nil {
 			var errorMessage string
 			switch {
@@ -838,6 +840,91 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		// Use StatusSeeOther (303) here to make htmx hx-delete AJAX
 		// request replace original DELETE method with GET when
 		// following the redirect.
+		redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "domains")
+		if err != nil {
+			logger.Err(err).Msg("domains console: unable to create redirect URL")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		validatedRedirect(redirectURL, w, r, http.StatusSeeOther)
+	}
+}
+
+func consoleDomainRetireHandler(dbc *dbConn) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		sh, ok := ctx.Value(sessionHandleKey{}).(*sessionHandle)
+		if !ok {
+			logger.Error().Msg(consoleMissingSessionData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+		if !ok {
+			logger.Error().Msg(consoleMissingAuthData)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+
+		orgParam := chi.URLParam(r, "org")
+		if orgParam == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgParam)
+		if err != nil {
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Domains", err, "unable to render domains page with org error")
+			return
+		}
+
+		domainName := chi.URLParam(r, "domain")
+		if domainName == "" {
+			logger.Error().Msg(consoleMissingDomainPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		_, err = retireDomain(ctx, logger, dbc, ad, domainName, orgIdent.id.String())
+		if err != nil {
+			var errorMessage string
+			switch {
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				logger.Err(err).Msg("domains console: domain not found")
+				errorMessage = "Domain not found"
+			default:
+				logger.Err(err).Msg("domains console: domain retirement failed")
+				errorMessage = consoleErrorMessage(err, "Domain retirement failed")
+			}
+			// Treat ErrForbidden/ErrNotFound as non-fatal: the user may lack access to this
+			// org's domains, but we can still render the error message with an empty list.
+			domains, listErr := selectDomains(ctx, dbc, ad, orgIdent.id.String())
+			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrForbidden) && !errors.Is(listErr, cdnerrors.ErrNotFound) {
+				logger.Err(listErr).Msg(consoleDomainListReRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgIdent.name, components.DomainsContent(orgIdent.name, domains, sunetTxtTag, sunetTxtSeparator, nil, errorMessage))
+			if renderErr != nil {
+				logger.Err(renderErr).Msg("unable to render domains page with retire error")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		err = sh.addFlash(ctx, flashMessageKeys.domains, &orgIdent.id, fmt.Sprintf("Domain '%s' retired!", domainName))
+		if err != nil {
+			logger.Err(err).Msg(unableToSetFlashMessage)
+			http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
+			return
+		}
+
+		// Use StatusSeeOther (303) so the redirect after the htmx
+		// hx-post request is followed with GET.
 		redirectURL, err := url.JoinPath(consolePath, "org", orgIdent.name, "domains")
 		if err != nil {
 			logger.Err(err).Msg("domains console: unable to create redirect URL")
@@ -931,7 +1018,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 
 		orgParam := chi.URLParam(r, "org")
 		if orgParam == "" {
-			logger.Error().Msg("console: missing org name in URL")
+			logger.Error().Msg(consoleMissingOrgPath)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
@@ -1996,6 +2083,12 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 				WHERE domains.verified = true AND service_version_id = service_versions.id
 			) AS domains,
 			(SELECT
+				array_agg(domains.fqdn ORDER BY domains.fqdn)
+				FROM domains
+				JOIN service_domains ON service_domains.domain_id = domains.id
+				WHERE NOT domains.verified AND service_version_id = service_versions.id
+			) AS unusable_domains,
+			(SELECT
 				array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port)
 				FROM service_origins
 				WHERE service_version_id = service_versions.id
@@ -2278,7 +2371,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, nil), serviceIdent.name)
+			err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, ""), serviceIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to render activate-service-version page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2302,7 +2395,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			err = validate.Struct(formData)
 			if err != nil {
 				logger.Err(err).Msg("unable to validate POST activate-service form data")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, cdnerrors.ErrInvalidFormData), serviceIdent.name)
+				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, consoleErrorMessage(cdnerrors.ErrInvalidFormData, consoleActivationFailed)), serviceIdent.name)
 				if err != nil {
 					logger.Err(err).Msg("unable to render service version activation page in POST")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2323,7 +2416,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 				err := activateServiceVersion(ctx, ad, dbc, orgIdent.id.String(), serviceIdent.id.String(), version)
 				if err != nil {
 					logger.Err(err).Msg("service version activation failed")
-					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, err), serviceIdent.name)
+					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, consoleErrorMessage(err, consoleActivationFailed)), serviceIdent.name)
 					if err != nil {
 						logger.Err(err).Msg("unable to render activate-service-version page on activation failure")
 						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -4747,12 +4840,12 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 
 		var rows pgx.Rows
 		if orgFilter.Valid {
-			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY fqdn", orgFilter)
+			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token, time_retired IS NOT NULL AS retired, EXISTS (SELECT 1 FROM service_domains WHERE domain_id = domains.id) AS in_use, (SELECT array_agg(services.name ORDER BY services.name) FROM service_domains JOIN service_versions ON service_versions.id = service_domains.service_version_id JOIN services ON services.id = service_versions.service_id WHERE service_domains.domain_id = domains.id AND service_versions.active) AS active_services FROM domains WHERE org_id=$1 ORDER BY fqdn", orgFilter)
 			if err != nil {
 				return fmt.Errorf("unable to query for domains for specific org: %w", err)
 			}
 		} else {
-			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains ORDER BY fqdn")
+			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token, time_retired IS NOT NULL AS retired, EXISTS (SELECT 1 FROM service_domains WHERE domain_id = domains.id) AS in_use, (SELECT array_agg(services.name ORDER BY services.name) FROM service_domains JOIN service_versions ON service_versions.id = service_domains.service_version_id JOIN services ON services.id = service_versions.service_id WHERE service_domains.domain_id = domains.id AND service_versions.active) AS active_services FROM domains ORDER BY fqdn")
 			if err != nil {
 				return fmt.Errorf("unable to query for all domains: %w", err)
 			}
@@ -4772,40 +4865,25 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 	return domains, nil
 }
 
-func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainFQDNOrID string) (pgtype.UUID, error) {
-	// A non-superuser without an org is told so (403) like on the
-	// domain listing; this reveals nothing about any particular domain.
-	if !ad.Superuser && ad.OrgID == nil {
-		return pgtype.UUID{}, cdnerrors.ErrForbidden
-	}
-
+func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainInput string, orgInput string) (pgtype.UUID, error) {
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
 	var domainID pgtype.UUID
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		domainIdent, err := newDomainIdentifierForUpdate(dbCtx, tx, domainFQDNOrID)
+		domainIdent, err := resolveDomain(dbCtx, tx, ad, domainInput, orgInput, lockUpdate)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("deleteDomain: unable to look up domain identifier: %w", err)
-		}
-
-		// A normal user can only delete a domain belonging to the
-		// same org they are a member of
-		if !ad.Superuser && *ad.OrgID != domainIdent.orgID {
-			return cdnerrors.ErrNotFound
+			return err
 		}
 
 		// This check cannot race with a service version being added:
-		// newDomainIdentifierForUpdate holds FOR UPDATE on the domain row
-		// and inserting a service_domains row takes FOR KEY SHARE on it
+		// resolveDomain holds FOR UPDATE on the domain row and
+		// inserting a service_domains row takes FOR KEY SHARE on it
 		// through the foreign key, so the insert waits for this
 		// transaction. Inactive versions are included since the foreign
 		// key covers every version.
 		rows, err := tx.Query(dbCtx, `
-			SELECT services.name, service_versions.version
+			SELECT services.name, service_versions.version, service_versions.active
 			FROM service_domains
 			JOIN service_versions ON service_versions.id = service_domains.service_version_id
 			JOIN services ON services.id = service_versions.service_id
@@ -4815,9 +4893,14 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 			return fmt.Errorf("deleteDomain: unable to SELECT service versions using domain: %w", err)
 		}
 
+		// An active version among them also blocks retiring, so the
+		// error must not suggest that.
+		usedByActive := false
 		usedBy, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (cdnerrors.ServiceVersionRef, error) {
 			var ref cdnerrors.ServiceVersionRef
-			err := row.Scan(&ref.Service, &ref.Version)
+			var active bool
+			err := row.Scan(&ref.Service, &ref.Version, &active)
+			usedByActive = usedByActive || active
 			return ref, err
 		})
 		if err != nil {
@@ -4825,7 +4908,7 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 		}
 
 		if len(usedBy) > 0 {
-			return &cdnerrors.DomainInUseError{Domain: domainIdent.fqdn, Versions: usedBy}
+			return &cdnerrors.DomainInUseError{Domain: domainIdent.fqdn, Versions: usedBy, Retired: domainIdent.retired, Active: usedByActive}
 		}
 
 		err = tx.QueryRow(dbCtx, "DELETE FROM domains WHERE id = $1 RETURNING id", domainIdent.id).Scan(&domainID)
@@ -4845,6 +4928,92 @@ func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad c
 	}
 
 	return domainID, nil
+}
+
+// retireDomain marks a domain that service versions still reference as no
+// longer in use: it stops being verified, and its name can be added again,
+// by this org or another, while the versions keep their reference to the old
+// row. A domain no version references is to be deleted instead, since
+// retiring it would only leave a row behind.
+func retireDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainInput string, orgInput string) (pgtype.UUID, error) {
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	var domainID pgtype.UUID
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		var err error
+		domainID, err = retireDomainTx(dbCtx, tx, ad, domainInput, orgInput)
+		return err
+	})
+	if err != nil {
+		logger.Err(err).Msg("retireDomain transaction failed")
+		return pgtype.UUID{}, fmt.Errorf("retireDomain transaction failed: %w", err)
+	}
+
+	return domainID, nil
+}
+
+// retireDomainTx does the work of retireDomain in the caller's transaction,
+// returning the id of the retired domain.
+func retireDomainTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, domainInput string, orgInput string) (pgtype.UUID, error) {
+	// FOR UPDATE on the domain row keeps the checks below true until
+	// commit. Inserting a service version and activating one both take
+	// FOR SHARE on the version's domains (insertServiceVersionTx's domain
+	// lookup and unverifiedVersionDomainsTx), so they wait for this
+	// transaction and then see the domain as not verified: the insert no
+	// longer finds it and fails with ErrUnknownDomain, and the activation
+	// is refused. The FOR KEY SHARE the service_domains foreign key takes
+	// only orders a concurrent insert after this commit; it checks nothing
+	// about verification.
+	domainIdent, err := resolveDomain(ctx, tx, ad, domainInput, orgInput, lockUpdate)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+
+	if domainIdent.retired {
+		return pgtype.UUID{}, cdnerrors.ErrDomainRetired
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT services.name
+		FROM service_domains
+		JOIN service_versions ON service_versions.id = service_domains.service_version_id
+		JOIN services ON services.id = service_versions.service_id
+		WHERE service_domains.domain_id = $1 AND service_versions.active
+		ORDER BY services.name`, domainIdent.id)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("retireDomainTx: unable to SELECT active service versions using domain: %w", err)
+	}
+
+	// A service has at most one active version, so each name appears
+	// once.
+	activeIn, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("retireDomainTx: unable to read active service versions using domain: %w", err)
+	}
+
+	if len(activeIn) > 0 {
+		return pgtype.UUID{}, &cdnerrors.DomainActiveError{Domain: domainIdent.fqdn, Services: activeIn}
+	}
+
+	var used bool
+	err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM service_domains WHERE domain_id = $1)", domainIdent.id).Scan(&used)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("retireDomainTx: unable to look up service versions using domain: %w", err)
+	}
+
+	if !used {
+		return pgtype.UUID{}, cdnerrors.ErrDomainUnused
+	}
+
+	// A retired domain must not count as verified, which the
+	// retired_not_verified constraint enforces.
+	_, err = tx.Exec(ctx, "UPDATE domains SET time_retired = now(), verified = false WHERE id = $1", domainIdent.id)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("retireDomainTx: unable to UPDATE domain: %w", err)
+	}
+
+	return domainIdent.id, nil
 }
 
 func selectServiceIPs(ctx context.Context, dbc *dbConn, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
@@ -5681,7 +5850,7 @@ func selectOrgListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) 
 			COALESCE(cred.cnt, 0) AS client_token_count
 		FROM orgs
 		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM services GROUP BY org_id) AS svc ON svc.org_id = orgs.id
-		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM domains GROUP BY org_id) AS dom ON dom.org_id = orgs.id
+		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM domains WHERE time_retired IS NULL GROUP BY org_id) AS dom ON dom.org_id = orgs.id
 		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM org_keycloak_client_credentials GROUP BY org_id) AS cred ON cred.org_id = orgs.id
 		ORDER BY orgs.name`)
 	if err != nil {
@@ -5696,23 +5865,37 @@ func selectOrgListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) 
 	return orgItems, nil
 }
 
+// orgResourceCounts is what countOrgResources reports. Retired domains are
+// kept apart from live ones since they only count towards some decisions.
+type orgResourceCounts struct {
+	services int64
+	// liveDomains excludes retired domains. It is what domain_quota is
+	// compared against and what is shown as usage.
+	liveDomains int64
+	// allDomains includes retired domains, which still belong to the org
+	// and so block deleting it.
+	allDomains   int64
+	clientTokens int64
+}
+
 // countOrgResources returns how many services, domains and client tokens
 // belong to the org. Callers making decisions that must exclude concurrent
 // resource creation should hold the org row lock (see
 // newOrgIdentifierForUpdate). The lock does not block deletion of those
 // resources, so the counts can still decrease while the caller runs.
-func countOrgResources(ctx context.Context, tx pgx.Tx, orgID pgtype.UUID) (int64, int64, int64, error) {
-	var serviceCount, domainCount, clientTokenCount int64
+func countOrgResources(ctx context.Context, tx pgx.Tx, orgID pgtype.UUID) (orgResourceCounts, error) {
+	var c orgResourceCounts
 	err := tx.QueryRow(ctx,
 		`SELECT
 			(SELECT COUNT(*) FROM services WHERE org_id = $1),
+			(SELECT COUNT(*) FROM domains WHERE org_id = $1 AND time_retired IS NULL),
 			(SELECT COUNT(*) FROM domains WHERE org_id = $1),
 			(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1)`,
-		orgID).Scan(&serviceCount, &domainCount, &clientTokenCount)
+		orgID).Scan(&c.services, &c.liveDomains, &c.allDomains, &c.clientTokens)
 	if err != nil {
-		return 0, 0, 0, err
+		return orgResourceCounts{}, err
 	}
-	return serviceCount, domainCount, clientTokenCount, nil
+	return c, nil
 }
 
 func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string, name string, serviceQuota, domainQuota, clientTokenQuota int64) (cdntypes.Org, error) {
@@ -5741,20 +5924,20 @@ func updateOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 		// org lock, so a count can decrease concurrently, which at worst
 		// rejects a quota that would just have become valid. All quotas
 		// are checked so every violation can be reported at once.
-		serviceCount, domainCount, clientTokenCount, err := countOrgResources(dbCtx, tx, orgIdent.id)
+		counts, err := countOrgResources(dbCtx, tx, orgIdent.id)
 		if err != nil {
 			return fmt.Errorf("updateOrg: unable to count quota usage: %w", err)
 		}
 
 		var quotaErrs []error
-		if serviceQuota < serviceCount {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceQuotaBelowUsage, serviceQuota, serviceCount))
+		if serviceQuota < counts.services {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceQuotaBelowUsage, serviceQuota, counts.services))
 		}
-		if domainQuota < domainCount {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrDomainQuotaBelowUsage, domainQuota, domainCount))
+		if domainQuota < counts.liveDomains {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrDomainQuotaBelowUsage, domainQuota, counts.liveDomains))
 		}
-		if clientTokenQuota < clientTokenCount {
-			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrClientTokenQuotaBelowUsage, clientTokenQuota, clientTokenCount))
+		if clientTokenQuota < counts.clientTokens {
+			quotaErrs = append(quotaErrs, fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrClientTokenQuotaBelowUsage, clientTokenQuota, counts.clientTokens))
 		}
 		if len(quotaErrs) > 0 {
 			return errors.Join(quotaErrs...)
@@ -5809,17 +5992,19 @@ func deleteOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 			return fmt.Errorf("deleteOrg: unable to parse org identifier: %w", err)
 		}
 
-		serviceCount, domainCount, clientTokenCount, err := countOrgResources(dbCtx, tx, orgIdent.id)
+		counts, err := countOrgResources(dbCtx, tx, orgIdent.id)
 		if err != nil {
 			return fmt.Errorf("deleteOrg: unable to count dependents: %w", err)
 		}
 
-		if serviceCount > 0 || domainCount > 0 || clientTokenCount > 0 {
+		// Retired domains are included: they are still the org's data
+		// and can be deleted once no service version references them.
+		if counts.services > 0 || counts.allDomains > 0 || counts.clientTokens > 0 {
 			return &cdnerrors.DependentsError{
 				Name:         orgIdent.name,
-				Services:     serviceCount,
-				Domains:      domainCount,
-				ClientTokens: clientTokenCount,
+				Services:     counts.services,
+				Domains:      counts.allDomains,
+				ClientTokens: counts.clientTokens,
 			}
 		}
 
@@ -5965,9 +6150,10 @@ type nodeGroupIdentifier struct {
 // domainIdentifier does not embed resourceIdentifier because domains
 // use an FQDN instead of the DNS-label "name" other resources use.
 type domainIdentifier struct {
-	id    pgtype.UUID
-	fqdn  string
-	orgID pgtype.UUID
+	id      pgtype.UUID
+	fqdn    string
+	orgID   pgtype.UUID
+	retired bool
 }
 
 type orgClientCredentialIdentifier struct {
@@ -6323,45 +6509,10 @@ func newNodeGroupIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string
 	}, nil
 }
 
-// newDomainIdentifierForUpdate takes an exclusive row lock and has no shared
-// variant: every caller deletes the domains row it resolved. Should a
+// newOrgClientCredentialIdentifierForUpdate takes an exclusive row lock and
+// has no shared variant: its only caller deletes the row it resolved. Should a
 // read-only caller appear, give it a shared variant the way the org and node
 // helpers have one, rather than reusing this.
-func newDomainIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (domainIdentifier, error) {
-	if input == "" {
-		return domainIdentifier{}, errEmptyInputIdentifier
-	}
-
-	var id pgtype.UUID
-	var fqdn string
-	var orgID pgtype.UUID
-
-	inputID := new(pgtype.UUID)
-	err := inputID.Scan(input)
-	if err == nil {
-		// This is a valid UUID, treat it as an ID and collect the FQDN (also verifying the id exists in the process)
-		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE id = $1 FOR UPDATE", *inputID).Scan(&id, &fqdn, &orgID)
-		if err != nil {
-			return domainIdentifier{}, identifierQueryErr(err)
-		}
-	} else {
-		// This is not a valid UUID, treat it as an FQDN and validate it by mapping it to an ID (domain FQDNs are globally unique)
-		err := tx.QueryRow(ctx, "SELECT id, fqdn, org_id FROM domains WHERE fqdn = $1 FOR UPDATE", input).Scan(&id, &fqdn, &orgID)
-		if err != nil {
-			return domainIdentifier{}, identifierQueryErr(err)
-		}
-	}
-
-	return domainIdentifier{
-		id:    id,
-		fqdn:  fqdn,
-		orgID: orgID,
-	}, nil
-}
-
-// newOrgClientCredentialIdentifierForUpdate takes an exclusive row lock and
-// has no shared variant, for the same reason newDomainIdentifierForUpdate does
-// not: its only caller deletes the row it resolved.
 func newOrgClientCredentialIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (orgClientCredentialIdentifier, error) {
 	if input == "" {
 		return orgClientCredentialIdentifier{}, errEmptyInputIdentifier
@@ -6601,6 +6752,7 @@ func insertNodeGroupTx(ctx context.Context, tx pgx.Tx, name string, description 
 func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Domain, error) {
 	var domainID pgtype.UUID
 	var verificationToken string
+	var inUse bool
 
 	var orgIdent orgIdentifier
 	var err error
@@ -6631,6 +6783,41 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 			return err
 		}
 
+		// A live domain with this name in any org blocks the add, and
+		// this org's own retired row, if any, is the one to revive. The
+		// rows are locked so neither can change before we are done. The
+		// partial unique index on live FQDNs still backs this up when two
+		// orgs add the same name at once.
+		rows, err := tx.Query(dbCtx, "SELECT id, org_id, time_retired IS NOT NULL FROM domains WHERE fqdn = $1 AND (time_retired IS NULL OR org_id = $2) FOR UPDATE", fqdn, orgIdent.id)
+		if err != nil {
+			return fmt.Errorf("insertDomain: unable to SELECT existing domains: %w", err)
+		}
+		type existingDomain struct {
+			id      pgtype.UUID
+			orgID   pgtype.UUID
+			retired bool
+		}
+		existing, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (existingDomain, error) {
+			var e existingDomain
+			err := row.Scan(&e.id, &e.orgID, &e.retired)
+			return e, err
+		})
+		if err != nil {
+			return fmt.Errorf("insertDomain: unable to read existing domains: %w", err)
+		}
+
+		var retiredID pgtype.UUID
+		for _, e := range existing {
+			if !e.retired {
+				// Answering 409 for an FQDN another org already holds
+				// reveals that it is taken. That is kept since the DNS
+				// validation record already makes domain ownership
+				// discoverable.
+				return cdnerrors.ErrAlreadyExists
+			}
+			retiredID = e.id
+		}
+
 		var domainQuota int64
 		// Verify we are not hitting the limit of how many domains the
 		// org allows. The exclusive lock that locks out any concurrently
@@ -6643,7 +6830,8 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 		}
 
 		var numDomains int64
-		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM domains WHERE org_id=$1", orgIdent.id).Scan(&numDomains)
+		// Retired domains do not count towards the quota.
+		err = tx.QueryRow(dbCtx, "SELECT COUNT(*) FROM domains WHERE org_id=$1 AND time_retired IS NULL", orgIdent.id).Scan(&numDomains)
 		if err != nil {
 			return err
 		}
@@ -6657,6 +6845,26 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 		verificationToken, err = generatePassword(40)
 		if err != nil {
 			return fmt.Errorf("failed generating verification token: %w", err)
+		}
+
+		if retiredID.Valid {
+			// Bring the org's retired row back rather than adding a
+			// second one, so service versions that still reference it
+			// keep pointing at the same domain. It has to be verified
+			// again with the new token.
+			_, err = tx.Exec(dbCtx, "UPDATE domains SET time_retired = NULL, verified = false, verification_token = $1 WHERE id = $2", verificationToken, retiredID)
+			if err != nil {
+				return fmt.Errorf("unable to revive retired domain: %w", err)
+			}
+			domainID = retiredID
+
+			// The versions that used the domain before it was retired
+			// usually still reference it.
+			err = tx.QueryRow(dbCtx, "SELECT EXISTS (SELECT 1 FROM service_domains WHERE domain_id = $1)", retiredID).Scan(&inUse)
+			if err != nil {
+				return fmt.Errorf("unable to check if revived domain is in use: %w", err)
+			}
+			return nil
 		}
 
 		err = tx.QueryRow(dbCtx, "INSERT INTO domains (fqdn, verification_token, org_id) VALUES ($1, $2, $3) RETURNING id", fqdn, verificationToken, orgIdent.id).Scan(&domainID)
@@ -6680,11 +6888,15 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 		return cdntypes.Domain{}, fmt.Errorf("insertDomain transaction failed: %w", err)
 	}
 
+	// ActiveServices stays empty: a new domain has no versions, and a
+	// revived one was retired, which requires that no active version uses
+	// it, and a version with an unverified domain cannot be activated since.
 	d := cdntypes.Domain{
 		ID:                domainID,
 		FQDN:              fqdn,
 		Verified:          false,
 		VerificationToken: verificationToken,
+		InUse:             inUse,
 	}
 
 	return d, nil
@@ -6952,11 +7164,16 @@ func selectCacheNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 				GROUP BY service_id
 			) AS agg_service_ip_addresses ON agg_service_ip_addresses.service_id = services.id
 		       JOIN (
+			       -- A version with any retired or unverified domain is left out
+			       -- entirely rather than sent with only its verified domains.
+			       -- Nodes then never run a half-configured version, and a
+			       -- certificate that can never be issued for the unverified
+			       -- domain cannot stall the whole service.
 			       SELECT service_version_id, array_agg(domains.fqdn ORDER BY domains.fqdn) AS domains
 			       FROM service_domains
 			       JOIN domains ON service_domains.domain_id = domains.id
-			       WHERE domains.verified = true
 			       GROUP BY service_version_id
+			       HAVING bool_and(domains.verified)
 		       ) AS agg_domains ON agg_domains.service_version_id = service_versions.id
 		       JOIN (
 			       SELECT service_version_id, array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port) AS origins
@@ -7341,12 +7558,12 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 // transaction commits, so a second lookup can land on a different service
 // that has since taken the name. The returned slice may be empty, but the
 // identifier is always valid when err is nil.
-func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersion, serviceIdentifier, error) {
+func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersionListItem, serviceIdentifier, error) {
 	var rows pgx.Rows
 
 	var err error
 	var resolvedService serviceIdentifier
-	serviceVersions := []cdntypes.ServiceVersion{}
+	serviceVersions := []cdntypes.ServiceVersionListItem{}
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Looking up a service by ID works without supplying an org,
 		// for looking up service by name an org must be included. A
@@ -7361,7 +7578,17 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 
 		rows, err = tx.Query(
 			ctx,
-			"SELECT service_versions.id, service_versions.version, service_versions.active, service_versions.description, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE service_id = $1 ORDER BY service_versions.version",
+			`SELECT service_versions.id, service_versions.version, service_versions.active, service_versions.description, orgs.name,
+				(SELECT array_agg(domains.fqdn ORDER BY domains.fqdn)
+					FROM service_domains
+					JOIN domains ON service_domains.domain_id = domains.id
+					WHERE service_domains.service_version_id = service_versions.id AND NOT domains.verified
+				) AS unusable_domains
+			FROM service_versions
+			JOIN services ON service_versions.service_id = services.id
+			JOIN orgs ON services.org_id = orgs.id
+			WHERE service_id = $1
+			ORDER BY service_versions.version`,
 			serviceIdent.id,
 		)
 		if err != nil {
@@ -7373,18 +7600,23 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		var version int64
 		var active bool
 		var description string
-		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &description, &orgName}, func() error {
+		// NULL (no unverified domains) leaves this nil, so the JSON field is omitted.
+		var unusableDomains []string
+		_, err = pgx.ForEachRow(rows, []any{&id, &version, &active, &description, &orgName, &unusableDomains}, func() error {
 			serviceVersions = append(
 				serviceVersions,
-				cdntypes.ServiceVersion{
-					ID:          id,
-					ServiceID:   serviceIdent.id,
-					ServiceName: serviceIdent.name,
-					Version:     version,
-					Active:      active,
-					Description: description,
-					OrgID:       serviceIdent.orgID,
-					OrgName:     orgName,
+				cdntypes.ServiceVersionListItem{
+					ServiceVersion: cdntypes.ServiceVersion{
+						ID:          id,
+						ServiceID:   serviceIdent.id,
+						ServiceName: serviceIdent.name,
+						Version:     version,
+						Active:      active,
+						Description: description,
+						OrgID:       serviceIdent.orgID,
+						OrgName:     orgName,
+					},
+					UnusableDomains: unusableDomains,
 				},
 			)
 
@@ -7705,12 +7937,20 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 				FROM service_ip_addresses
 				WHERE service_id = services.id
 			) AS service_ip_addresses,
+			-- All the version's domains, not only verified ones, so the
+			-- version page can show which ones block activation.
 			(SELECT
 				array_agg(domains.fqdn ORDER BY domains.fqdn)
 				FROM domains
 				JOIN service_domains ON service_domains.domain_id = domains.id
-				WHERE domains.verified = true AND service_version_id = service_versions.id
+				WHERE service_version_id = service_versions.id
 			) AS domains,
+			(SELECT
+				array_agg(domains.fqdn ORDER BY domains.fqdn)
+				FROM domains
+				JOIN service_domains ON service_domains.domain_id = domains.id
+				WHERE NOT domains.verified AND service_version_id = service_versions.id
+			) AS unusable_domains,
 			(SELECT
 				array_agg((origin_group_id, host, port, tls, verify_tls) ORDER BY host, port)
 				FROM service_origins
@@ -7828,18 +8068,29 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 
 	var serviceDomainIDs []pgtype.UUID
 	for _, domain := range domains {
-		// Map domain name to correct ID
+		// Map domain name to correct ID.
+		//
+		// FOR SHARE makes a concurrent retireDomain, which holds
+		// FOR UPDATE on the domain, finish first. The row is then
+		// evaluated again as retired and no longer matches
+		// verified=true, so the version is refused with
+		// ErrUnknownDomain instead of being bound to a retired domain.
+		// A retire that starts after this waits for the version to be
+		// committed and then finds it if it is active. The lock also
+		// stands in for the activation check: only verified domains
+		// get here, so a version inserted as active needs no
+		// unverifiedVersionDomainsTx.
 		var domainID pgtype.UUID
 		err = tx.QueryRow(
 			ctx,
-			"SELECT id FROM domains WHERE fqdn=$1 AND org_id=$2 AND verified=$3",
+			"SELECT id FROM domains WHERE fqdn=$1 AND org_id=$2 AND verified=$3 FOR SHARE",
 			domain,
 			orgIdent.id,
 			true,
 		).Scan(&domainID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return serviceVersionInsertResult{}, cdnerrors.ErrUnknownDomain
+				return serviceVersionInsertResult{}, &cdnerrors.UnknownDomainError{Domain: string(domain)}
 			}
 			return serviceVersionInsertResult{}, fmt.Errorf("mapping domain name to existing domain failed: %w", err)
 		}
@@ -8105,18 +8356,79 @@ func activateServiceVersion(ctx context.Context, ad cdntypes.AuthData, dbc *dbCo
 }
 
 func activateServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceIdent serviceIdentifier, version int64) (pgtype.UUID, error) {
-	_, err := deactivatePreviousServiceVersionTx(ctx, tx, serviceIdent)
+	// A missing version stays pgx.ErrNoRows in the chain, which callers
+	// map to not found.
+	//
+	// The caller holds the service row FOR UPDATE, which serializes every
+	// write to this service's versions, so this row needs no lock of its
+	// own.
+	var serviceVersionID pgtype.UUID
+	err := tx.QueryRow(ctx, "SELECT id FROM service_versions WHERE service_id=$1 AND version=$2", serviceIdent.id, version).Scan(&serviceVersionID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("unable to look up service version: %w", err)
+	}
+
+	// Checked before the current version is deactivated, so a refused
+	// activation leaves the service as it was.
+	unverified, err := unverifiedVersionDomainsTx(ctx, tx, serviceVersionID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if len(unverified) > 0 {
+		return pgtype.UUID{}, &cdnerrors.DomainsNotVerifiedError{Domains: unverified}
+	}
+
+	_, err = deactivatePreviousServiceVersionTx(ctx, tx, serviceIdent)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
 
-	var activatedServiceVersionID pgtype.UUID
-	err = tx.QueryRow(ctx, "UPDATE service_versions SET active=true WHERE service_id=$1 AND version=$2 RETURNING id", serviceIdent.id, version).Scan(&activatedServiceVersionID)
+	_, err = tx.Exec(ctx, "UPDATE service_versions SET active=true WHERE id=$1", serviceVersionID)
 	if err != nil {
-		return pgtype.UUID{}, err
+		return pgtype.UUID{}, fmt.Errorf("unable to UPDATE service version to active: %w", err)
 	}
 
-	return activatedServiceVersionID, nil
+	return serviceVersionID, nil
+}
+
+// unverifiedVersionDomainsTx returns the FQDNs of the domains of a service
+// version that are not verified, sorted. A retired domain is never verified,
+// so this covers retired as well as pending domains.
+//
+// FOR SHARE is taken on all of the version's domain rows, not only the
+// unverified ones, and held until the transaction ends. Without it a retire
+// still in progress would leave the domain looking verified here, and its
+// own check for active versions would not see this activation either.
+// retireDomain takes FOR UPDATE on the domain before that check, so with the
+// lock a retire either commits first, and this query waits for it and then
+// sees the domain as not verified, or it waits until this transaction has
+// committed and then finds the version active.
+func unverifiedVersionDomainsTx(ctx context.Context, tx pgx.Tx, serviceVersionID pgtype.UUID) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT domains.fqdn, domains.verified
+		FROM service_domains
+		JOIN domains ON domains.id = service_domains.domain_id
+		WHERE service_domains.service_version_id = $1
+		ORDER BY domains.fqdn
+		FOR SHARE OF domains`, serviceVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("unable to SELECT domains of service version: %w", err)
+	}
+
+	unverified := []string{}
+	var fqdn string
+	var verified bool
+	_, err = pgx.ForEachRow(rows, []any{&fqdn, &verified}, func() error {
+		if !verified {
+			unverified = append(unverified, fqdn)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to read domains of service version: %w", err)
+	}
+
+	return unverified, nil
 }
 
 type vclPreambleInput struct {
@@ -8535,8 +8847,8 @@ func insertNetwork(ctx context.Context, dbc *dbConn, network netip.Prefix, ad cd
 }
 
 // newIPNetworkIdentifierForUpdate takes an exclusive row lock and has no
-// shared variant, for the same reason newDomainIdentifierForUpdate does not:
-// its only caller deletes the row it resolved.
+// shared variant, for the same reason newOrgClientCredentialIdentifierForUpdate
+// does not: its only caller deletes the row it resolved.
 func newIPNetworkIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string) (ipNetworkIdentifier, error) {
 	if input == "" {
 		return ipNetworkIdentifier{}, errEmptyInputIdentifier
@@ -8745,6 +9057,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 		r.Get("/org/{org}", consoleOrgDashboardHandler(dbc))
 		r.Get("/org/{org}/domains", consoleDomainsHandler(dbc))
 		r.Delete("/org/{org}/domains/{domain}", consoleDomainDeleteHandler(dbc))
+		r.Post("/org/{org}/domains/{domain}/retire", consoleDomainRetireHandler(dbc))
 		r.Get("/org/{org}/create/domain", consoleCreateDomainHandler(dbc))
 		r.Post("/org/{org}/create/domain", consoleCreateDomainHandler(dbc))
 		r.Get("/org/{org}/services", consoleServicesHandler(dbc))
@@ -9575,6 +9888,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 		huma.Delete(api, "/v1/domains/{domain}", func(ctx context.Context, input *struct {
 			Domain string `path:"domain" example:"1" doc:"Domain ID or FQDN" minLength:"1" maxLength:"253"`
+			Org    string `query:"org" example:"my-org" doc:"Organization ID or name, required if the FQDN is used in several organizations" minLength:"1" maxLength:"63"`
 		},
 		) (*struct{}, error) {
 			logger := zlog.Ctx(ctx)
@@ -9584,7 +9898,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				return nil, errors.New("unable to read auth data from domain DELETE handler")
 			}
 
-			_, err := deleteDomain(ctx, logger, dbc, ad, input.Domain)
+			_, err := deleteDomain(ctx, logger, dbc, ad, input.Domain, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("domain not found")
@@ -9592,6 +9906,32 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error403Forbidden("access to this domain is not allowed")
 				}
 				logger.Err(err).Msg("unable to delete domain")
+				return nil, apiError(err)
+			}
+
+			return nil, nil
+		})
+
+		huma.Post(api, "/v1/domains/{domain}/retire", func(ctx context.Context, input *struct {
+			Domain string `path:"domain" example:"1" doc:"Domain ID or FQDN" minLength:"1" maxLength:"253"`
+			Org    string `query:"org" example:"my-org" doc:"Organization ID or name, required if the FQDN is used in several organizations" minLength:"1" maxLength:"63"`
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from domain retire handler")
+			}
+
+			_, err := retireDomain(ctx, logger, dbc, ad, input.Domain, input.Org)
+			if err != nil {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound("domain not found")
+				} else if errors.Is(err, cdnerrors.ErrForbidden) {
+					return nil, huma.Error403Forbidden("access to this domain is not allowed")
+				}
+				logger.Err(err).Msg("unable to retire domain")
 				return nil, apiError(err)
 			}
 
@@ -10018,6 +10358,9 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					case errors.Is(err, cdnerrors.ErrNotFound):
 						return nil, huma.Error404NotFound(serviceNotFound)
 					case errors.Is(err, cdnerrors.ErrUnknownDomain):
+						if ude, ok := errors.AsType[*cdnerrors.UnknownDomainError](err); ok {
+							return nil, huma.Error422UnprocessableEntity(ude.UserMessage())
+						}
 						return nil, huma.Error422UnprocessableEntity("domain name(s) unknown or unverified")
 					case errors.Is(err, cdnerrors.ErrInvalidVCL):
 						if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
@@ -10971,7 +11314,7 @@ type cacheNodeConfigOutput struct {
 }
 
 type serviceVersionsOutput struct {
-	Body []cdntypes.ServiceVersion
+	Body []cdntypes.ServiceVersionListItem
 }
 
 type nodeGroupsOutput struct {
@@ -11299,10 +11642,14 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 			}
 
 			if parts[1] == domainData.VerificationToken {
-				_, err := dbPool.Exec(ctx, "UPDATE domains SET verified=true WHERE id=$1", domainData.ID)
+				updated, err := markDomainVerified(ctx, dbPool, domainData)
 				if err != nil {
 					logger.Err(err).Str("id", domainData.ID.String()).Str("fqdn", domainData.FQDN).Msg("unable to update verified status for domain")
 					return fmt.Errorf("unable to update database: %w", err)
+				}
+				if !updated {
+					logger.Info().Str("id", domainData.ID.String()).Str("fqdn", domainData.FQDN).Msg("domain was retired or given a new verification token during the check, not marking it verified")
+					return errors.New("domain changed during verification")
 				}
 				logger.Info().Str("id", domainData.ID.String()).Str("fqdn", domainData.FQDN).Msg("successfully verified domain")
 				// We are done
@@ -11314,6 +11661,20 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 	return errors.New("validation failed")
 }
 
+// markDomainVerified marks the domain verified only if it is still the live
+// row with the token that was found in DNS, and reports whether it did. A
+// retire, or a retire followed by adding the name again with a new token, can
+// happen between domainVerifier selecting the row and this update, and must
+// not be overwritten by a check made against the old state.
+func markDomainVerified(ctx context.Context, dbPool *pgxpool.Pool, d domainVerifyData) (bool, error) {
+	tag, err := dbPool.Exec(ctx, "UPDATE domains SET verified = true WHERE id = $1 AND verification_token = $2 AND time_retired IS NULL", d.ID, d.VerificationToken)
+	if err != nil {
+		return false, fmt.Errorf("unable to UPDATE domain as verified: %w", err)
+	}
+
+	return tag.RowsAffected() == 1, nil
+}
+
 func domainVerifier(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.Pool, resolverAddr string, verifyInterval time.Duration) {
 	udpClient := &dns.Client{}
 	tcpClient := &dns.Client{Net: "tcp"}
@@ -11321,7 +11682,7 @@ func domainVerifier(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.
 	for {
 		select {
 		case <-time.After(verifyInterval):
-			rows, err := dbPool.Query(ctx, "SELECT id, fqdn, verification_token FROM domains WHERE verified=false")
+			rows, err := dbPool.Query(ctx, "SELECT id, fqdn, verification_token FROM domains WHERE verified=false AND time_retired IS NULL")
 			if err != nil {
 				logger.Err(err).Msg("lookup of unverified domains failed")
 				continue

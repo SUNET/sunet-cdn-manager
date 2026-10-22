@@ -220,3 +220,121 @@ func (e serviceNameNeedsOrgError) UserMessage() string {
 }
 
 var errServiceNameNeedsOrg = serviceNameNeedsOrgError{}
+
+// resolveDomain maps a domain FQDN or UUID to a domainIdentifier, limited to
+// the orgs the caller may see. It follows the same three-error contract and
+// single scoped query as resolveOrg.
+//
+// An FQDN is unique among live domains but a retired one can share its name
+// with domains in other orgs, so name lookups are scoped to an org: the given
+// orgInput, else the caller's own. A superuser naming a domain without an org
+// is answered only when the name matches a single row, and is asked for the
+// org otherwise rather than handed whichever row comes first.
+//
+// When orgInput is given the domain must belong to it, also when it is given
+// by ID, the same way resolveService does.
+//
+// Unlike resolveOrg, the "matches several organizations"
+// ErrUnableToParseNameOrID is decided after the query, from the rows it
+// returned, since only the data shows that a name is held by several orgs.
+func resolveDomain(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, domainInput string, orgInput string, lock rowLock) (domainIdentifier, error) {
+	scope := scopeOf(ad)
+	if scope.hasNoAccess() {
+		return domainIdentifier{}, cdnerrors.ErrForbidden
+	}
+
+	// An FQDN is not a DNS label, so parseNameOrID would reject most of
+	// them. Anything that is not a UUID is canonicalized the same way a
+	// domain is when it is added, so malformed names are rejected without a
+	// query and differently written forms of a stored name (upper case, a
+	// trailing dot, unicode instead of punycode) still find it.
+	var domainID pgtype.UUID
+	var fqdn string
+	domainIsID := domainID.Scan(domainInput) == nil
+	if !domainIsID {
+		var err error
+		fqdn, err = canonicalizeDomain(domainInput)
+		if err != nil {
+			return domainIdentifier{}, fmt.Errorf("%w: not a UUID or valid FQDN", cdnerrors.ErrUnableToParseNameOrID)
+		}
+	}
+
+	var query string
+	var args []any
+	if orgInput != "" {
+		orgID, orgIsID, err := parseNameOrID(orgInput)
+		if err != nil {
+			return domainIdentifier{}, err
+		}
+
+		// The org row only needs to stay put while the domain is
+		// resolved, so it is always share locked; lock applies to the
+		// domains row.
+		oi, err := lookupOrg(ctx, tx, scope, orgInput, orgID, orgIsID, lockShare)
+		if err != nil {
+			return domainIdentifier{}, err
+		}
+
+		if domainIsID {
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE id = $1 AND org_id = $2" + lock.clause()
+			args = []any{domainID, oi.id}
+		} else {
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE fqdn = $1 AND org_id = $2" + lock.clause()
+			args = []any{fqdn, oi.id}
+		}
+	} else {
+		switch {
+		case domainIsID && scope.superuser:
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE id = $1" + lock.clause()
+			args = []any{domainID}
+		case domainIsID:
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE id = $1 AND org_id = ANY($2)" + lock.clause()
+			args = []any{domainID, scope.orgIDs}
+		case scope.superuser:
+			// LIMIT 2 is enough to tell one match from several.
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE fqdn = $1 LIMIT 2" + lock.clause()
+			args = []any{fqdn}
+		default:
+			query = "SELECT id, fqdn, org_id, time_retired IS NOT NULL FROM domains WHERE fqdn = $1 AND org_id = ANY($2) LIMIT 2" + lock.clause()
+			args = []any{fqdn, scope.orgIDs}
+		}
+	}
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return domainIdentifier{}, notFoundErr(err, "domain")
+	}
+	idents, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domainIdentifier, error) {
+		var di domainIdentifier
+		err := row.Scan(&di.id, &di.fqdn, &di.orgID, &di.retired)
+		return di, err
+	})
+	if err != nil {
+		return domainIdentifier{}, notFoundErr(err, "domain")
+	}
+
+	switch len(idents) {
+	case 0:
+		return domainIdentifier{}, cdnerrors.ErrNotFound
+	case 1:
+		return idents[0], nil
+	default:
+		return domainIdentifier{}, fmt.Errorf("%w: %w", cdnerrors.ErrUnableToParseNameOrID, errDomainNameNeedsOrg)
+	}
+}
+
+// domainNameNeedsOrgError is what resolveDomain wraps inside
+// cdnerrors.ErrUnableToParseNameOrID when a domain name matches rows in
+// several orgs and no org is given. It is a separate type rather than a
+// cdnerrors sentinel for the same reason as serviceNameNeedsOrgError.
+type domainNameNeedsOrgError struct{}
+
+func (domainNameNeedsOrgError) Error() string {
+	return "domain name matches several organizations, include org"
+}
+
+func (e domainNameNeedsOrgError) UserMessage() string {
+	return e.Error()
+}
+
+var errDomainNameNeedsOrg = domainNameNeedsOrgError{}

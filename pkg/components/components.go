@@ -232,6 +232,18 @@ func AddressesString(node cdntypes.Node) string {
 	return strings.Join(parts, "\n")
 }
 
+// jsonFQDNVals builds the hx-vals that make a button post the same form field
+// as the add domain form.
+func jsonFQDNVals(fqdn string) string {
+	b, err := json.Marshal(map[string]string{"fqdn": fqdn})
+	if err != nil {
+		// Should never happen
+		panic(err)
+	}
+
+	return string(b)
+}
+
 type addButtonVals struct {
 	Org     string `json:"org"`
 	Service string `json:"service"`
