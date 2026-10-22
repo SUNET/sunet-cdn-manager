@@ -43,6 +43,10 @@ var (
 	ErrConfirmNameMismatch         = errors.New("confirmation name does not match resource name")
 	ErrLoginRateLimited            = errors.New("too many login attempts")
 	ErrLoginBusy                   = errors.New("server busy handling logins")
+	// ErrReferencedOrgNotFound is deliberately the same for an unknown org
+	// and for an org the caller may not use, so the response cannot be used
+	// to probe for which orgs exist.
+	ErrReferencedOrgNotFound = errors.New("referenced organization not found")
 )
 
 // UserMessager is implemented by errors whose details are safe and useful to

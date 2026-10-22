@@ -107,6 +107,12 @@ type postResult struct {
 // service through the API and reports the outcome on the returned channel. It
 // runs on its own goroutine, so it reports errors instead of using t.
 func postServiceVersionAsync(ctx context.Context, serverURL string, username string, password string, serviceID string) <-chan postResult {
+	return postServiceVersionForOrgAsync(ctx, serverURL, username, password, serviceID, "00000002-0000-0000-0000-000000000001")
+}
+
+// postServiceVersionForOrgAsync is postServiceVersionAsync with the org named
+// in the request body chosen by the caller.
+func postServiceVersionForOrgAsync(ctx context.Context, serverURL string, username string, password string, serviceID string, orgID string) <-chan postResult {
 	resCh := make(chan postResult, 1)
 	go func() {
 		body, err := json.Marshal(struct {
@@ -115,7 +121,7 @@ func postServiceVersionAsync(ctx context.Context, serverURL string, username str
 			DefaultOriginGroup cdntypes.InputDefaultOriginGroup `json:"default_origin_group"`
 			VCLTemplate        string                           `json:"vcl_template"`
 		}{
-			Org:     "00000002-0000-0000-0000-000000000001",
+			Org:     orgID,
 			Domains: []string{"example.com"},
 			DefaultOriginGroup: cdntypes.InputDefaultOriginGroup{
 				Origins: []cdntypes.InputOrigin{{Host: "198.51.100.20", Port: 443, TLS: true}},
@@ -280,8 +286,8 @@ func TestPostServiceVersionRechecksServiceAfterValidation(t *testing.T) {
 			if res.err != nil {
 				t.Fatal(res.err)
 			}
-			if res.status != http.StatusUnprocessableEntity {
-				t.Fatalf("POST returned %d, want %d", res.status, http.StatusUnprocessableEntity)
+			if res.status != http.StatusNotFound {
+				t.Fatalf("POST returned %d, want %d", res.status, http.StatusNotFound)
 			}
 
 			var versions int64
@@ -396,38 +402,60 @@ func TestPostServiceVersionConcurrentValidation(t *testing.T) {
 	}
 }
 
-// TestPostServiceVersionForbiddenSkipsValidation checks that authorization
-// still comes before validation now that they run in separate steps. A
-// refused caller must not be able to make the manager call the validator.
-func TestPostServiceVersionForbiddenSkipsValidation(t *testing.T) {
-	const serviceID = "00000003-0000-0000-0000-000000000001" // org1-service1
+// TestPostServiceVersionRefusedSkipsValidation checks that the scoped lookups
+// still come before validation now that they run in separate steps. A caller
+// who cannot see the org or service it names must not be able to make the
+// manager call the validator.
+func TestPostServiceVersionRefusedSkipsValidation(t *testing.T) {
+	const (
+		org1ServiceID = "00000003-0000-0000-0000-000000000001" // org1-service1
+		org1ID        = "00000002-0000-0000-0000-000000000001"
+		org2ID        = "00000002-0000-0000-0000-000000000002"
+	)
 
-	validator := newBlockingValidator(t)
-	// Released up front: a validator call here is the failure being
-	// tested for, not something to wait on.
-	validator.release()
-
-	ts, dbPool, err := prepareServer(t, testServerInput{vclValidator: validator.client})
-	if dbPool != nil {
-		defer dbPool.Close()
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Close()
-
-	// username2 belongs to org2, the service to org1.
-	res := waitForPost(t, postServiceVersionAsync(context.Background(), ts.URL, "username2", "password2", serviceID))
-	if res.err != nil {
-		t.Fatal(res.err)
-	}
-	if res.status != http.StatusForbidden {
-		t.Fatalf("POST returned %d, want %d", res.status, http.StatusForbidden)
+	cases := []struct {
+		name      string
+		serviceID string
+		orgID     string
+		want      int
+	}{
+		// username2 belongs to org2; the org named in the body is org1,
+		// which is reported as a bad reference.
+		{"another org in body", org1ServiceID, org1ID, http.StatusUnprocessableEntity},
+		// The body org is the caller's own but the path service is org1's,
+		// which is simply not found.
+		{"another org's path service with own body org", org1ServiceID, org2ID, http.StatusNotFound},
 	}
 
-	select {
-	case <-validator.seen:
-		t.Fatal("the validator was called for a refused request")
-	default:
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := newBlockingValidator(t)
+			// Released up front: a validator call here is the failure
+			// being tested for, not something to wait on.
+			validator.release()
+
+			ts, dbPool, err := prepareServer(t, testServerInput{vclValidator: validator.client})
+			if dbPool != nil {
+				defer dbPool.Close()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ts.Close()
+
+			res := waitForPost(t, postServiceVersionForOrgAsync(context.Background(), ts.URL, "username2", "password2", tc.serviceID, tc.orgID))
+			if res.err != nil {
+				t.Fatal(res.err)
+			}
+			if res.status != tc.want {
+				t.Fatalf("POST returned %d, want %d", res.status, tc.want)
+			}
+
+			select {
+			case <-validator.seen:
+				t.Fatal("the validator was called for a refused request")
+			default:
+			}
+		})
 	}
 }

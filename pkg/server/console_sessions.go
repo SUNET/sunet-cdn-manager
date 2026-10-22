@@ -216,20 +216,14 @@ func (sh *sessionHandle) popFlashes(ctx context.Context, category consolesession
 	return messages, nil
 }
 
-// popOrgFlashes is popFlashes for an org page that only has the org name or
-// id from its URL. The org is looked up only when there are flashes. Call
-// it after the page's own access check.
-func (sh *sessionHandle) popOrgFlashes(ctx context.Context, dbc *dbConn, category consolesession.FlashCategory, orgNameOrID string) ([]string, error) {
+// popOrgFlashes is popFlashes for an org page. orgID must come from the
+// page's own scoped lookup of the org (resolveConsoleOrg).
+func (sh *sessionHandle) popOrgFlashes(ctx context.Context, category consolesession.FlashCategory, orgID pgtype.UUID) ([]string, error) {
 	if !sh.hasFlashes {
 		return []string{}, nil
 	}
 
-	orgIdent, err := validateOrgName(ctx, zerolog.Ctx(ctx), dbc.dbPool, orgNameOrID)
-	if err != nil {
-		return nil, err
-	}
-
-	return sh.popFlashes(ctx, category, &orgIdent.id)
+	return sh.popFlashes(ctx, category, &orgID)
 }
 
 // setSelectedOrg stores the org picked in the org switcher, nil for an

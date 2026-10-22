@@ -119,6 +119,7 @@ const (
 	consoleSuperuserUsers            = "/console/superuser/users"
 	apiV1OrgPath                     = "/v1/orgs/{org}"
 	orgNotFound                      = "organization not found"
+	orgClientCredentialsNotFound     = "organization client credentials not found"
 	api403String                     = "not allowed to access resource"
 	api403DeleteString               = "not allowed to delete resource"
 	cacheNodeNotFound                = "cache node not found"
@@ -126,6 +127,7 @@ const (
 	nodeGroupNotFound                = "node group not found"
 	ipNetworkNotFound                = "ip network not found"
 	serviceNotFound                  = "service not found"
+	serviceVersionNotFound           = "service or version not found"
 	consoleAlreadyExists             = "already exists"
 	validationNotDNSLabel            = "not a valid DNS label"
 	validationNotFQDN                = "not a valid FQDN"
@@ -137,12 +139,9 @@ const (
 	consoleL4LBNodesTitle            = "L4LB nodes"
 	consoleL4LBNodeNotFound          = "L4LB node not found"
 	consoleNotAllowedModifyL4LBNode  = "Not allowed to modify L4LB node"
-	consoleNotAllowedDeleteDomain    = "Not allowed to delete domain"
 	consoleNotAllowedDeleteAPIToken  = "Not allowed to delete API token"
-	consoleNotAllowedDisableService  = "Not allowed to disable service"
-	consoleNotAllowedEnableService   = "Not allowed to enable service"
-	consoleNotAllowedActivateSV      = "Not allowed to activate service version"
 	consoleOrgNotFound               = "Organization not found"
+	consoleOrgValidationFailed       = "org name validation failed"
 	consoleServiceQuotaBelowUsage    = "Cannot be lower than the current number of services"
 	consoleDomainQuotaBelowUsage     = "Cannot be lower than the current number of domains"
 	consoleTokenQuotaBelowUsage      = "Cannot be lower than the current number of client tokens"
@@ -449,7 +448,6 @@ const (
 	consoleNodeGroupsReRenderErr     = "cache nodes console: unable to fetch node groups for re-render"
 	consoleL4LBNodeListReRenderErr   = "l4lb nodes console: unable to fetch L4LB node list for re-render"
 	consoleL4LBNodeGroupsReRenderErr = "l4lb nodes console: unable to fetch node groups for re-render"
-	consoleServicesOrgRenderErr      = "unable to render services page with org error"
 	consoleServicesServiceRenderErr  = "unable to render services page with service error"
 	consoleServiceRenderErr          = "unable to render service error page"
 	consoleDashboardRenderErr        = "unable to render dashboard error page"
@@ -532,58 +530,6 @@ func consoleDashboardHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 	}
-}
-
-// Functions that interact with the database will do their own validation of
-// input data prior to doing anything, so if such a function is called and did
-// not fail it should be safe to use the orgName without further validation.
-// However sometimes we want to use the orgName without having talked to the
-// database e.g. to build redirect URLs. In that case you can use this prior to
-// building the URL with unknown data.
-func validateOrgName(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, orgName string) (orgIdentifier, error) {
-	if orgName == "" {
-		return orgIdentifier{}, errEmptyInputIdentifier
-	}
-
-	var orgIdent orgIdentifier
-	var err error
-	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifier(ctx, tx, orgName)
-		if err != nil {
-			logger.Err(err).Msg("validateOrgName: unable to find organization for name")
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		logger.Err(err).Msg("validateOrgName: db request for looking up orgName failed")
-		return orgIdentifier{}, err
-	}
-
-	return orgIdent, nil
-}
-
-func validateServiceName(ctx context.Context, logger *zerolog.Logger, dbPool *pgxpool.Pool, orgIdent orgIdentifier, serviceName string) (serviceIdentifier, error) {
-	if serviceName == "" {
-		return serviceIdentifier{}, errEmptyInputIdentifier
-	}
-
-	var serviceIdent serviceIdentifier
-	var err error
-	err = pgx.BeginFunc(ctx, dbPool, func(tx pgx.Tx) error {
-		serviceIdent, err = newServiceIdentifier(ctx, tx, serviceName, orgIdent.id)
-		if err != nil {
-			logger.Err(err).Msg("validateServiceName: unable to find service for name")
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		logger.Err(err).Msg("validateServiceName: db request for looking up serviceName failed")
-		return serviceIdentifier{}, err
-	}
-
-	return serviceIdent, nil
 }
 
 // We protect against CSRF by using http.CrossOriginProtection middleware. That
@@ -720,18 +666,11 @@ func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		// Unknown and out-of-scope orgs both end up on the same page here,
+		// so from this point on orgIdent is an org the caller may see.
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
 		if err != nil {
-			logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if err != nil {
-					logger.Err(err).Msg(consoleDashboardRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Dashboard", err, consoleDashboardRenderErr)
 			return
 		}
 
@@ -744,17 +683,8 @@ func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 		dashData, err := getOrgDashboardData(ctx, dbc, ad, orgIdent)
 		if err != nil {
 			switch {
-			case errors.Is(err, cdnerrors.ErrForbidden):
-				logger.Err(err).Msg("consoleOrgDashboardHandler: forbidden from looking up dashboard data")
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleDashboardRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
+			case errors.Is(err, cdnerrors.ErrForbidden), errors.Is(err, cdnerrors.ErrNotFound):
+				renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Dashboard", err, consoleDashboardRenderErr)
 			default:
 				logger.Err(err).Msg("consoleOrgDashboardHandler: db request for looking up dashboard data failed")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -762,37 +692,10 @@ func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		if ad.Superuser {
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
-			if err != nil {
-				logger.Err(err).Msg("unable to render console home page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-		} else if ad.OrgName != nil {
-			if *ad.OrgName != orgIdent.name {
-				logger.Error().Msgf("user is not superuser or belongs to the '%s' org", orgIdent.name)
-				err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleDashboardRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
-			if err != nil {
-				logger.Err(err).Msg("unable to render console home page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-		} else {
-			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belongs to an org")
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-			if err != nil {
-				logger.Err(err).Msg("unable to render console org dashboard for user with no access")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
+		if err != nil {
+			logger.Err(err).Msg("unable to render console home page")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -824,19 +727,16 @@ func consoleDomainsHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		domains, err := selectDomains(ctx, dbc, ad, orgName)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
 		if err != nil {
-			if errors.Is(err, cdnerrors.ErrForbidden) {
-				logger.Err(err).Msg("domains console: not authorized to view page")
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, "Domains", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg("unable to render domains error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Domains", err, "unable to render domains error page")
+			return
+		}
+
+		domains, err := selectDomains(ctx, dbc, ad, orgIdent.id.String())
+		if err != nil {
+			if errors.Is(err, cdnerrors.ErrForbidden) || errors.Is(err, cdnerrors.ErrNotFound) {
+				renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Domains", err, "unable to render domains error page")
 				return
 			}
 			logger.Err(err).Msg("domains console: database lookup failed")
@@ -846,14 +746,14 @@ func consoleDomainsHandler(dbc *dbConn) http.HandlerFunc {
 
 		// If someone has been redirected from domain creation we will
 		// have a flash message to tell the user so.
-		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.domains, orgName)
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, flashMessageKeys.domains, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("domains console: reading flash messages failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgName, components.DomainsContent(orgName, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgIdent.name, components.DomainsContent(orgIdent.name, domains, sunetTxtTag, sunetTxtSeparator, flashMessageStrings, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render domains page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -888,37 +788,9 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		// Check org membership before validating the org name in the DB,
-		// so non-superusers cannot probe for org existence via error messages.
-		if !ad.Superuser {
-			if !isOrgMember(ad, orgParam) {
-				logger.Error().Msg("consoleDomainDelete: user is not superuser and not member of the matching org")
-				userOrg := ""
-				if ad.OrgName != nil {
-					userOrg = *ad.OrgName
-				}
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", userOrg, components.DomainsContent(userOrg, nil, sunetTxtTag, sunetTxtSeparator, nil, consoleNotAllowedDeleteDomain))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render domains page with auth error")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgParam)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgParam)
 		if err != nil {
-			logger.Err(err).Msg("consoleDomainDeleteHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Domains", orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render domains page with org error")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			} else {
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Domains", err, "unable to render domains page with org error")
 			return
 		}
 
@@ -940,10 +812,10 @@ func consoleDomainDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				logger.Err(err).Msg("domains console: domain deletion failed")
 				errorMessage = consoleErrorMessage(err, "Domain deletion failed")
 			}
-			// Treat ErrForbidden as non-fatal: the user may lack access to this
+			// Treat ErrForbidden/ErrNotFound as non-fatal: the user may lack access to this
 			// org's domains, but we can still render the error message with an empty list.
-			domains, listErr := selectDomains(ctx, dbc, ad, orgIdent.name)
-			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrForbidden) {
+			domains, listErr := selectDomains(ctx, dbc, ad, orgIdent.id.String())
+			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrForbidden) && !errors.Is(listErr, cdnerrors.ErrNotFound) {
 				logger.Err(listErr).Msg(consoleDomainListReRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
@@ -1002,20 +874,17 @@ func consoleAPITokensHandler(dbc *dbConn, tokenURL *url.URL, serverURL *url.URL)
 			return
 		}
 
-		orgClientCreds, err := selectSafeOrgClientCredentials(ctx, dbc, orgName, ad)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
+		if err != nil {
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, consoleAPITokensTitle, err, "unable to render api tokens error page")
+			return
+		}
+
+		orgClientCreds, err := selectSafeOrgClientCredentials(ctx, dbc, orgIdent.id.String(), ad)
 		if err != nil {
 			switch {
 			case errors.Is(err, cdnerrors.ErrForbidden), errors.Is(err, cdnerrors.ErrNotFound):
-				logger.Err(err).Msg("api tokens console: not authorized to view page")
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg("unable to render api tokens error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
+				renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, consoleAPITokensTitle, err, "unable to render api tokens error page")
 			default:
 				logger.Err(err).Msg("api tokens console: database lookup failed")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1025,14 +894,14 @@ func consoleAPITokensHandler(dbc *dbConn, tokenURL *url.URL, serverURL *url.URL)
 
 		// If someone has been redirected from api token creation we will
 		// have a flash message to tell the user so.
-		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.apiTokens, orgName)
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, flashMessageKeys.apiTokens, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("consoleAPITokensHandler: reading flash messages failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		err = renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgName, components.APITokensContent(orgName, orgClientCreds, flashMessageStrings, tokenURL, serverURL, ""))
+		err = renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgIdent.name, components.APITokensContent(orgIdent.name, orgClientCreds, flashMessageStrings, tokenURL, serverURL, ""))
 		if err != nil {
 			logger.Err(err).Msg("unable to render api-tokens page")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1067,37 +936,9 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 			return
 		}
 
-		// Check org membership before validating the org name in the DB,
-		// so non-superusers cannot probe for org existence via error messages.
-		if !ad.Superuser {
-			if !isOrgMember(ad, orgParam) {
-				logger.Error().Msg("consoleAPITokenDeleteHandler: user is not superuser and not member of the matching org")
-				userOrg := ""
-				if ad.OrgName != nil {
-					userOrg = *ad.OrgName
-				}
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, userOrg, components.APITokensContent(userOrg, nil, nil, tokenURL, serverURL, consoleNotAllowedDeleteAPIToken))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render api-tokens page with auth error")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgParam)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgParam)
 		if err != nil {
-			logger.Err(err).Msg("consoleAPITokenDeleteHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Only superusers reach this point (non-superusers are rejected above).
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, consoleAPITokensTitle, orgParam, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg("unable to render api-tokens page with org error")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			} else {
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, consoleAPITokensTitle, err, "unable to render api-tokens page with org error")
 			return
 		}
 
@@ -1108,7 +949,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 			return
 		}
 
-		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEADs, ad, kccm, orgIdent.name, apiTokenName)
+		_, err = deleteOrgClientCredential(ctx, logger, dbc, clientCredAEADs, ad, kccm, orgIdent.id.String(), apiTokenName)
 		if err != nil {
 			var errorMessage string
 			switch {
@@ -1124,7 +965,7 @@ func consoleAPITokenDeleteHandler(dbc *dbConn, clientCredAEADs []cipher.AEAD, kc
 			}
 			// Treat ErrNotFound/ErrForbidden as non-fatal: the user may lack access to this
 			// org's credentials, but we can still render the error message with an empty list.
-			creds, listErr := selectSafeOrgClientCredentials(ctx, dbc, orgIdent.name, ad)
+			creds, listErr := selectSafeOrgClientCredentials(ctx, dbc, orgIdent.id.String(), ad)
 			if listErr != nil && !errors.Is(listErr, cdnerrors.ErrNotFound) && !errors.Is(listErr, cdnerrors.ErrForbidden) {
 				logger.Err(listErr).Msg(consoleAPITokenListReRenderErr)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1200,40 +1041,10 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
 		if err != nil {
-			logger.Err(err).Msg("consoleCreateAPITokenHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, title, err, consoleCreateAPITokenRenderErr)
 			return
-		}
-
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Error().Msg("consoleCreateAPITokenHandler: not member of org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Error().Msg("consoleCreateAPITokenHandler: not member of correct org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateAPITokenRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
 		}
 
 		switch r.Method {
@@ -1289,7 +1100,7 @@ func consoleCreateAPITokenHandler(dbc *dbConn, clientCredAEAD cipher.AEAD, kccm 
 				return
 			}
 
-			newClientCred, err := insertOrgClientCredential(ctx, logger, dbc, formData.Name, formData.Description, orgIdent.name, ad, kccm, clientCredAEAD)
+			newClientCred, err := insertOrgClientCredential(ctx, logger, dbc, formData.Name, formData.Description, orgIdent.id.String(), ad, kccm, clientCredAEAD)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					apiTokenData.Errors.Name = cdnerrors.ErrAlreadyExists.Error()
@@ -1373,21 +1184,6 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
-		if err != nil {
-			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to look up orgName")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
 			logger.Error().Msg(consoleMissingServicePath)
@@ -1395,18 +1191,9 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceName)
 		if err != nil {
-			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to look up serviceName")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Services", consoleServiceNotFound, err, consoleServicesServiceRenderErr)
 			return
 		}
 
@@ -1418,6 +1205,13 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		var timeDisabled *time.Time
 		var ipAddresses []netip.Addr
 		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+			// As in getServiceVersionCloneData: re-resolve the pinned ids
+			// so a service that moved to another org since
+			// resolveConsoleService is not described to this caller.
+			if _, rErr := resolveService(ctx, tx, ad, serviceIdent.id.String(), orgIdent.id.String(), lockShare); rErr != nil {
+				return rErr
+			}
+
 			qErr := tx.QueryRow(
 				ctx,
 				`SELECT
@@ -1432,7 +1226,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 				return qErr
 			}
 
-			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
+			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.id)
 			if sErr != nil {
 				return sErr
 			}
@@ -1441,6 +1235,10 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			}
 			return nil
 		})
+		if errors.Is(err, cdnerrors.ErrNotFound) {
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Services", consoleServiceNotFound, err, consoleServicesServiceRenderErr)
+			return
+		}
 		if err != nil {
 			logger.Err(err).Msg("consoleServiceDeleteHandler: unable to collect service deletion details")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1496,7 +1294,7 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 			// The name is what the user must type, but we would
 			// not want to mistakenly delete replacement service
 			// with the same name.
-			_, err = deleteService(ctx, logger, dbc, orgIdent.name, serviceIdent.id.String(), formData.ConfirmName, ad)
+			_, err = deleteService(ctx, logger, dbc, orgIdent.id.String(), serviceIdent.id.String(), formData.ConfirmName, ad)
 			if err != nil {
 				logger.Err(err).Msg("service deletion failed")
 				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DeleteServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), versionCount, ipAddresses, uidRangeFirst, uidRangeLast, err), serviceIdent.name)
@@ -1540,23 +1338,25 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
+		// Resolved before anything is read so an org the caller may not
+		// see is indistinguishable from one that does not exist.
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
+		if err != nil {
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Services", err, "unable to render services error page")
+			return
+		}
+
 		// Build view entries with IP addresses for each service
 		var serviceQuota int64
 		serviceEntries := []components.ServiceEntry{}
-		err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-			services, err := selectServicesTx(ctx, tx, ad, orgName)
+		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+			services, err := selectServicesTx(ctx, tx, ad, orgIdent.id.String())
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return fmt.Errorf("not authorized to view page: %w", err)
-				}
 				return fmt.Errorf("database lookup failed: %w", err)
 			}
 
-			orgServiceIPAddrs, err := selectServiceIPsForOrgTx(ctx, tx, orgName, ad)
+			orgServiceIPAddrs, err := selectServiceIPsForOrgTx(ctx, tx, orgIdent.id)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return fmt.Errorf("not authorized to view page when looking up org service ips: %w", err)
-				}
 				return fmt.Errorf("database lookup failed for org service ips: %w", err)
 			}
 
@@ -1572,16 +1372,6 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 				serviceEntries = append(serviceEntries, entry)
 			}
 
-			// selectServicesTx above already enforces that the caller is
-			// either a superuser or a member of this org (returning
-			// cdnerrors.ErrForbidden otherwise, which aborts this
-			// transaction), so it is safe to resolve the org and read its
-			// service_quota here.
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgName)
-			if err != nil {
-				return fmt.Errorf("database lookup failed for org identifier: %w", err)
-			}
-
 			err = tx.QueryRow(ctx, "SELECT service_quota FROM orgs WHERE id = $1", orgIdent.id).Scan(&serviceQuota)
 			if err != nil {
 				return fmt.Errorf("database lookup failed for org service quota: %w", err)
@@ -1590,17 +1380,10 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 			return nil
 		})
 		if err != nil {
-			if errors.Is(err, cdnerrors.ErrForbidden) {
-				logger.Err(err).Msg("services console: transaction failed with forbidden result")
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, "Services", sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg("unable to render services error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
+			// The org was resolved above, so this only happens if it
+			// went away or became invisible since.
+			if errors.Is(err, cdnerrors.ErrForbidden) || errors.Is(err, cdnerrors.ErrNotFound) {
+				renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, "Services", err, "unable to render services error page")
 				return
 			}
 			logger.Err(err).Msg("services console: database lookup failed")
@@ -1610,7 +1393,7 @@ func consoleServicesHandler(dbc *dbConn) http.HandlerFunc {
 
 		// If someone has been redirected from service creation we will
 		// have a flash message to tell the user so.
-		flashMessageStrings, err := sh.popOrgFlashes(ctx, dbc, flashMessageKeys.services, orgName)
+		flashMessageStrings, err := sh.popOrgFlashes(ctx, flashMessageKeys.services, orgIdent.id)
 		if err != nil {
 			logger.Err(err).Msg("services console: reading flash messages failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1654,40 +1437,10 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
 		if err != nil {
-			logger.Err(err).Msg("consoleCreateDomainHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateDomainRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, title, err, consoleCreateDomainRenderErr)
 			return
-		}
-
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Error().Msg("consoleCreateDomainHandler: not member of org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateDomainRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Error().Msg("consoleCreateDomainHandler: not member of correct org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateDomainRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
 		}
 
 		switch r.Method {
@@ -1751,7 +1504,8 @@ func consoleCreateDomainHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			_, err = insertDomain(ctx, logger, dbc, formData.FQDN, &orgIdent.name, ad)
+			orgID := orgIdent.id.String()
+			_, err = insertDomain(ctx, logger, dbc, formData.FQDN, &orgID, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrAlreadyExists) {
 					domainData.Errors.FQDN = cdnerrors.ErrAlreadyExists.Error()
@@ -1819,40 +1573,10 @@ func consoleCreateServiceHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgName)
 		if err != nil {
-			logger.Err(err).Msg("consoleCreateServiceHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleOrgUnavailable(ctx, logger, dbc, w, r, ad, title, err, consoleCreateServiceRenderErr)
 			return
-		}
-
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Error().Msg("consoleCreateServiceHandler: not member of org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, "", components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Error().Msg("consoleCreateServiceHandler: not member of correct org")
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, *ad.OrgName, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleCreateServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
 		}
 
 		switch r.Method {
@@ -1890,7 +1614,8 @@ func consoleCreateServiceHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			_, err = insertService(ctx, logger, dbc, formData.Name, &orgIdent.name, ad)
+			orgID := orgIdent.id.String()
+			_, err = insertService(ctx, logger, dbc, formData.Name, &orgID, ad)
 			if err != nil {
 				logger.Err(err).Msg("unable to insert service")
 				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.CreateServiceContent(orgIdent.name, err))
@@ -1951,43 +1676,14 @@ func consoleNewOriginFieldsetHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		// Use the same error for validateOrgName() as the user
-		// permission check so we don't give away if an org exists or
-		// not if the user is not allowed to use it. Protects against
-		// enumeration of what orgs exists.
-		validationError := "org name validation failed"
-		validationErrorCode := http.StatusBadRequest
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgStr)
+		// A missing org or service and one the caller may not use give
+		// the same error, which protects against enumeration of what
+		// exists.
+		_, _, err := resolveConsoleService(ctx, dbc, ad, orgStr, serviceStr)
 		if err != nil {
-			logger.Err(err).Msg("org name validation failed")
-			http.Error(w, validationError, validationErrorCode)
+			logger.Err(err).Msg("org or service validation failed")
+			http.Error(w, consoleOrgValidationFailed, http.StatusBadRequest)
 			return
-		}
-
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceStr)
-		if err != nil {
-			logger.Err(err).Msg("service name validation failed")
-			http.Error(w, validationError, validationErrorCode)
-			return
-		}
-
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Err(err).Msg("user not allowed to get originfieldset")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Err(err).Msg("user not member of the requested org")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
-			if orgIdent.id != serviceIdent.orgID {
-				logger.Err(err).Msg("requested service is not member of the requested org")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
 		}
 
 		groupParam := r.URL.Query().Get("group")
@@ -2057,43 +1753,14 @@ func consoleNewOriginGroupFieldsetHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		// Use the same error for validateOrgName() as the user
-		// permission check so we don't give away if an org exists or
-		// not if the user is not allowed to use it. Protects against
-		// enumeration of what orgs exists.
-		validationError := "org name validation failed"
-		validationErrorCode := http.StatusBadRequest
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgStr)
+		// A missing org or service and one the caller may not use give
+		// the same error, which protects against enumeration of what
+		// exists.
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgStr, serviceStr)
 		if err != nil {
-			logger.Err(err).Msg("org name validation failed")
-			http.Error(w, validationError, validationErrorCode)
+			logger.Err(err).Msg("org or service validation failed")
+			http.Error(w, consoleOrgValidationFailed, http.StatusBadRequest)
 			return
-		}
-
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceStr)
-		if err != nil {
-			logger.Err(err).Msg("service name validation failed")
-			http.Error(w, validationError, validationErrorCode)
-			return
-		}
-
-		if !ad.Superuser {
-			if ad.OrgName == nil {
-				logger.Err(err).Msg("user not allowed to get origin group fieldset")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
-			if *ad.OrgName != orgIdent.name {
-				logger.Err(err).Msg("user not member of the requested org")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
-			if orgIdent.id != serviceIdent.orgID {
-				logger.Err(err).Msg("requested service is not member of the requested org")
-				http.Error(w, validationError, validationErrorCode)
-				return
-			}
 		}
 
 		index := 0
@@ -2158,32 +1825,24 @@ func consoleOrgSwitcherHandler(dbc *dbConn) http.HandlerFunc {
 			// from "never selected" (fresh login).
 			orgURL = consolePath
 		} else {
-			// Use the same error for validateOrgName() as the user
-			// permission check so we don't give away if an org exists or
-			// not if the user is not allowed to use it. Protects against
-			// enumeration of what orgs exists.
-			validationError := "org name validation failed"
-			validationErrorCode := http.StatusBadRequest
-
-			orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgStr)
+			// The scoped lookup only finds orgs the caller may switch to,
+			// so an unknown org, an out-of-scope org and a malformed name
+			// all get the same answer and nothing is revealed about which
+			// orgs exist.
+			orgIdent, err := resolveConsoleOrg(ctx, dbc, ad, orgStr)
 			if err != nil {
-				logger.Err(err).Msg("org name validation failed")
-				http.Error(w, validationError, validationErrorCode)
+				if errors.Is(err, cdnerrors.ErrNotFound) ||
+					errors.Is(err, cdnerrors.ErrForbidden) ||
+					errors.Is(err, cdnerrors.ErrUnableToParseNameOrID) {
+					logger.Err(err).Msg("org name validation failed")
+					http.Error(w, consoleOrgValidationFailed, http.StatusBadRequest)
+					return
+				}
+				logger.Err(err).Msg("unable to look up org for switching")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 
-			if !ad.Superuser {
-				if ad.OrgName == nil {
-					logger.Err(err).Msg("user not allowed to check if org exists")
-					http.Error(w, validationError, validationErrorCode)
-					return
-				}
-				if *ad.OrgName != orgIdent.name {
-					logger.Err(err).Msg("user not member of the correct org for switching to it")
-					http.Error(w, validationError, validationErrorCode)
-					return
-				}
-			}
 			orgURL, err = url.JoinPath(consolePath, "org", orgIdent.name)
 			if err != nil {
 				logger.Err(err).Msg("unable to create URL for switching org")
@@ -2234,27 +1893,7 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 
 		serviceVersions, serviceIdent, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
 		if err != nil {
-			logger.Err(err).Msg("console: unable to select service versions")
-			switch {
-			case errors.Is(err, cdnerrors.ErrForbidden):
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg(consoleServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			case errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleServiceNotFound))
-				if err != nil {
-					logger.Err(err).Msg(consoleServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			default:
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, consoleServiceRenderErr)
 			return
 		}
 
@@ -2320,27 +1959,10 @@ func consoleServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 
 		svc, err := getServiceVersionConfig(ctx, dbc, ad, orgName, serviceName, serviceVersion)
 		if err != nil {
-			logger.Err(err).Msg("console: unable to select service version config")
-			switch {
-			case errors.Is(err, cdnerrors.ErrForbidden):
-				sidebarOrg := ""
-				if ad.OrgName != nil {
-					sidebarOrg = *ad.OrgName
-				}
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(consoleNeedOrgMembershipMsg))
-				if err != nil {
-					logger.Err(err).Msg("unable to render service version error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			case errors.Is(err, cdnerrors.ErrUnprocessable):
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent("Service version not found"))
-				if err != nil {
-					logger.Err(err).Msg("unable to render service version error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-			default:
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
+			// getServiceVersionConfig reports a missing service and a
+			// missing version alike, so one page covers every not-found
+			// case for this URL shape.
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, "Service version not found", err, "unable to render service version error page")
 			return
 		}
 
@@ -2353,23 +1975,15 @@ func consoleServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 	}
 }
 
-func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgName string, serviceName string, cloneVersion int64) (cdntypes.ServiceVersionCloneData, error) {
-	orgIdent, err := newOrgIdentifier(ctx, tx, orgName)
-	if err != nil {
+// getServiceVersionCloneData returns the config of version cloneVersion of
+// serviceID, which must belong to orgID.
+func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgID pgtype.UUID, serviceID pgtype.UUID, cloneVersion int64) (cdntypes.ServiceVersionCloneData, error) {
+	// The ids were resolved in an earlier transaction, so the service may
+	// have moved to another org since. Resolving it again here checks that
+	// it still belongs to orgID and that the caller may still see it, and
+	// the share lock keeps it from moving while its config is read.
+	if _, err := resolveService(ctx, tx, ad, serviceID.String(), orgID.String(), lockShare); err != nil {
 		return cdntypes.ServiceVersionCloneData{}, err
-	}
-
-	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-		return cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
-	}
-
-	serviceIdent, err := newServiceIdentifier(ctx, tx, serviceName, orgIdent.id)
-	if err != nil {
-		return cdntypes.ServiceVersionCloneData{}, err
-	}
-
-	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
-		return cdntypes.ServiceVersionCloneData{}, cdnerrors.ErrForbidden
 	}
 
 	rows, err := tx.Query(
@@ -2398,7 +2012,7 @@ func getServiceVersionCloneData(ctx context.Context, tx pgx.Tx, ad cdntypes.Auth
 			JOIN service_versions ON services.id = service_versions.service_id
 			JOIN service_vcls ON service_versions.id = service_vcls.service_version_id
 		WHERE services.id=$1 AND service_versions.version=$2`,
-		serviceIdent.id,
+		serviceID,
 		cloneVersion,
 	)
 	if err != nil {
@@ -2480,44 +2094,15 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			return
 		}
 
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceName)
 		if err != nil {
-			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				err := renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if err != nil {
-					logger.Err(err).Msg("unable to render create service version error page")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, "unable to render create service version error page")
 			return
 		}
 
-		domains, err := selectDomains(ctx, dbc, ad, orgName)
+		domains, err := selectDomains(ctx, dbc, ad, orgIdent.id.String())
 		if err != nil {
 			logger.Error().Msg("console: unable to lookup domains for service version creation")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
-		if err != nil {
-			logger.Err(err).Msg("consoleCreateServiceVersionHandler: looking up serviceName failed")
-			// A create-version link that no longer resolves is the expected
-			// outcome of following a stale one: the service it named is gone.
-			// That deserves a page rather than a bare 500. selectDomains
-			// above has already refused callers outside this org, so naming
-			// the miss here reveals nothing.
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -2540,12 +2125,16 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 					// handler already pinned the service above, and
 					// re-resolving the name here could pick a different
 					// service that has since taken the name.
-					cloneData, err = getServiceVersionCloneData(ctx, tx, ad, orgIdent.name, serviceIdent.id.String(), cloneVersion)
+					cloneData, err = getServiceVersionCloneData(ctx, tx, ad, orgIdent.id, serviceIdent.id, cloneVersion)
 					if err != nil {
 						return err
 					}
 					return nil
 				})
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, "unable to render create service version error page")
+					return
+				}
 				if err != nil {
 					logger.Err(err).Msg("db request to fill in service version clone data failed")
 					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2607,7 +2196,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			// page the user filled in are two independent name lookups that
 			// can disagree, and the version lands on a service the user
 			// never saw.
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgIdent.name, serviceIdent.id.String(), formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
+			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgIdent.id.String(), serviceIdent.id.String(), formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation):
@@ -2658,41 +2247,6 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		// Checked before any lookup, the way the disable and delete handlers
-		// do it, so a non-member learns nothing about what exists in another
-		// org.
-		if !ad.Superuser && !isOrgMember(ad, orgName) {
-			logger.Error().Msg("consoleActivateServiceVersionHandler: user is not superuser and not a member of the matching org")
-			// The org name comes from the caller's own auth data, never the
-			// URL, so this branch cannot reveal whether the named org or
-			// service exists.
-			userOrg := ""
-			if ad.OrgName != nil {
-				userOrg = *ad.OrgName
-			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, userOrg, components.ConsoleErrorContent(consoleNotAllowedActivateSV))
-			if renderErr != nil {
-				logger.Err(renderErr).Msg("unable to render consoleActivateServiceVersionHandler forbidden page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-			return
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
-		if err != nil {
-			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up orgName failed")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
 			logger.Error().Msg(consoleMissingServicePath)
@@ -2700,20 +2254,11 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
+		// The activate link carries the service UUID, so a miss here is
+		// also the expected outcome of following a stale one.
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceName)
 		if err != nil {
-			logger.Err(err).Msg("consoleActivateServiceVersionHandler: db request for looking up serviceName failed")
-			// The activate link carries the service UUID, so a miss here is
-			// the expected outcome of following a stale one.
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, consoleServicesServiceRenderErr)
 			return
 		}
 
@@ -2775,7 +2320,7 @@ func consoleActivateServiceVersionHandler(dbc *dbConn) http.HandlerFunc {
 				// Activate by the resolved UUID rather than re-resolving the
 				// name, so this and the confirmation page the user just saw
 				// cannot end up describing different services.
-				err := activateServiceVersion(ctx, logger, ad, dbc, orgIdent.name, serviceIdent.id.String(), version)
+				err := activateServiceVersion(ctx, ad, dbc, orgIdent.id.String(), serviceIdent.id.String(), version)
 				if err != nil {
 					logger.Err(err).Msg("service version activation failed")
 					err = renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.ActivateServiceVersionContent(orgIdent.name, serviceIdent.name, serviceIdent.id, version, err), serviceIdent.name)
@@ -2816,37 +2361,6 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		if !ad.Superuser && !isOrgMember(ad, orgName) {
-			logger.Error().Msg("consoleServiceDisableHandler: user is not superuser and not a member of the matching org")
-			// The org name comes from the callers own auth data, never the
-			// URL, so nothing about the named org or service is revealed.
-			userOrg := ""
-			if ad.OrgName != nil {
-				userOrg = *ad.OrgName
-			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Disable service", userOrg, components.ConsoleErrorContent(consoleNotAllowedDisableService))
-			if renderErr != nil {
-				logger.Err(renderErr).Msg("unable to render consoleServiceDisableHandler forbidden page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-			return
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
-		if err != nil {
-			logger.Err(err).Msg("consoleServiceDisableHandler: unable to look up orgName")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		serviceName := chi.URLParam(r, "service")
 		if serviceName == "" {
 			logger.Error().Msg(consoleMissingServicePath)
@@ -2854,18 +2368,9 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		serviceIdent, err := validateServiceName(ctx, logger, dbc.dbPool, orgIdent, serviceName)
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceName)
 		if err != nil {
-			logger.Err(err).Msg("consoleServiceDisableHandler: unable to look up serviceName")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Disable service", consoleServiceNotFound, err, consoleServicesServiceRenderErr)
 			return
 		}
 
@@ -2873,7 +2378,7 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 
 		var ipAddresses []netip.Addr
 		err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.name, ad)
+			orgServiceIPAddrs, sErr := selectServiceIPsForOrgTx(ctx, tx, orgIdent.id)
 			if sErr != nil {
 				return sErr
 			}
@@ -2924,7 +2429,7 @@ func consoleServiceDisableHandler(dbc *dbConn) http.HandlerFunc {
 			}
 
 			// Disable by the resolved id, not the name,
-			err = setServiceDisabled(ctx, ad, dbc, orgIdent.name, serviceIdent.id.String(), true)
+			err = setServiceDisabled(ctx, ad, dbc, orgIdent.id.String(), serviceIdent.id.String(), true)
 			if err != nil {
 				logger.Err(err).Msg("service disable failed")
 				renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, orgIdent.name, components.DisableServiceContent(orgIdent.name, serviceIdent.name, serviceIdent.id.String(), ipAddresses, err), serviceIdent.name)
@@ -2961,37 +2466,6 @@ func consoleServiceEnableHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		if !ad.Superuser && !isOrgMember(ad, orgName) {
-			logger.Error().Msg("consoleServiceEnableHandler: user is not superuser and not a member of the matching org")
-			// The org name comes from the callers own auth data, never the
-			// URL, so nothing about the named org or service is revealed.
-			userOrg := ""
-			if ad.OrgName != nil {
-				userOrg = *ad.OrgName
-			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Enable service", userOrg, components.ConsoleErrorContent(consoleNotAllowedEnableService))
-			if renderErr != nil {
-				logger.Err(renderErr).Msg("unable to render consoleServiceEnableHandler forbidden page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-			return
-		}
-
-		orgIdent, err := validateOrgName(ctx, logger, dbc.dbPool, orgName)
-		if err != nil {
-			logger.Err(err).Msg("consoleServiceEnableHandler: unable to look up orgName")
-			if errors.Is(err, pgx.ErrNoRows) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgName, components.ConsoleErrorContent(consoleOrgNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesOrgRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
-				return
-			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
 		// The services page emits the service's UUID here so we are
 		// not mistakenly targeting a name that has been reused for a
 		// replacement service.
@@ -3002,17 +2476,19 @@ func consoleServiceEnableHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		err = setServiceDisabled(ctx, ad, dbc, orgIdent.name, serviceNameOrID, false)
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceNameOrID)
 		if err != nil {
-			logger.Err(err).Msg("service enable failed")
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Enable service", consoleServiceNotFound, err, consoleServicesServiceRenderErr)
+			return
+		}
+
+		err = setServiceDisabled(ctx, ad, dbc, orgIdent.id.String(), serviceIdent.id.String(), false)
+		if err != nil {
 			if errors.Is(err, cdnerrors.ErrNotFound) {
-				renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Services", orgIdent.name, components.ConsoleErrorContent(consoleServiceNotFound))
-				if renderErr != nil {
-					logger.Err(renderErr).Msg(consoleServicesServiceRenderErr)
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				}
+				renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Enable service", consoleServiceNotFound, err, consoleServicesServiceRenderErr)
 				return
 			}
+			logger.Err(err).Msg("service enable failed")
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -4556,45 +4032,19 @@ func setCacheNodeMaintenance(ctx context.Context, ad cdntypes.AuthData, dbc *dbC
 // service from the cache-node and l4lb-node config endpoints, which makes the
 // agent tear down its containers, on-disk state and BGP announcements.
 func setServiceDisabled(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, disabled bool) error {
-	if !ad.Superuser && ad.OrgID == nil {
-		return cdnerrors.ErrNotFound
-	}
-
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		var orgID pgtype.UUID
-		if orgNameOrID != "" {
-			if !ad.Superuser && !isOrgMember(ad, orgNameOrID) {
-				return cdnerrors.ErrNotFound
-			}
-			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
-			if err != nil {
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnprocessable
-				}
-				return fmt.Errorf("setServiceDisabled: unable to look up org identifier: %w", err)
-			}
-			orgID = orgIdent.id
-		}
-
-		// ForUpdate because this transaction goes on to UPDATE the services
-		// row resolving with a shared lock first would make two concurrent
-		// disable/enable requests for the same service deadlock on the
-		// lock upgrade.
-		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgID)
+		// lockUpdate because this transaction goes on to UPDATE the
+		// services row; resolving with a shared lock first would make two
+		// concurrent disable/enable requests for the same service deadlock
+		// on the lock upgrade. A service outside the caller's scope is
+		// indistinguishable from one that does not exist, and the scoped
+		// query means a non-member never locks another org's row.
+		serviceIdent, err := resolveService(dbCtx, tx, ad, serviceNameOrID, orgNameOrID, lockUpdate)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("setServiceDisabled: unable to look up service identifier: %w", err)
-		}
-
-		// A normal user can only modify a service belonging to the org
-		// they are a member of.
-		if !ad.Superuser && *ad.OrgID != serviceIdent.orgID {
-			return cdnerrors.ErrNotFound
+			return err
 		}
 
 		if disabled {
@@ -5271,8 +4721,7 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		var err error
-		var orgIdent orgIdentifier
-		var lookupOrg pgtype.UUID
+		var orgFilter pgtype.UUID
 
 		// Must be either superuser or member of an org
 		if !ad.Superuser && ad.OrgID == nil {
@@ -5280,34 +4729,25 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 		}
 
 		if orgNameOrID != "" {
-			orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
+			// An org outside the caller's scope is indistinguishable
+			// from one that does not exist.
+			orgIdent, err := resolveOrg(ctx, tx, ad, orgNameOrID, lockShare)
 			if err != nil {
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnableToParseNameOrID
-				}
-				return fmt.Errorf("selectDomains: unable to look up org identifier: %w", err)
+				return err
 			}
 
-			lookupOrg = orgIdent.id
-		}
-
-		// If not superuser and a specific org is requested the user is
-		// only allowed to request it if they are member of the same org
-		if !ad.Superuser && lookupOrg.Valid {
-			if lookupOrg != *ad.OrgID {
-				return cdnerrors.ErrForbidden
-			}
+			orgFilter = orgIdent.id
 		}
 
 		// If not superuser and a specific org was not requested, set
 		// it to the org of the user.
-		if !ad.Superuser && !lookupOrg.Valid {
-			lookupOrg = *ad.OrgID
+		if !ad.Superuser && !orgFilter.Valid {
+			orgFilter = *ad.OrgID
 		}
 
 		var rows pgx.Rows
-		if lookupOrg.Valid {
-			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY fqdn", lookupOrg)
+		if orgFilter.Valid {
+			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token FROM domains WHERE org_id=$1 ORDER BY fqdn", orgFilter)
 			if err != nil {
 				return fmt.Errorf("unable to query for domains for specific org: %w", err)
 			}
@@ -5333,8 +4773,10 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 }
 
 func deleteDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, domainFQDNOrID string) (pgtype.UUID, error) {
+	// A non-superuser without an org is told so (403) like on the
+	// domain listing; this reveals nothing about any particular domain.
 	if !ad.Superuser && ad.OrgID == nil {
-		return pgtype.UUID{}, cdnerrors.ErrNotFound
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
@@ -5420,29 +4862,14 @@ func selectServiceIPs(ctx context.Context, dbc *dbConn, serviceNameOrID string, 
 }
 
 func selectServiceIPsTx(ctx context.Context, tx pgx.Tx, serviceNameOrID string, orgNameOrID string, ad cdntypes.AuthData) (serviceAddresses, error) {
-	sAddrs := serviceAddresses{}
-	var orgID pgtype.UUID
-	if orgNameOrID != "" {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
-		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return serviceAddresses{}, cdnerrors.ErrUnableToParseNameOrID
-			}
-			return serviceAddresses{}, fmt.Errorf("selectServiceIPsTx: unable to look up org identifier: %w", err)
-		}
-		orgID = orgIdent.id
-	}
-
-	serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
+	// An unknown service and one outside the caller's scope both give
+	// ErrNotFound.
+	serviceIdent, err := resolveService(ctx, tx, ad, serviceNameOrID, orgNameOrID, lockShare)
 	if err != nil {
 		return serviceAddresses{}, err
 	}
 
-	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
-		return serviceAddresses{}, cdnerrors.ErrNotFound
-	}
-
-	sAddrs = serviceAddresses{
+	sAddrs := serviceAddresses{
 		ServiceID:          serviceIdent.id,
 		AllocatedAddresses: []serviceAddress{},
 	}
@@ -5462,19 +4889,12 @@ func selectServiceIPsTx(ctx context.Context, tx pgx.Tx, serviceNameOrID string, 
 	return sAddrs, nil
 }
 
-func selectServiceIPsForOrgTx(ctx context.Context, tx pgx.Tx, orgNameOrID string, ad cdntypes.AuthData) (map[pgtype.UUID][]serviceAddress, error) {
+// selectServiceIPsForOrgTx returns the service IP addresses of every service in
+// orgID, keyed by service id. orgID must come from a scoped resolver
+// (resolveOrg, resolveConsoleOrg, or the org returned by resolveService or
+// resolveConsoleService); access is not checked again here.
+func selectServiceIPsForOrgTx(ctx context.Context, tx pgx.Tx, orgID pgtype.UUID) (map[pgtype.UUID][]serviceAddress, error) {
 	orgServiceAddrs := map[pgtype.UUID][]serviceAddress{}
-	orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
-	if err != nil {
-		if errors.Is(err, errBadIdentifier) {
-			return nil, cdnerrors.ErrUnableToParseNameOrID
-		}
-		return nil, fmt.Errorf("selectServiceIPsForOrgTx: unable to look up org identifier: %w", err)
-	}
-
-	if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-		return nil, cdnerrors.ErrForbidden
-	}
 
 	rows, err := tx.Query(
 		ctx,
@@ -5486,7 +4906,7 @@ func selectServiceIPsForOrgTx(ctx context.Context, tx pgx.Tx, orgNameOrID string
 		JOIN services ON service_ip_addresses.service_id = services.id
 		WHERE services.org_id=$1
 		ORDER BY service_ip_addresses.address`,
-		orgIdent.id,
+		orgID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to SELECT all IP addresses by Org ID: %w", err)
@@ -5509,16 +4929,9 @@ func selectOrg(ctx context.Context, dbc *dbConn, orgNameOrID string, ad cdntypes
 	o := cdntypes.Org{}
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+		orgIdent, err := resolveOrg(ctx, tx, ad, orgNameOrID, lockShare)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-			return fmt.Errorf("selectOrg: unable to look up org identifier: %w", err)
-		}
-
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-			return cdnerrors.ErrNotFound
+			return err
 		}
 
 		err = tx.QueryRow(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs WHERE id = $1",
@@ -5543,16 +4956,9 @@ func selectSafeOrgClientCredentials(ctx context.Context, dbc *dbConn, orgNameOrI
 	safeOrgClientCredentials := []cdntypes.OrgClientCredentialSafe{}
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+		orgIdent, err := resolveOrg(ctx, tx, ad, orgNameOrID, lockShare)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-			return fmt.Errorf("selectSafeOrgClientCredentials: unable to look up org identifier: %w", err)
-		}
-
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != orgIdent.id) {
-			return cdnerrors.ErrNotFound
+			return err
 		}
 
 		rows, err := tx.Query(
@@ -5843,18 +5249,9 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifierForUpdate(dbCtx, tx, orgNameOrID)
+		orgIdent, err := resolveOrg(dbCtx, tx, ad, orgNameOrID, lockUpdate)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("insertOrgClientCredential: unable to look up org identifier: %w", err)
-		}
-
-		// A normal user must supply an org id for an org they are
-		// a member of
-		if !ad.Superuser && *ad.OrgID != orgIdent.id {
-			return cdnerrors.ErrForbidden
+			return err
 		}
 
 		orgID = orgIdent.id
@@ -5973,7 +5370,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 
 func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, clientCredAEADs []cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
 	if !ad.Superuser && ad.OrgID == nil {
-		return pgtype.UUID{}, cdnerrors.ErrNotFound
+		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
 	if len(clientCredAEADs) == 0 {
@@ -5988,13 +5385,10 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		var orgID pgtype.UUID
 		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+			orgIdent, err := resolveOrg(dbCtx, tx, ad, orgNameOrID, lockShare)
 			if err != nil {
 				logger.Err(err).Msg("unable to look up org identifier")
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnprocessable
-				}
-				return fmt.Errorf("deleteOrgClientCredential: unable to look up org identifier: %w", err)
+				return err
 			}
 			orgID = orgIdent.id
 		}
@@ -6463,8 +5857,7 @@ func selectServices(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgN
 
 func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
 	var err error
-	var orgIdent orgIdentifier
-	var lookupOrg pgtype.UUID
+	var orgFilter pgtype.UUID
 
 	// Must be either superuser or member of an org
 	if !ad.Superuser && ad.OrgID == nil {
@@ -6472,34 +5865,25 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 	}
 
 	if orgNameOrID != "" {
-		orgIdent, err = newOrgIdentifier(ctx, tx, orgNameOrID)
+		// An org outside the caller's scope is indistinguishable
+		// from one that does not exist.
+		orgIdent, err := resolveOrg(ctx, tx, ad, orgNameOrID, lockShare)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return []cdntypes.Service{}, cdnerrors.ErrUnableToParseNameOrID
-			}
-			return []cdntypes.Service{}, fmt.Errorf("selectServicesTx: unable to look up org identifier: %w", err)
+			return []cdntypes.Service{}, err
 		}
 
-		lookupOrg = orgIdent.id
-	}
-
-	// If not superuser and a specific org is requested the user is
-	// only allowed to request it if they are member of the same org
-	if !ad.Superuser && lookupOrg.Valid {
-		if lookupOrg != *ad.OrgID {
-			return []cdntypes.Service{}, cdnerrors.ErrForbidden
-		}
+		orgFilter = orgIdent.id
 	}
 
 	// If not superuser and a specific org was not requested, set
 	// it to the org of the user.
-	if !ad.Superuser && !lookupOrg.Valid {
-		lookupOrg = *ad.OrgID
+	if !ad.Superuser && !orgFilter.Valid {
+		orgFilter = *ad.OrgID
 	}
 
 	var rows pgx.Rows
-	if lookupOrg.Valid {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", lookupOrg)
+	if orgFilter.Valid {
+		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", orgFilter)
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
 		}
@@ -6522,34 +5906,13 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 	s := cdntypes.Service{}
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		var serviceIdent serviceIdentifier
-		var err error
-
-		var orgID pgtype.UUID
-		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
-			if err != nil {
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnableToParseNameOrID
-				}
-				return fmt.Errorf("selectService: unable to look up org identifier: %w", err)
-			}
-			orgID = orgIdent.id
-		}
-
 		// Looking up a service by ID works without supplying an org,
-		// for looking up service by name an org must be included
-		serviceIdent, err = newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
+		// for looking up service by name an org must be included. A
+		// service outside the caller's scope is indistinguishable from
+		// one that does not exist.
+		serviceIdent, err := resolveService(ctx, tx, ad, serviceNameOrID, orgNameOrID, lockShare)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnableToParseNameOrID
-			}
-			return fmt.Errorf("selectService: unable to look up service identifier: %w", err)
-		}
-
-		// Normal users are only allowed to see services belonging to the same org as they are
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
-			return cdnerrors.ErrNotFound
+			return err
 		}
 
 		s.Name = serviceIdent.name
@@ -6732,13 +6095,6 @@ func newOrgIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, lock
 
 func newServiceIdentifier(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
 	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, lockShare)
-}
-
-// newServiceIdentifierForUpdate resolves a service the way
-// newServiceIdentifier does but takes an exclusive row lock, for callers that
-// will write to or delete the services row in the same transaction.
-func newServiceIdentifierForUpdate(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID) (serviceIdentifier, error) {
-	return newServiceIdentifierWithLock(ctx, tx, input, inputOrgID, lockUpdate)
 }
 
 func newServiceIdentifierWithLock(ctx context.Context, tx pgx.Tx, input string, inputOrgID pgtype.UUID, lock rowLock) (serviceIdentifier, error) {
@@ -7253,7 +6609,8 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 		return cdntypes.Domain{}, cdnerrors.ErrForbidden
 	}
 
-	if orgNameOrID == nil {
+	// A missing org is a missing parameter (422), not a malformed identifier.
+	if orgNameOrID == nil || *orgNameOrID == "" {
 		return cdntypes.Domain{}, cdnerrors.ErrUnprocessable
 	}
 
@@ -7266,18 +6623,12 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	defer cancel()
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
+		orgIdent, err = resolveOrg(dbCtx, tx, ad, *orgNameOrID, lockUpdate)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("insertDomain: unable to look up org identifier: %w", err)
-		}
-
-		// A normal user must supply an org id for an org they are
-		// a member of
-		if !ad.Superuser && *ad.OrgID != orgIdent.id {
-			return cdnerrors.ErrForbidden
+			// The org comes from the ?org= query parameter, which is
+			// treated like a path lookup: unknown and out-of-scope orgs
+			// both give the same ErrNotFound (404).
+			return err
 		}
 
 		var domainQuota int64
@@ -7318,6 +6669,10 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	if err != nil {
 		logger.Err(err).Msg("insertDomain transaction failed")
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+			// Answering 409 for an FQDN another org already holds
+			// reveals that it is taken. That is kept since the DNS
+			// validation record already makes domain ownership
+			// discoverable.
 			if pgErr.Code == pgUniqueViolation {
 				return cdntypes.Domain{}, cdnerrors.ErrAlreadyExists
 			}
@@ -7374,18 +6729,15 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	defer cancel()
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err = newOrgIdentifierForUpdate(dbCtx, tx, *orgNameOrID)
+		orgIdent, err = resolveOrg(dbCtx, tx, ad, *orgNameOrID, lockUpdate)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
+			// The org is named by the caller in the request rather
+			// than addressed by the URL, so an org the caller may
+			// not see is reported as a bad reference.
+			if errors.Is(err, cdnerrors.ErrNotFound) {
+				return cdnerrors.ErrReferencedOrgNotFound
 			}
-			return fmt.Errorf("insertService: unable to look up org identifier: %w", err)
-		}
-
-		// A normal user must supply an org id for an org they are
-		// a member of
-		if !ad.Superuser && *ad.OrgID != orgIdent.id {
-			return cdnerrors.ErrForbidden
+			return err
 		}
 
 		var serviceQuota int64
@@ -7489,27 +6841,11 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 
 	var serviceID pgtype.UUID
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		var orgID pgtype.UUID
-		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
-			if err != nil {
-				logger.Err(err).Msg("unable to look up org identifier")
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnprocessable
-				}
-				return fmt.Errorf("deleteService: unable to look up org identifier: %w", err)
-			}
-			orgID = orgIdent.id
-		}
-
-		// ForUpdate because this transaction goes on to DELETE the services
+		// lockUpdate because this transaction goes on to DELETE the services
 		// row.
-		serviceIdent, err := newServiceIdentifierForUpdate(dbCtx, tx, serviceNameOrID, orgID)
+		serviceIdent, err := resolveService(dbCtx, tx, ad, serviceNameOrID, orgNameOrID, lockUpdate)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return cdnerrors.ErrNotFound
-			}
-			return fmt.Errorf("deleteService: unable to look up service identifier: %w", err)
+			return err
 		}
 
 		// Lock the row so the disabled check cannot race an enable.
@@ -7538,10 +6874,9 @@ func deleteService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, org
 		logger.Err(err).Msg("deleteService transaction failed")
 		switch {
 		case errors.Is(err, cdnerrors.ErrNotFound),
-			errors.Is(err, cdnerrors.ErrUnprocessable),
+			errors.Is(err, cdnerrors.ErrUnableToParseNameOrID),
 			errors.Is(err, cdnerrors.ErrServiceNotDisabled),
-			errors.Is(err, cdnerrors.ErrConfirmNameMismatch),
-			errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
+			errors.Is(err, cdnerrors.ErrConfirmNameMismatch):
 			return pgtype.UUID{}, err
 		}
 		return pgtype.UUID{}, fmt.Errorf("deleteService transaction failed: %w", err)
@@ -8013,29 +7348,13 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 	var resolvedService serviceIdentifier
 	serviceVersions := []cdntypes.ServiceVersion{}
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		var serviceIdent serviceIdentifier
-
-		var orgID pgtype.UUID
-		if orgNameOrID != "" {
-			orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
-			if err != nil {
-				if errors.Is(err, errBadIdentifier) {
-					return cdnerrors.ErrUnableToParseNameOrID
-				}
-				return fmt.Errorf("selectServiceVersions: unable to look up org identifier: %w", err)
-			}
-			orgID = orgIdent.id
-		}
-
 		// Looking up a service by ID works without supplying an org,
-		// for looking up service by name an org must be included
-		serviceIdent, err = newServiceIdentifier(ctx, tx, serviceNameOrID, orgID)
+		// for looking up service by name an org must be included. A
+		// service outside the caller's scope is indistinguishable from one
+		// that does not exist.
+		serviceIdent, err := resolveService(ctx, tx, ad, serviceNameOrID, orgNameOrID, lockShare)
 		if err != nil {
-			return fmt.Errorf("looking up service identifier failed: %w", err)
-		}
-
-		if !ad.Superuser && (ad.OrgID == nil || *ad.OrgID != serviceIdent.orgID) {
-			return cdnerrors.ErrForbidden
+			return err
 		}
 
 		resolvedService = serviceIdent
@@ -8045,6 +7364,10 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 			"SELECT service_versions.id, service_versions.version, service_versions.active, service_versions.description, orgs.name FROM service_versions JOIN services ON service_versions.service_id = services.id JOIN orgs ON services.org_id = orgs.id WHERE service_id = $1 ORDER BY service_versions.version",
 			serviceIdent.id,
 		)
+		if err != nil {
+			return fmt.Errorf("unable to query for service versions: %w", err)
+		}
+
 		var id pgtype.UUID
 		var orgName string
 		var version int64
@@ -8353,38 +7676,16 @@ func ephemeralOriginGroupConfig(conditionalGroups []cdntypes.InputConditionalOri
 }
 
 func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string, serviceNameOrID string, version int64) (cdntypes.ServiceVersionConfig, error) {
-	// If neither a superuser or a normal user belonging to an org there
-	// is nothing further that is allowed
-	if !ad.Superuser {
-		if ad.OrgID == nil {
-			return cdntypes.ServiceVersionConfig{}, cdnerrors.ErrForbidden
-		}
-	}
-
 	var svc cdntypes.ServiceVersionConfig
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(ctx, tx, orgNameOrID)
+		serviceIdent, err := resolveService(ctx, tx, ad, serviceNameOrID, orgNameOrID, lockShare)
 		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("getServiceVersionConfig: unable to look up org identifier: %w", err)
+			return err
 		}
 
-		serviceIdent, err := newServiceIdentifier(ctx, tx, serviceNameOrID, orgIdent.id)
-		if err != nil {
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("getServiceVersionConfig: unable to look up service identifier: %w", err)
-		}
-
-		if !ad.Superuser {
-			if *ad.OrgID != serviceIdent.orgID {
-				return cdnerrors.ErrForbidden
-			}
-		}
-
+		// The version is looked up only after the service has been
+		// resolved within the caller's scope, so a missing version never
+		// tells the caller anything about services they cannot see.
 		// Usage of JOIN with subqueries based on
 		// https://stackoverflow.com/questions/27622398/multiple-array-agg-calls-in-a-single-query
 		rows, err := tx.Query(
@@ -8435,6 +7736,9 @@ func getServiceVersionConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthD
 
 		svc, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.ServiceVersionConfig])
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return cdnerrors.ErrNotFound
+			}
 			return fmt.Errorf("unable to collect service version config into struct: %w", err)
 		}
 
@@ -8625,14 +7929,6 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 }
 
 func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTemplates configTemplates, ad cdntypes.AuthData, dbc *dbConn, vclValidator *vclValidatorClient, orgNameOrID string, serviceNameOrID string, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string, description string) (serviceVersionInsertResult, error) {
-	// If neither a superuser or a normal user belonging to an org there
-	// is nothing further that is allowed
-	if !ad.Superuser {
-		if ad.OrgID == nil {
-			return serviceVersionInsertResult{}, cdnerrors.ErrForbidden
-		}
-	}
-
 	// Normalize before validation so the validated template and conditions
 	// are the ones that get stored. The conditional groups are copied so
 	// the caller's slice is not modified.
@@ -8649,9 +7945,10 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 	// vclValidatorTimeout), so a burst of submissions could exhaust the pool
 	// for every other request. Validation only reads the submitted input and
 	// confTemplates, so nothing looked up here needs to survive into it.
-	// The lookup transaction exists so that authorization still comes before
-	// any validator work, keeping the 403 and 422 responses a caller gets for
-	// a service it cannot use ahead of VCL errors.
+	// The lookup transaction exists so that the scoped lookups still come
+	// before any validator work: an unknown or out-of-scope service in the path
+	// (404), an unknown or out-of-scope org in the body (422) and a caller with
+	// no org (403) are all answered ahead of VCL errors.
 	var orgIdent orgIdentifier
 	var serviceIdent serviceIdentifier
 
@@ -8660,30 +7957,24 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 
 	err := pgx.BeginFunc(lookupCtx, dbc.dbPool, func(tx pgx.Tx) error {
 		var err error
-		orgIdent, err = newOrgIdentifier(lookupCtx, tx, orgNameOrID)
+		orgIdent, err = resolveOrg(lookupCtx, tx, ad, orgNameOrID, lockShare)
 		if err != nil {
-			logger.Err(err).Msg("looking up org failed")
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
+			// The org is named by the caller in the request body rather
+			// than addressed by the URL, so an org the caller may not
+			// see is reported as a bad reference.
+			if errors.Is(err, cdnerrors.ErrNotFound) {
+				return cdnerrors.ErrReferencedOrgNotFound
 			}
-			return fmt.Errorf("insertServiceVersion: unable to look up org identifier: %w", err)
+			return err
 		}
 
-		serviceIdent, err = newServiceIdentifier(lookupCtx, tx, serviceNameOrID, orgIdent.id)
+		// The service is addressed by the URL, so one the caller may not
+		// see is simply not found. The org was resolved above, so the
+		// service is looked up in it by the ID rather than the name the
+		// caller used.
+		serviceIdent, err = resolveService(lookupCtx, tx, ad, serviceNameOrID, orgIdent.id.String(), lockShare)
 		if err != nil {
-			logger.Err(err).Msg("looking up service failed")
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("insertServiceVersion: unable to look up service identifier: %w", err)
-		}
-
-		// If the user is not a superuser they must belong to the same
-		// org as the service they are trying to add a version to
-		if !ad.Superuser {
-			if *ad.OrgID != serviceIdent.orgID {
-				return cdnerrors.ErrForbidden
-			}
+			return err
 		}
 
 		return nil
@@ -8719,8 +8010,8 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		// validated. Resolving it again by the UUIDs pinned in the lookup
 		// transaction, rather than by orgNameOrID and serviceNameOrID,
 		// means a rename cannot point this insert at a different service.
-		// The org_id constraint also re-confirms the authorization decision
-		// made above, which compared the caller's org with this same org.
+		// The lookup is scoped to the caller like the one above, so a
+		// service that moved out of the caller's reach meanwhile is not found.
 		// Domains need no re-check here: insertServiceVersionTx only accepts
 		// domains that are verified in this transaction.
 		//
@@ -8728,13 +8019,10 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 		// services.version_counter. Concurrent version creations for the same
 		// service validate in parallel and serialize only here. With a shared
 		// lock they would deadlock on the upgrade instead (see lockUpdate).
-		lockedService, err := newServiceIdentifierForUpdate(writeCtx, tx, serviceIdent.id.String(), orgIdent.id)
+		lockedService, err := resolveService(writeCtx, tx, ad, serviceIdent.id.String(), orgIdent.id.String(), lockUpdate)
 		if err != nil {
 			logger.Err(err).Msg("service changed during VCL validation")
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("insertServiceVersion: unable to lock service identifier: %w", err)
+			return err
 		}
 
 		serviceVersionResult, err = insertServiceVersionTx(writeCtx, tx, orgIdent, lockedService, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
@@ -8779,45 +8067,26 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 	return serviceVersionResult, nil
 }
 
-func activateServiceVersion(ctx context.Context, logger *zerolog.Logger, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, version int64) error {
-	// If neither a superuser or a normal user belonging to an org there
-	// is nothing further that is allowed
-	if !ad.Superuser {
-		if ad.OrgID == nil {
-			return cdnerrors.ErrForbidden
-		}
-	}
-
+func activateServiceVersion(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, version int64) error {
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		orgIdent, err := newOrgIdentifier(dbCtx, tx, orgNameOrID)
+		// Only service_versions rows are written below, so FOR SHARE
+		// would avoid the lock-upgrade deadlock described at rowLock.
+		// lockUpdate is used anyway to serialize activations of the
+		// same service: with a shared lock two concurrent activations
+		// can both find no active version, and the second then fails
+		// on service_versions_active_only_1_true instead of
+		// deactivating the first. A service outside the caller's scope
+		// is indistinguishable from one that does not exist.
+		serviceIdent, err := resolveService(dbCtx, tx, ad, serviceNameOrID, orgNameOrID, lockUpdate)
 		if err != nil {
-			logger.Err(err).Msg("unable to validate org id")
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("activateServiceVersion: unable to look up org identifier: %w", err)
+			return err
 		}
 
-		serviceIdent, err := newServiceIdentifier(dbCtx, tx, serviceNameOrID, orgIdent.id)
-		if err != nil {
-			logger.Err(err).Msg("unable to validate org id")
-			if errors.Is(err, errBadIdentifier) {
-				return cdnerrors.ErrUnprocessable
-			}
-			return fmt.Errorf("activateServiceVersion: unable to look up service identifier: %w", err)
-		}
-
-		// If the user is not a superuser they must belong to the same
-		// org as the service they are trying activate a version for
-		if !ad.Superuser {
-			if *ad.OrgID != serviceIdent.orgID {
-				return cdnerrors.ErrForbidden
-			}
-		}
-
+		// Only reachable for a service the caller may see, so a missing
+		// version (pgx.ErrNoRows below) reveals nothing about other orgs.
 		_, err = activateServiceVersionTx(dbCtx, tx, serviceIdent, version)
 		if err != nil {
 			return fmt.Errorf("unable to activate service version with version: %w", err)
@@ -10124,9 +9393,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			org, err := selectOrg(ctx, dbc, input.Org, ad)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, cdnerrors.ErrNotFound) {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound(orgNotFound)
 				}
 				logger.Err(err).Msg("unable to query organization")
@@ -10149,7 +9416,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			safeOrgClientCredentials, err := selectSafeOrgClientCredentials(ctx, dbc, input.Org, ad)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("organization client credentials not found")
+					return nil, huma.Error404NotFound(orgClientCredentialsNotFound)
 				}
 				logger.Err(err).Msg("unable to query organization client credentials")
 				return nil, apiError(err)
@@ -10188,12 +9455,10 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				newOrgClientCred, err := insertOrgClientCredential(ctx, logger, dbc, input.Body.Name, input.Body.Description, input.Org, ad, kcClientManager, encryptionClientCredAEAD)
 				if err != nil {
 					switch {
-					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.Is(err, cdnerrors.ErrNotFound):
+						return nil, huma.Error404NotFound(orgClientCredentialsNotFound)
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("client credential already exists")
-					case errors.Is(err, cdnerrors.ErrUnprocessable):
-						return nil, huma.Error422UnprocessableEntity("missing required params")
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error422UnprocessableEntity("invalid client credential data")
 					}
@@ -10275,7 +9540,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				logger.Err(err).Msg("unable to delete client-credential")
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					return nil, huma.Error404NotFound("client-credential not found")
+					return nil, huma.Error404NotFound(orgClientCredentialsNotFound)
 				default:
 					return nil, apiError(err)
 				}
@@ -10297,10 +9562,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			domains, err := selectDomains(ctx, dbc, ad, input.Org)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, cdnerrors.ErrNotFound) {
-					return nil, huma.Error404NotFound("domain not found")
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound(orgNotFound)
 				}
 				logger.Err(err).Msg("unable to query organization")
 				return nil, apiError(err)
@@ -10368,8 +9631,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				domain, err := insertDomain(ctx, logger, dbc, input.Body.FQDN, &input.Org, ad)
 				if err != nil {
 					switch {
-					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden(notAllowedToAddResource)
+					case errors.Is(err, cdnerrors.ErrNotFound):
+						return nil, huma.Error404NotFound(orgNotFound)
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("domain already exists")
 					case errors.Is(err, cdnerrors.ErrUnprocessable):
@@ -10398,9 +9661,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			oAddrs, err := selectServiceIPs(ctx, dbc, input.Service, input.Org, ad)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden(api403String)
-				} else if errors.Is(err, cdnerrors.ErrNotFound) {
+				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound("service IPs not found")
 				}
 				logger.Err(err).Msg("unable to query organization ips")
@@ -10535,8 +9796,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			services, err := selectServices(ctx, dbc, ad, input.Org)
 			if err != nil {
-				if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden("not allowed to query for services")
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound(orgNotFound)
 				}
 				logger.Err(err).Msg("unable to query services")
 				return nil, apiError(err)
@@ -10564,8 +9825,6 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound(serviceNotFound)
-				} else if errors.Is(err, cdnerrors.ErrForbidden) {
-					return nil, huma.Error403Forbidden("access to this service is not allowed")
 				}
 				logger.Err(err).Msg("unable to query service by ID")
 				return nil, apiError(err)
@@ -10599,12 +9858,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, huma.Error409Conflict("service must be disabled before it can be deleted")
 				case errors.Is(err, cdnerrors.ErrConfirmNameMismatch):
 					return nil, huma.Error422UnprocessableEntity("confirm must equal the service name")
-				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
-					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(serviceNotFound)
-				case errors.Is(err, cdnerrors.ErrUnprocessable):
-					return nil, huma.Error422UnprocessableEntity("unable to parse request to delete service")
 				}
 				logger.Err(err).Msg("unable to delete service")
 				return nil, apiError(err)
@@ -10633,10 +9888,6 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
 					return nil, huma.Error404NotFound(serviceNotFound)
-				case errors.Is(err, cdnerrors.ErrUnprocessable):
-					return nil, huma.Error422UnprocessableEntity("unable to parse request to set service disabled state")
-				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
-					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
 				}
 				logger.Err(err).Msg("unable to set service disabled state")
 				return nil, apiError(err)
@@ -10677,8 +9928,6 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error422UnprocessableEntity("unable to parse request to add service")
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
 						return nil, huma.Error409Conflict("service already exists")
-					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden("not allowed to create this service")
 					case errors.Is(err, cdnerrors.ErrServiceQuotaHit):
 						// Expected error, so not logged as a failure
 						return nil, apiError(err)
@@ -10711,11 +9960,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			serviceVersions, _, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
 			if err != nil {
-				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					return nil, huma.Error403Forbidden(api403String)
-				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
-					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
+				if errors.Is(err, cdnerrors.ErrNotFound) {
+					return nil, huma.Error404NotFound(serviceNotFound)
 				}
 				logger.Err(err).Msg("unable to query service-versions")
 				return nil, apiError(err)
@@ -10769,10 +10015,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 						return nil, huma.Error409Conflict("service version already exists")
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error422UnprocessableEntity("invalid origin group or origin data")
-					case errors.Is(err, cdnerrors.ErrForbidden):
-						return nil, huma.Error403Forbidden("not allowed to create this service version")
 					case errors.Is(err, cdnerrors.ErrNotFound):
-						return nil, huma.Error422UnprocessableEntity("service name not found")
+						return nil, huma.Error404NotFound(serviceNotFound)
 					case errors.Is(err, cdnerrors.ErrUnknownDomain):
 						return nil, huma.Error422UnprocessableEntity("domain name(s) unknown or unverified")
 					case errors.Is(err, cdnerrors.ErrInvalidVCL):
@@ -10802,7 +10046,6 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			}
 		},
 		) (*struct{}, error) {
-			logger := zlog.Ctx(ctx)
 			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 			if !ok {
 				return nil, errors.New("unable to read auth data from service version active PUT handler")
@@ -10812,13 +10055,11 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				return nil, huma.Error422UnprocessableEntity("active must be true")
 			}
 
-			err := activateServiceVersion(ctx, logger, ad, dbc, input.Org, input.Service, input.Version)
+			err := activateServiceVersion(ctx, ad, dbc, input.Org, input.Service, input.Version)
 			if err != nil {
 				switch {
 				case errors.Is(err, cdnerrors.ErrNotFound):
-					return nil, huma.Error404NotFound("service or version does not exist")
-				case errors.Is(err, cdnerrors.ErrUnprocessable):
-					return nil, huma.Error422UnprocessableEntity("invalid data in request")
+					return nil, huma.Error404NotFound(serviceVersionNotFound)
 				}
 				return nil, apiError(fmt.Errorf("unable to update active version: %w", err))
 			}
@@ -10841,14 +10082,8 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			svc, err := getServiceVersionConfig(ctx, dbc, ad, input.Org, input.Service, input.Version)
 			if err != nil {
 				switch {
-				case errors.Is(err, cdnerrors.ErrForbidden):
-					return nil, huma.Error403Forbidden(api403String)
-				case errors.Is(err, cdnerrors.ErrUnprocessable):
-					return nil, huma.Error422UnprocessableEntity("unprocessable request")
-				case errors.Is(err, cdnerrors.ErrServiceByNameNeedsOrg):
-					return nil, huma.Error422UnprocessableEntity(cdnerrors.ErrServiceByNameNeedsOrg.Error())
-				case errors.Is(err, pgx.ErrNoRows):
-					return nil, huma.Error404NotFound("service version not found")
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(serviceVersionNotFound)
 				}
 				logger.Err(err).Msg("unable to query service-versions/{version}/vcl")
 				return nil, apiError(err)
@@ -12559,20 +11794,138 @@ func Run(debug bool, localViper *viper.Viper, logger zerolog.Logger, devMode boo
 	return nil
 }
 
-// isOrgMember checks whether the user's org matches the given URL parameter
-// by name or UUID, without hitting the database. This allows pre-auth checks
-// before validateOrgName so that non-superusers cannot probe for org existence.
-func isOrgMember(ad cdntypes.AuthData, orgParam string) bool {
-	if ad.OrgName != nil && *ad.OrgName == orgParam {
-		return true
+// resolveConsoleOrg resolves the org named in a console URL, limited to the
+// orgs the caller may see. See resolveOrg for the returned errors.
+//
+// The lookup runs in its own transaction, so pass orgIdent.id, not the name,
+// to the data lookups that follow. Org names can change, and a superuser
+// renaming the org and reusing its old name for another org in between would
+// otherwise make those lookups land on a different org than the one resolved
+// here. The name is only for display and redirect URLs.
+func resolveConsoleOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgParam string) (orgIdentifier, error) {
+	var orgIdent orgIdentifier
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		var err error
+		orgIdent, err = resolveOrg(ctx, tx, ad, orgParam, lockShare)
+		return err
+	})
+	if err != nil {
+		return orgIdentifier{}, err
 	}
-	if ad.OrgID != nil {
-		var paramUUID pgtype.UUID
-		if paramUUID.Scan(orgParam) == nil && paramUUID == *ad.OrgID {
-			return true
+	return orgIdent, nil
+}
+
+// renderConsoleOrgUnavailable renders the page for a failed resolveConsoleOrg
+// and logs renderErrMsg if rendering fails.
+//
+// An org that does not exist and an org the caller may not see must give a
+// byte-identical page, so nothing on it may depend on the requested org: the
+// sidebar org is always the caller's own, never the one in the URL.
+func renderConsoleOrgUnavailable(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, err error, renderErrMsg string) {
+	sidebarOrg := ""
+	if ad.OrgName != nil {
+		sidebarOrg = *ad.OrgName
+	}
+
+	var msg string
+	switch {
+	case errors.Is(err, cdnerrors.ErrForbidden):
+		// The caller belongs to no org at all.
+		msg = consoleNeedOrgMembershipMsg
+	case errors.Is(err, cdnerrors.ErrNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+		// The API answers a malformed name with 400 so a script author
+		// can see the mistake. Console URLs come from the console's own
+		// links, so a malformed one was typed by hand and simply gets the
+		// not found page.
+		msg = consoleOrgNotFound
+	default:
+		logger.Err(err).Msg("console: looking up organization failed")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	logger.Err(err).Msg("console: organization not available to caller")
+	renderErr := renderConsolePage(ctx, dbc, w, r, ad, title, sidebarOrg, components.ConsoleErrorContent(msg))
+	if renderErr != nil {
+		logger.Err(renderErr).Msg(renderErrMsg)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
+}
+
+// resolveConsoleService resolves the org and service named in a console URL,
+// limited to what the caller may see. See resolveService for the returned
+// errors; an org the caller may not see gives the same error as a missing one.
+//
+// As with resolveConsoleOrg, pass the returned ids, not the names, to what
+// follows. Unlike an org, a service can move to another org, and the lock
+// taken here is released when this lookup's transaction commits. So the ids
+// do not show that the caller may still see the service later: a follow-up
+// transaction that reads or writes the service must resolve it again with
+// resolveService and these ids.
+func resolveConsoleService(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgParam string, serviceParam string) (orgIdentifier, serviceIdentifier, error) {
+	var orgIdent orgIdentifier
+	var serviceIdent serviceIdentifier
+	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
+		var err error
+		orgIdent, err = resolveOrg(ctx, tx, ad, orgParam, lockShare)
+		if err != nil {
+			return err
 		}
+		// The UUID is passed rather than the name so the service is looked
+		// up in the org just resolved, whatever the name looks like.
+		serviceIdent, err = resolveService(ctx, tx, ad, serviceParam, orgIdent.id.String(), lockShare)
+		return err
+	})
+	if err != nil {
+		return orgIdentifier{}, serviceIdentifier{}, err
 	}
-	return false
+	return orgIdent, serviceIdent, nil
+}
+
+// renderConsoleServiceUnavailable renders the page for a failed
+// resolveConsoleService, or for a failed function that resolves the service
+// itself (such as selectServiceVersions), and logs renderErrMsg if rendering
+// fails. notFoundMsg is the page content for an
+// org, service or service version that is missing or not visible to the
+// caller.
+//
+// Like renderConsoleOrgUnavailable, the page must be byte-identical whether
+// the org or service does not exist or the caller may not see it, so nothing
+// on it may depend on the URL: the sidebar org is the caller's own, and the
+// breadcrumbs are rendered for a fixed path instead of the requested one,
+// because the breadcrumb for a service or version URL echoes the service
+// segment of the path.
+func renderConsoleServiceUnavailable(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, notFoundMsg string, err error, renderErrMsg string) {
+	sidebarOrg := ""
+	if ad.OrgName != nil {
+		sidebarOrg = *ad.OrgName
+	}
+
+	var msg string
+	switch {
+	case errors.Is(err, cdnerrors.ErrForbidden):
+		// The caller belongs to no org at all.
+		msg = consoleNeedOrgMembershipMsg
+	case errors.Is(err, cdnerrors.ErrNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+		// A malformed name gets the not found page, as in
+		// renderConsoleOrgUnavailable.
+		msg = notFoundMsg
+	default:
+		logger.Err(err).Msg("console: loading service data failed")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	logger.Err(err).Msg("console: service or service version not available to caller")
+	fixed := r.Clone(ctx)
+	fixed.URL.Path = "/console/org/" + url.PathEscape(sidebarOrg) + "/services"
+	fixed.URL.RawPath = ""
+	fixed.URL.RawQuery = ""
+	renderErr := renderConsolePage(ctx, dbc, w, fixed, ad, title, sidebarOrg, components.ConsoleErrorContent(msg))
+	if renderErr != nil {
+		logger.Err(renderErr).Msg(renderErrMsg)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
 }
 
 // consoleSuperuserCheck validates that the session user is a superuser.
@@ -12825,7 +12178,11 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		title := fmt.Sprintf("Edit organization: %s", orgName)
+		// The title is fixed: orgName comes from the URL and has not been
+		// resolved yet, so echoing it on error pages would reflect input
+		// for orgs that may not exist. Only the success render below uses
+		// the database-resolved name.
+		title := "Edit organization"
 
 		switch r.Method {
 		case http.MethodGet:
@@ -12858,7 +12215,7 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 				ClientTokenQuota: fmt.Sprintf("%d", org.ClientTokenQuota),
 			}
 
-			err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditOrgContent(orgName, formData))
+			err = renderConsolePage(ctx, dbc, w, r, ad, fmt.Sprintf("Edit organization: %s", org.Name), sh.selectedOrgName, components.EditOrgContent(orgName, formData))
 			if err != nil {
 				logger.Err(err).Msg("unable to render edit org page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
