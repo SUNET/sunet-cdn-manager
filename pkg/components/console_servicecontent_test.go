@@ -20,7 +20,7 @@ func TestServiceContentDescriptionRender(t *testing.T) {
 	}
 
 	serviceVersions := []cdntypes.ServiceVersionListItem{
-		{ServiceVersion: cdntypes.ServiceVersion{OrgName: "myorg", ServiceName: "myservice", Version: 1, Active: true, Description: "first version"}},
+		{OrgName: "myorg", ServiceName: "myservice", Version: 1, Active: true, Description: "first version"},
 	}
 
 	html := render(t, ServiceContent("myorg", serviceID, serviceVersions))
@@ -170,7 +170,7 @@ func TestServiceContentCreateVersionLinksUseTheServiceID(t *testing.T) {
 	// none (the "create your first version" empty state, which has no version
 	// row to take an ID from).
 	withVersions := render(t, ServiceContent("myorg", serviceID, []cdntypes.ServiceVersionListItem{
-		{ServiceVersion: cdntypes.ServiceVersion{OrgName: "myorg", ServiceName: "trap-name", Version: 1, Description: "v1"}},
+		{OrgName: "myorg", ServiceName: "trap-name", Version: 1, Description: "v1"},
 	}))
 	empty := render(t, ServiceContent("myorg", serviceID, nil))
 

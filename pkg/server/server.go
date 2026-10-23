@@ -3352,10 +3352,7 @@ func clientIPKey(remoteAddr string) (netip.Prefix, error) {
 // retryAfterSeconds formats d for a Retry-After header: whole seconds,
 // rounded up, at least 1.
 func retryAfterSeconds(d time.Duration) string {
-	secs := int64((d + time.Second - 1) / time.Second)
-	if secs < 1 {
-		secs = 1
-	}
+	secs := max(int64((d+time.Second-1)/time.Second), 1)
 	return strconv.FormatInt(secs, 10)
 }
 
@@ -7606,16 +7603,14 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 			serviceVersions = append(
 				serviceVersions,
 				cdntypes.ServiceVersionListItem{
-					ServiceVersion: cdntypes.ServiceVersion{
-						ID:          id,
-						ServiceID:   serviceIdent.id,
-						ServiceName: serviceIdent.name,
-						Version:     version,
-						Active:      active,
-						Description: description,
-						OrgID:       serviceIdent.orgID,
-						OrgName:     orgName,
-					},
+					ID:              id,
+					ServiceID:       serviceIdent.id,
+					ServiceName:     serviceIdent.name,
+					Version:         version,
+					Active:          active,
+					Description:     description,
+					OrgID:           serviceIdent.orgID,
+					OrgName:         orgName,
 					UnusableDomains: unusableDomains,
 				},
 			)
