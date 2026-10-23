@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/testhelpers"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -597,5 +599,116 @@ func TestArgon2ParamsPositiveMigration(t *testing.T) {
 				t.Fatalf("expected %s check violation, got: %v", test.wantConstraint, err)
 			}
 		})
+	}
+}
+
+// TestDomainRetirementMigration verifies that migration 00019 keeps existing
+// domains live and verified, refuses retired domains that are still verified,
+// and lets a fqdn be registered by another org once its owner has retired it
+// while still keeping it unique per org.
+func TestDomainRetirementMigration(t *testing.T) {
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See TestVersionedOriginGroupsMigration for why the cdn schema is
+	// created here.
+	bootstrapPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA cdn"); err != nil {
+		bootstrapPool.Close()
+		t.Fatalf("creating cdn schema failed: %s", err)
+	}
+	bootstrapPool.Close()
+	pgConfig.ConnConfig.RuntimeParams["search_path"] = "cdn,public"
+
+	if err := upTo(ctx, logger, pgConfig, 18); err != nil {
+		t.Fatalf("migrating up to version 18 failed: %s", err)
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	const (
+		orgA      = "93000000-0000-0000-0000-000000000001"
+		orgB      = "93000000-0000-0000-0000-000000000002"
+		domainA   = "93000000-0000-0000-0000-000000000101"
+		insertSQL = "INSERT INTO domains (org_id, fqdn, verified, verification_token) VALUES ($1, 'a.example', false, 'token')"
+	)
+
+	seed := []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO orgs (id, name) VALUES ($1, 'mig-org-a')", []any{orgA}},
+		{"INSERT INTO orgs (id, name) VALUES ($1, 'mig-org-b')", []any{orgB}},
+		{"INSERT INTO domains (id, org_id, fqdn, verified, verification_token) VALUES ($1, $2, 'a.example', true, 'token')", []any{domainA, orgA}},
+	}
+	for _, stmt := range seed {
+		if _, err := dbPool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("seed statement failed: %s: %s", stmt.sql, err)
+		}
+	}
+
+	if err := Up(ctx, logger, pgConfig); err != nil {
+		t.Fatalf("migrating up failed: %s", err)
+	}
+
+	var timeRetired *time.Time
+	err = dbPool.QueryRow(ctx, "SELECT time_retired FROM domains WHERE id = $1", domainA).Scan(&timeRetired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timeRetired != nil {
+		t.Errorf("seeded domain time_retired: got %s, want NULL", timeRetired)
+	}
+
+	var indexDef string
+	err = dbPool.QueryRow(ctx, "SELECT indexdef FROM pg_indexes WHERE schemaname = 'cdn' AND indexname = 'service_domains_domain_id_idx'").Scan(&indexDef)
+	if err != nil {
+		t.Fatalf("looking up service_domains_domain_id_idx failed: %s", err)
+	}
+	if !strings.Contains(indexDef, "(domain_id)") {
+		t.Errorf("unexpected service_domains_domain_id_idx definition: %s", indexDef)
+	}
+
+	wantViolation := func(description string, err error, code string, constraint string) {
+		t.Helper()
+		pgErr, ok := errors.AsType[*pgconn.PgError](err)
+		if !ok || pgErr.Code != code || pgErr.ConstraintName != constraint {
+			t.Errorf("%s: expected SQLSTATE %s on %s, got: %v", description, code, constraint, err)
+		}
+	}
+
+	// A retired domain must not be verified.
+	_, err = dbPool.Exec(ctx, "UPDATE domains SET time_retired = now() WHERE id = $1", domainA)
+	wantViolation("retiring a verified domain", err, "23514", "retired_not_verified")
+
+	// While org A's domain is live nobody else can register the fqdn.
+	_, err = dbPool.Exec(ctx, insertSQL, orgB)
+	wantViolation("registering a live fqdn in another org", err, "23505", "domains_fqdn_live_key")
+
+	_, err = dbPool.Exec(ctx, "UPDATE domains SET time_retired = now(), verified = false WHERE id = $1", domainA)
+	if err != nil {
+		t.Fatalf("retiring the domain failed: %s", err)
+	}
+
+	// The owning org still has a single row per fqdn, retired or not. This
+	// is checked before any other org takes the fqdn so that only the
+	// per-org constraint can reject the insert.
+	_, err = dbPool.Exec(ctx, insertSQL, orgA)
+	wantViolation("registering the fqdn again in the owning org", err, "23505", "domains_org_id_fqdn_key")
+
+	// Once retired (and unverified) the fqdn is free for other orgs.
+	_, err = dbPool.Exec(ctx, insertSQL, orgB)
+	if err != nil {
+		t.Fatalf("registering a retired fqdn in another org failed: %s", err)
 	}
 }

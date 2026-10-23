@@ -47,6 +47,9 @@ var expectedErrorStatuses = []struct {
 	{cdnerrors.ErrOrgClientTokenQuotaHit, http.StatusConflict},
 	{cdnerrors.ErrHasDependents, http.StatusConflict},
 	{cdnerrors.ErrServiceNotDisabled, http.StatusConflict},
+	{cdnerrors.ErrDomainRetired, http.StatusConflict},
+	{cdnerrors.ErrDomainUnused, http.StatusConflict},
+	{cdnerrors.ErrDomainNotVerified, http.StatusConflict},
 
 	{cdnerrors.ErrUnprocessable, http.StatusUnprocessableEntity},
 	{cdnerrors.ErrCheckViolation, http.StatusUnprocessableEntity},

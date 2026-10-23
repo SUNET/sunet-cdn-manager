@@ -68,7 +68,14 @@ func TestLookupExpectedError(t *testing.T) {
 				Versions: []cdnerrors.ServiceVersionRef{{Service: "svc", Version: 3}},
 			}),
 			wantStatus: 409,
-			wantMsg:    `cannot delete "example.se": used by svc version 3`,
+			wantMsg:    `cannot delete "example.se": used by svc version 3, retire it instead`,
+			wantOK:     true,
+		},
+		{
+			name:       "wrapped unknown domain error names the domain",
+			err:        fmt.Errorf("x: %w", &cdnerrors.UnknownDomainError{Domain: "example.se"}),
+			wantStatus: 422,
+			wantMsg:    "unknown domain name: example.se",
 			wantOK:     true,
 		},
 		{

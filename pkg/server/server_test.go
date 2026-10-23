@@ -15901,7 +15901,7 @@ func TestIdentifierBadIdentifier(t *testing.T) {
 		{
 			name: "no matching ID",
 			lookup: func(tx pgx.Tx) error {
-				_, err := newDomainIdentifierForUpdate(ctx, tx, "00000015-0000-0000-0000-900000000001")
+				_, err := newOrgIdentifier(ctx, tx, "00000002-0000-0000-0000-900000000001")
 				return err
 			},
 			want: true,

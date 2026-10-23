@@ -107,6 +107,16 @@ type ServiceVersion struct {
 	Description string      `json:"description" doc:"Description of the service version" maxLength:"512"`
 }
 
+// ServiceVersionListItem is a version as listed for a service. It carries
+// the activation blockers that the version list shows, which is why they are
+// not on ServiceVersion itself: that type is also embedded in the VCL
+// response and in the request body for creating a version, where they have
+// no meaning.
+type ServiceVersionListItem struct {
+	ServiceVersion
+	UnusableDomains []string `json:"unusable_domains,omitempty" doc:"Domains of this version that are retired or not yet verified; the version cannot be activated while any are listed"`
+}
+
 type ServiceVersionVCL struct {
 	ServiceVersion
 	VCL string `json:"vcl" example:"vinyl vcl" doc:"VCL content"`
@@ -120,6 +130,7 @@ type ServiceVersionConfig struct {
 	Domains            []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
 	OriginGroups       []OriginGroup  `json:"origin_groups" doc:"The available origin groups" validate:"min=1"`
 	Origins            []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	UnusableDomains    []string       `json:"unusable_domains,omitempty" doc:"Domains of this version that are retired or not yet verified; the version cannot be activated while any are listed"`
 }
 
 type ServiceVersionCloneData struct {
@@ -128,6 +139,9 @@ type ServiceVersionCloneData struct {
 	Domains      []DomainString `json:"domains" doc:"The domains used by the VCL" validate:"min=1"`
 	OriginGroups []OriginGroup  `json:"origin_groups" doc:"The origin groups of the cloned version"`
 	Origins      []Origin       `json:"origins" doc:"The origins used by the VCL" validate:"min=1"`
+	// Domains holds only the verified domains, so a clone can be saved as
+	// is. The ones left out are kept here so the form can say so.
+	UnusableDomains []string `json:"unusable_domains,omitempty" doc:"Domains of the cloned version that are retired or not yet verified and so are not carried over"`
 }
 
 // What data is expected when handling a request to add a service version
@@ -315,6 +329,9 @@ type Domain struct {
 	FQDN              string      `json:"fqdn"`
 	Verified          bool        `json:"verified"`
 	VerificationToken string      `json:"verification_token"`
+	Retired           bool        `json:"retired" doc:"If the domain is retired, it is no longer verified and its name can be added again"`
+	InUse             bool        `json:"in_use" doc:"If any service version uses the domain"`
+	ActiveServices    []string    `json:"active_services,omitempty" doc:"Services whose active version uses the domain; it cannot be retired while any are listed"`
 }
 
 type Node struct {

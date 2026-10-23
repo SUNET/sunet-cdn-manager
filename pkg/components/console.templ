@@ -8,7 +8,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 )
 
 // activeAttr is used in the NavBar component to determine which navigation
@@ -252,7 +254,7 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 			<thead>
 				<tr>
 					<th>Domain</th>
-					<th>Verified</th>
+					<th>Status</th>
 					<th>Verification record</th>
 					<th>Actions</th>
 				</tr>
@@ -261,22 +263,72 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 				for _, domain := range domains {
 					<tr>
 						<td>{ domain.FQDN }</td>
-						if domain.Verified {
-							<td><span aria-hidden="true">✅ </span>Yes</td>
-						} else {
-							<td><span aria-hidden="true">⏳ </span>In progress</td>
-						}
-						<td>{ domain.FQDN }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
 						<td>
-							<button
-								type="button"
-								hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.FQDN))) }
-								hx-target="body"
-								hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.FQDN) }
-								hx-disabled-elt="this"
-							>
-								Delete
-							</button>
+							switch  {
+								case domain.Retired:
+									<span aria-hidden="true">🚫 </span>Retired
+								case domain.Verified:
+									<span aria-hidden="true">✅ </span>Verified
+								default:
+									<span aria-hidden="true">⏳ </span>In progress
+							}
+							// Why Retire is disabled, kept with the status
+							// like the blocked version note on the service
+							// page so the actions cell only holds buttons.
+							if len(domain.ActiveServices) > 0 {
+								<br/>
+								<small>Used by the active version of { strings.Join(domain.ActiveServices, ", ") }, activate another version there to retire it</small>
+							}
+						</td>
+						// A retired domain is not verified and cannot be
+						// verified again without adding it again, which
+						// issues a new token, so its old record is not shown.
+						if domain.Retired {
+							<td></td>
+						} else {
+							<td>{ domain.FQDN }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
+						}
+						<td>
+							// Exactly one action: a domain no version uses is
+							// deleted (retired or not), a live one that is used
+							// can only be retired, and a retired one that is
+							// still used can only be added again.
+							switch  {
+								case !domain.InUse:
+									<button
+										type="button"
+										hx-delete={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s", orgName, domain.FQDN))) }
+										hx-target="body"
+										hx-confirm={ fmt.Sprintf("Are you sure you want to delete '%s'?", domain.FQDN) }
+										hx-disabled-elt="this"
+									>
+										Delete
+									</button>
+								case !domain.Retired:
+									// The server refuses to retire a domain an
+									// active version uses, so the button is
+									// disabled up front; the status says why.
+									<button
+										type="button"
+										hx-post={ string(templ.URL(fmt.Sprintf("/console/org/%s/domains/%s/retire", orgName, domain.FQDN))) }
+										hx-target="body"
+										hx-confirm={ fmt.Sprintf("Are you sure you want to retire '%s'? Service versions using it can no longer be activated, and it must be added and verified again before it can be used.", domain.FQDN) }
+										hx-disabled-elt="this"
+										disabled?={ len(domain.ActiveServices) > 0 }
+									>
+										Retire
+									</button>
+								default:
+									<button
+										type="button"
+										hx-post={ string(templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName))) }
+										hx-vals={ jsonFQDNVals(domain.FQDN) }
+										hx-target="body"
+										hx-disabled-elt="this"
+									>
+										Add again
+									</button>
+							}
 						</td>
 					</tr>
 				}
@@ -490,7 +542,7 @@ templ DeleteServiceContent(orgName string, serviceName string, serviceID string,
 // a service deleted and recreated under that name while this page sits open
 // receives a version meant for its predecessor, silently. The form behind
 // these links takes minutes to fill in, so that window is wide.
-templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cdntypes.ServiceVersion) {
+templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cdntypes.ServiceVersionListItem) {
 	if len(serviceVersions) == 0 {
 		<article class="empty-state">
 			<p>No versions created yet</p>
@@ -521,13 +573,19 @@ templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cd
 								<span aria-hidden="true">❌ </span>No
 							}
 						</td>
-						<td>{ sv.Description }</td>
+						<td>
+							{ sv.Description }
+							if len(sv.UnusableDomains) > 0 {
+								<br/>
+								<small class="error-text">Cannot be activated, domains retired or not verified: { strings.Join(sv.UnusableDomains, ", ") }</small>
+							}
+						</td>
 						<td>
 							<button
 								type="button"
 								hx-get={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", sv.OrgName, serviceID.String(), sv.Version))) }
 								hx-target="body"
-								disabled?={ sv.Active }
+								disabled?={ sv.Active || len(sv.UnusableDomains) > 0 }
 								hx-disabled-elt="this"
 							>
 								Activate
@@ -733,7 +791,12 @@ templ ServiceVersionContent(serviceName string, sv cdntypes.ServiceVersionConfig
 		} else {
 			<ul>
 				for _, domain := range sv.Domains {
-					<li>{ domain.String() }</li>
+					<li>
+						{ domain.String() }
+						if slices.Contains(sv.UnusableDomains, domain.String()) {
+							<small class="error-text">(retired or not verified, so this version cannot be activated)</small>
+						}
+					</li>
 				}
 			</ul>
 		}
@@ -1046,6 +1109,9 @@ templ CreateServiceVersionContent(serviceName string, serviceID pgtype.UUID, org
 		<article>
 			<fieldset>
 				<legend>Domains</legend>
+				if len(cloneData.UnusableDomains) > 0 {
+					<p id="clone-dropped-domains"><small class="error-text">Not carried over from the cloned version, retired or not verified: { strings.Join(cloneData.UnusableDomains, ", ") }</small></p>
+				}
 				if len(domains) == 0 {
 					<div>No domains available</div>
 				} else {
@@ -1236,7 +1302,7 @@ templ CreateServiceVersionContent(serviceName string, serviceID pgtype.UUID, org
 	<script defer src="/js/dist/codemirror/editor.bundle.min.js" onerror="document.getElementById('vcl-hint').textContent = 'Enhanced editor failed to load. Basic editing is still available.'"></script>
 }
 
-templ ActivateServiceVersionContent(orgName string, serviceName string, serviceID pgtype.UUID, version int64, err error) {
+templ ActivateServiceVersionContent(orgName string, serviceName string, serviceID pgtype.UUID, version int64, errorMessage string) {
 	<div>You are about to activate { serviceName } version { strconv.FormatInt(version, 10) }, are you sure?</div>
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d/activate", orgName, serviceID.String(), version)) } hx-disabled-elt="find button[type='submit']">
 		<label for="confirmation">
@@ -1246,8 +1312,8 @@ templ ActivateServiceVersionContent(orgName string, serviceName string, serviceI
 		<button type="submit">Activate version</button>
 		<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", orgName, serviceName)) } role="button" class="secondary">Cancel</a>
 	</form>
-	if err != nil {
-		<div>Service version activation failed</div>
+	if errorMessage != "" {
+		<div class="error-text" role="alert">{ errorMessage }</div>
 	}
 }
 
