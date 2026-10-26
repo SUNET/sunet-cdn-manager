@@ -5882,7 +5882,34 @@ func TestDeleteDomain(t *testing.T) {
 	}
 }
 
+// domainOfLength returns a domain name of exactly n characters ending in
+// suffix (e.g. ".example.net"), padded with labels of at most 63 characters.
+// The shortest label ends up first, with full 63-character labels after it.
+func domainOfLength(t *testing.T, n int, suffix string) string {
+	t.Helper()
+	remaining := n - len(suffix)
+	if remaining < 1 {
+		t.Fatalf("domainOfLength: %d too short for suffix %q", n, suffix)
+	}
+
+	var labels []string
+	for remaining > 63 {
+		// Leave room for a dot and at least one character before it.
+		size := min(63, remaining-2)
+		labels = append(labels, strings.Repeat("a", size))
+		remaining -= size + 1
+	}
+	labels = append(labels, strings.Repeat("a", remaining))
+	slices.Reverse(labels)
+
+	return strings.Join(labels, ".") + suffix
+}
+
 func TestPostDomains(t *testing.T) {
+	// The challenge label plus its dot is prepended to the domain, so the
+	// longest domain we can accept leaves room for it within 253 characters.
+	maxDomainLen := 253 - len(cdntypes.DomainChallengeLabel) - len(".")
+
 	ts, dbPool, err := prepareServer(t, testServerInput{})
 	if dbPool != nil {
 		defer dbPool.Close()
@@ -5907,6 +5934,22 @@ func TestPostDomains(t *testing.T) {
 			password:       validAdminPassword,
 			expectedStatus: http.StatusCreated,
 			newDomain:      "example.net",
+			orgNameOrID:    "org1",
+		},
+		{
+			description:    "successful superuser request right at limit of maxlen given the challenge label",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusCreated,
+			newDomain:      domainOfLength(t, maxDomainLen, ".example.net"),
+			orgNameOrID:    "org1",
+		},
+		{
+			description:    "failed superuser request past limit of maxlen given the challenge label",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusUnprocessableEntity,
+			newDomain:      domainOfLength(t, maxDomainLen+1, ".example.net"),
 			orgNameOrID:    "org1",
 		},
 		{

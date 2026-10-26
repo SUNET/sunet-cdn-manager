@@ -286,7 +286,7 @@ templ DomainsContent(orgName string, domains []cdntypes.Domain, verificationTag 
 						if domain.Retired {
 							<td></td>
 						} else {
-							<td>{ domain.FQDN }. IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
+							<td>{ domain.VerifyData().ChallengeRecordFQDN() } IN TXT "{ verificationTag }{ tagSeparator }{ domain.VerificationToken }"</td>
 						}
 						<td>
 							// Exactly one action: a domain no version uses is

@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/miekg/dns"
 )
 
 const (
@@ -332,6 +333,27 @@ type Domain struct {
 	Retired           bool        `json:"retired" doc:"If the domain is retired, it is no longer verified and its name can be added again"`
 	InUse             bool        `json:"in_use" doc:"If any service version uses the domain"`
 	ActiveServices    []string    `json:"active_services,omitempty" doc:"Services whose active version uses the domain; it cannot be retired while any are listed"`
+}
+
+func (d Domain) VerifyData() DomainVerifyData {
+	return DomainVerifyData{
+		ID:                d.ID,
+		FQDN:              d.FQDN,
+		VerificationToken: d.VerificationToken,
+	}
+}
+
+type DomainVerifyData struct {
+	ID                pgtype.UUID
+	FQDN              string
+	VerificationToken string
+}
+
+const DomainChallengeLabel = "_sunet_cdn-challenge"
+
+func (dvd DomainVerifyData) ChallengeRecordFQDN() string {
+	// https://datatracker.ietf.org/doc/draft-ietf-dnsop-domain-verification-techniques/
+	return dns.Fqdn(DomainChallengeLabel + "." + dvd.FQDN)
 }
 
 type Node struct {

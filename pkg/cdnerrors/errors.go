@@ -46,6 +46,7 @@ var (
 	ErrDomainRetired               = errors.New("domain is retired")
 	ErrDomainUnused                = errors.New("domain is not used by any service version, delete it instead")
 	ErrDomainNotVerified           = errors.New("domain is not verified")
+	ErrDomainChallengeTooLong      = errors.New("domain is too long to fit challenge label")
 	// ErrReferencedOrgNotFound is deliberately the same for an unknown org
 	// and for an org the caller may not use, so the response cannot be used
 	// to probe for which orgs exist.

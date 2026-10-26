@@ -681,7 +681,7 @@ func TestMarkDomainVerified(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			updated, err := markDomainVerified(context.Background(), dbPool, domainVerifyData{ID: id, FQDN: test.fqdn, VerificationToken: test.token})
+			updated, err := markDomainVerified(context.Background(), dbPool, cdntypes.DomainVerifyData{ID: id, FQDN: test.fqdn, VerificationToken: test.token})
 			if err != nil {
 				t.Fatal(err)
 			}
