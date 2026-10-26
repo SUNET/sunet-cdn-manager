@@ -183,7 +183,7 @@ const (
 	vclValidatorTimeout = 15 * time.Second
 
 	// Used for TXT domain verification
-	sunetTxtTag       = "sunet-cdn-verification"
+	sunetTxtTag       = "token"
 	sunetTxtSeparator = "="
 	sunetTxtPrefix    = sunetTxtTag + sunetTxtSeparator
 
@@ -6768,6 +6768,13 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 		return cdntypes.Domain{}, fmt.Errorf("insertDomain: %w", err)
 	}
 
+	// Make sure we have room in the domain for adding our challenge label,
+	// otherwise we can never verify it anyway. "fqdn" has no trailing root
+	// dot here so the text format limit is 253
+	if len(cdntypes.DomainChallengeLabel+"."+fqdn) > 253 {
+		return cdntypes.Domain{}, cdnerrors.ErrDomainChallengeTooLong
+	}
+
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
@@ -11569,20 +11576,15 @@ func getSessionKeys(ctx context.Context, dbPool *pgxpool.Pool) ([]sessionKey, er
 	return sessionKeys, nil
 }
 
-type domainVerifyData struct {
-	ID                pgtype.UUID
-	FQDN              string
-	VerificationToken string
-}
-
-func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logger, resolverAddress string, domainData domainVerifyData, udpClient *dns.Client, tcpClient *dns.Client) error {
-	logger.Info().Str("fqdn", domainData.FQDN).Msg("found unverified domain")
+func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logger, resolverAddress string, domainData cdntypes.DomainVerifyData, udpClient *dns.Client, tcpClient *dns.Client) error {
+	challengeRecord := domainData.ChallengeRecordFQDN()
+	logger.Info().Str("fqdn", domainData.FQDN).Str("challenge_record", challengeRecord).Msg("found unverified domain")
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domainData.FQDN), dns.TypeTXT)
+	m.SetQuestion(challengeRecord, dns.TypeTXT)
 	m.SetEdns0(4096, false)
 	in, rtt, err := udpClient.Exchange(m, resolverAddress)
 	if err != nil {
-		logger.Err(err).Dur("rtt", rtt).Str("fqdn", domainData.FQDN).Msg("error looking up unverified domain via UDP")
+		logger.Err(err).Dur("rtt", rtt).Str("challenge_record", challengeRecord).Msg("error looking up unverified domain challenge record via UDP")
 		return err
 	}
 
@@ -11590,13 +11592,13 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 		logger.Error().Dur("rtt", rtt).Msg("udp query was truncated, retrying over TCP")
 		in, rtt, err = tcpClient.Exchange(m, resolverAddress)
 		if err != nil {
-			logger.Err(err).Dur("rtt", rtt).Str("fqdn", domainData.FQDN).Msg("error looking up unverified domain via TCP")
+			logger.Err(err).Dur("rtt", rtt).Str("challenge_record", challengeRecord).Msg("error looking up unverified domain via TCP")
 			return err
 		}
 	}
 
 	if in.Rcode != dns.RcodeSuccess {
-		logger.Error().Str("fqdn", domainData.FQDN).Str("rcode", dns.RcodeToString[in.Rcode]).Msg("unsuccessful query rcode")
+		logger.Error().Str("challenge_record", challengeRecord).Str("rcode", dns.RcodeToString[in.Rcode]).Msg("unsuccessful query rcode")
 		return fmt.Errorf("unsuccessful query code")
 	}
 
@@ -11607,7 +11609,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 			if val, ok := dns.TypeToString[answer.Header().Rrtype]; ok {
 				rrType = val
 			}
-			logger.Error().Str("fqdn", domainData.FQDN).Str("rr_type", rrType).Msg("unable to parse entry in TXT answer section as TXT record")
+			logger.Error().Str("challenge_record", challengeRecord).Str("rr_type", rrType).Msg("unable to parse entry in TXT answer section as TXT record")
 			// Keep looking at any additional answers since our record might still be in there
 			continue
 		}
@@ -11629,7 +11631,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 		}
 
 		if strings.HasPrefix(b.String(), sunetTxtPrefix) {
-			logger.Info().Str("txt_tag", sunetTxtTag).Msg("found tag")
+			logger.Info().Str("txt_tag", sunetTxtTag).Msg("found token tag")
 			parts := strings.SplitN(b.String(), sunetTxtSeparator, 2)
 			if len(parts) != 2 {
 				logger.Error().Int("num_parts", len(parts)).Msg("unexpected number of parts after splitting TXT tag")
@@ -11661,7 +11663,7 @@ func verifyDomain(ctx context.Context, dbPool *pgxpool.Pool, logger zerolog.Logg
 // retire, or a retire followed by adding the name again with a new token, can
 // happen between domainVerifier selecting the row and this update, and must
 // not be overwritten by a check made against the old state.
-func markDomainVerified(ctx context.Context, dbPool *pgxpool.Pool, d domainVerifyData) (bool, error) {
+func markDomainVerified(ctx context.Context, dbPool *pgxpool.Pool, d cdntypes.DomainVerifyData) (bool, error) {
 	tag, err := dbPool.Exec(ctx, "UPDATE domains SET verified = true WHERE id = $1 AND verification_token = $2 AND time_retired IS NULL", d.ID, d.VerificationToken)
 	if err != nil {
 		return false, fmt.Errorf("unable to UPDATE domain as verified: %w", err)
@@ -11683,7 +11685,7 @@ func domainVerifier(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.
 				continue
 			}
 
-			domainsToVerify, err := pgx.CollectRows(rows, pgx.RowToStructByName[domainVerifyData])
+			domainsToVerify, err := pgx.CollectRows(rows, pgx.RowToStructByName[cdntypes.DomainVerifyData])
 			if err != nil {
 				logger.Err(err).Msg("CollectRows of unverified domains failed")
 				continue
