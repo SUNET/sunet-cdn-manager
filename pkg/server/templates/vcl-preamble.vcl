@@ -19,12 +19,12 @@ backend default none;
 {{- range $originGroup := $.OriginGroups }}
 {{- if $originGroup.HTTPS }}
 backend {{$originGroup.Name}}_https {
-  .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_https";
+  .path = "/haproxy-unix-sockets/haproxy_{{$originGroup.Name}}_https";
 }
 {{- end}}
 {{- if $originGroup.HTTP }}
 backend {{$originGroup.Name}}_http {
-  .path = "/shared/unix-sockets/haproxy_{{$originGroup.Name}}_http";
+  .path = "/haproxy-unix-sockets/haproxy_{{$originGroup.Name}}_http";
 }
 {{- end}}
 {{- end}}
