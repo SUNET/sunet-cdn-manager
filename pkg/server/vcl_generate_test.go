@@ -321,6 +321,109 @@ func TestGenerateCompleteVclDeliver(t *testing.T) {
 		`if (resp.http.Vary ~ "^\s*$") {
       unset resp.http.Vary;
     }`,
+		`unset resp.http.Sunet-Cdn-Obj-Url;`,
+		`unset resp.http.Sunet-Cdn-Obj-Host;`,
+	} {
+		if !strings.Contains(vcl, want) {
+			t.Errorf("generated VCL missing %q:\n%s", want, vcl)
+		}
+	}
+}
+
+func TestGenerateCompleteVclBackendResponse(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedBackendResponseBlock := `sub vcl_backend_response {
+# begin SUNET-CDN-MANAGER vcl_backend_response
+  call sunet_cdn_stored_object;`
+
+	for _, want := range []string{
+		expectedBackendResponseBlock,
+	} {
+		if !strings.Contains(vcl, want) {
+			t.Errorf("generated VCL missing %q:\n%s", want, vcl)
+		}
+	}
+}
+
+func TestGenerateCompleteVclBackendError(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedBackendErrorBlock := `sub vcl_backend_error {
+# begin SUNET-CDN-MANAGER vcl_backend_error
+  call sunet_cdn_stored_object;`
+
+	for _, want := range []string{
+		expectedBackendErrorBlock,
+	} {
+		if !strings.Contains(vcl, want) {
+			t.Errorf("generated VCL missing %q:\n%s", want, vcl)
+		}
+	}
+}
+
+func TestGenerateCompleteVclPreamble(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedPreambleBlock := `sub sunet_cdn_stored_object {
+  # Rules that must apply to every object entering the cache, whether
+  # from a backend response (vcl_backend_response) or a synthetic
+  # response (vcl_backend_error).
+
+  # Use slash/fellow for storage
+  set beresp.storage = storage.fellow;
+
+  # https://www.varnish-software.com/developers/tutorials/avoid-http-to-https-redirect-loops-varnish/#create-cache-variations-based-on-the-x-forwarded-proto-header
+  if (!beresp.http.Vary) {
+    set beresp.http.Vary = "X-Forwarded-Proto";
+  } elseif (beresp.http.Vary !~ "(?i)X-Forwarded-Proto") {
+    set beresp.http.Vary = beresp.http.Vary + ", X-Forwarded-Proto";
+  }
+
+  # Platform-provided object metadata (URL and Host of the backend request),
+  # available to tenant VCL as obj.http.Sunet-Cdn-Obj-Url and
+  # obj.http.Sunet-Cdn-Obj-Host, e.g. for ban-lurker-friendly bans.
+  # Tenant VCL must not modify or remove these.
+  # https://vinyl-cache.org/docs/9.1/users-guide/purging.html
+  set beresp.http.Sunet-Cdn-Obj-Url = bereq.url;
+  set beresp.http.Sunet-Cdn-Obj-Host = bereq.http.host;
+}`
+
+	for _, want := range []string{
+		expectedPreambleBlock,
 	} {
 		if !strings.Contains(vcl, want) {
 			t.Errorf("generated VCL missing %q:\n%s", want, vcl)

@@ -8647,6 +8647,13 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_response macro template: %w", err)
 	}
 
+	// Render vcl_backend_error macro content
+	var backendErrorBuf strings.Builder
+	err = confTemplates.vclMacroBackendError.Execute(&backendErrorBuf, macroInput)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_error macro template: %w", err)
+	}
+
 	// Build macro name -> rendered content mapping. All required macros
 	// are present in the map; those without system-generated content
 	// expand to empty delimiter blocks. When adding system-generated
@@ -8661,6 +8668,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	macroContent[cdntypes.VCLMacroDeliver] = deliverBuf.String()
 	macroContent[cdntypes.VCLMacroBackendFetch] = backendFetchBuf.String()
 	macroContent[cdntypes.VCLMacroBackendResponse] = backendRespBuf.String()
+	macroContent[cdntypes.VCLMacroBackendError] = backendErrorBuf.String()
 
 	// Replace macro lines in the user template with delimiter-wrapped content.
 	// Use line-based replacement to avoid matching macro text inside user
@@ -11722,6 +11730,7 @@ type configTemplates struct {
 	vclMacroDeliver      *template.Template
 	vclMacroBackendFetch *template.Template
 	vclMacroBackendResp  *template.Template
+	vclMacroBackendError *template.Template
 	haproxy              *template.Template
 }
 
@@ -11752,6 +11761,11 @@ func newConfigTemplates() (configTemplates, error) {
 	confTemplates.vclMacroBackendResp, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_response.vcl")
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_response template: %w", err)
+	}
+
+	confTemplates.vclMacroBackendError, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_error.vcl")
+	if err != nil {
+		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_error template: %w", err)
 	}
 
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
