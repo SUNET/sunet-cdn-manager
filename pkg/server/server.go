@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"text/template"
 	"time"
+	"unicode"
 	"uuid"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
@@ -8504,6 +8505,23 @@ func buildBackendSelection(scheme string, conditionalGroups []enrichedOriginGrou
 	return b.String()
 }
 
+// renderVclSnippet executes a VCL template and returns the output without
+// trailing whitespace. Template files end with a newline, and conditionals
+// near the end can leave further whitespace-only lines, so the raw output
+// ends in an unpredictable amount of whitespace. Normalizing it here means
+// the rendered content is the same no matter how the template file happens
+// to end, and each place that inserts it adds exactly the line breaks it
+// needs. Leading whitespace is kept since the first line is indented VCL.
+// A template rendering only whitespace yields "", i.e. no content.
+func renderVclSnippet(tmpl *template.Template, data any) (string, error) {
+	var buf strings.Builder
+	err := tmpl.Execute(&buf, data)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRightFunc(buf.String(), unicode.IsSpace), nil
+}
+
 func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.OriginGroup, origins []cdntypes.Origin, vclTemplate string) (string, error) {
 	if err := validateVCLMacros(vclTemplate); err != nil {
 		return "", cdnerrors.NewValidationError(err.Error())
@@ -8606,8 +8624,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		OriginGroups: referencedOriginGroups,
 	}
 
-	var preambleBuf strings.Builder
-	err := confTemplates.vclPreamble.Execute(&preambleBuf, preambleInput)
+	preamble, err := renderVclSnippet(confTemplates.vclPreamble, preambleInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute preamble template: %w", err)
 	}
@@ -8620,36 +8637,31 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	}
 
 	// Render vcl_recv macro content
-	var recvBuf strings.Builder
-	err = confTemplates.vclMacroRecv.Execute(&recvBuf, macroInput)
+	recv, err := renderVclSnippet(confTemplates.vclMacroRecv, macroInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_recv macro template: %w", err)
 	}
 
 	// Render vcl_deliver macro content
-	var deliverBuf strings.Builder
-	err = confTemplates.vclMacroDeliver.Execute(&deliverBuf, macroInput)
+	deliver, err := renderVclSnippet(confTemplates.vclMacroDeliver, macroInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_deliver macro template: %w", err)
 	}
 
 	// Render vcl_backend_fetch macro content
-	var backendFetchBuf strings.Builder
-	err = confTemplates.vclMacroBackendFetch.Execute(&backendFetchBuf, macroInput)
+	backendFetch, err := renderVclSnippet(confTemplates.vclMacroBackendFetch, macroInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_fetch macro template: %w", err)
 	}
 
 	// Render vcl_backend_response macro content
-	var backendRespBuf strings.Builder
-	err = confTemplates.vclMacroBackendResp.Execute(&backendRespBuf, macroInput)
+	backendResp, err := renderVclSnippet(confTemplates.vclMacroBackendResp, macroInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_response macro template: %w", err)
 	}
 
 	// Render vcl_backend_error macro content
-	var backendErrorBuf strings.Builder
-	err = confTemplates.vclMacroBackendError.Execute(&backendErrorBuf, macroInput)
+	backendError, err := renderVclSnippet(confTemplates.vclMacroBackendError, macroInput)
 	if err != nil {
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_backend_error macro template: %w", err)
 	}
@@ -8663,12 +8675,12 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	for _, name := range cdntypes.VCLRequiredMacros() {
 		macroContent[name] = ""
 	}
-	macroContent[cdntypes.VCLMacroPreamble] = preambleBuf.String()
-	macroContent[cdntypes.VCLMacroRecv] = recvBuf.String()
-	macroContent[cdntypes.VCLMacroDeliver] = deliverBuf.String()
-	macroContent[cdntypes.VCLMacroBackendFetch] = backendFetchBuf.String()
-	macroContent[cdntypes.VCLMacroBackendResponse] = backendRespBuf.String()
-	macroContent[cdntypes.VCLMacroBackendError] = backendErrorBuf.String()
+	macroContent[cdntypes.VCLMacroPreamble] = preamble
+	macroContent[cdntypes.VCLMacroRecv] = recv
+	macroContent[cdntypes.VCLMacroDeliver] = deliver
+	macroContent[cdntypes.VCLMacroBackendFetch] = backendFetch
+	macroContent[cdntypes.VCLMacroBackendResponse] = backendResp
+	macroContent[cdntypes.VCLMacroBackendError] = backendError
 
 	// Replace macro lines in the user template with delimiter-wrapped content.
 	// Use line-based replacement to avoid matching macro text inside user
@@ -8680,6 +8692,8 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		if after, ok := strings.CutPrefix(trimmed, cdntypes.VCLMacroPrefix); ok {
 			macroName := strings.TrimSpace(after)
 			if content, ok := macroContent[macroName]; ok {
+				// Content from renderVclSnippet has no trailing
+				// newline, so it is placed on its own lines here.
 				if content != "" {
 					fmt.Fprintf(&resultBuf, "# begin SUNET-CDN-MANAGER %s\n%s\n# end SUNET-CDN-MANAGER %s\n", macroName, content, macroName)
 				} else {
