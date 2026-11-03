@@ -219,10 +219,39 @@ func TestGenerateCompleteVclLegacyStable(t *testing.T) {
     set req.http.X-Forwarded-Proto = "http";
     set req.backend_hint = default_http;
   }
-
 # end SUNET-CDN-MANAGER vcl_recv`
 	if !strings.Contains(vcl, expectedRecvBlock) {
 		t.Errorf("legacy vcl_recv block changed:\n%s", vcl)
+	}
+}
+
+// Rendered macro content must end directly before its end marker, without
+// the trailing newline of the template file leaking in as a blank line.
+func TestGenerateCompleteVclNoBlankLineBeforeEndMarker(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, macro := range cdntypes.VCLRequiredMacros() {
+		endMarker := "# end SUNET-CDN-MANAGER " + macro
+		before, _, found := strings.Cut(vcl, endMarker)
+		if !found {
+			t.Errorf("missing end marker for %s:\n%s", macro, vcl)
+			continue
+		}
+		if strings.HasSuffix(before, "\n\n") {
+			t.Errorf("blank line before end marker for %s:\n%s", macro, vcl)
+		}
 	}
 }
 
