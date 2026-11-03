@@ -295,3 +295,35 @@ func TestNormalizeVCLLineEndings(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateCompleteVclDeliver(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDeliverBlock := `sub vcl_deliver {
+# begin SUNET-CDN-MANAGER vcl_deliver
+  # Remove X-Forwarded-Proto from the Vary header sent to the client.`
+
+	for _, want := range []string{
+		expectedDeliverBlock,
+		`set resp.http.Vary = regsuball(resp.http.Vary, "(?i)(^|,)\s*X-Forwarded-Proto\s*(?=,|$)", "");`,
+		`set resp.http.Vary = regsub(resp.http.Vary, "^\s*,\s*", "");`,
+		`if (resp.http.Vary ~ "^\s*$") {
+      unset resp.http.Vary;
+    }`,
+	} {
+		if !strings.Contains(vcl, want) {
+			t.Errorf("generated VCL missing %q:\n%s", want, vcl)
+		}
+	}
+}

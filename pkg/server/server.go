@@ -8626,6 +8626,13 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_recv macro template: %w", err)
 	}
 
+	// Render vcl_deliver macro content
+	var deliverBuf strings.Builder
+	err = confTemplates.vclMacroDeliver.Execute(&deliverBuf, macroInput)
+	if err != nil {
+		return "", fmt.Errorf("generateCompleteVcl: unable to execute vcl_deliver macro template: %w", err)
+	}
+
 	// Render vcl_backend_fetch macro content
 	var backendFetchBuf strings.Builder
 	err = confTemplates.vclMacroBackendFetch.Execute(&backendFetchBuf, macroInput)
@@ -8651,6 +8658,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	}
 	macroContent[cdntypes.VCLMacroPreamble] = preambleBuf.String()
 	macroContent[cdntypes.VCLMacroRecv] = recvBuf.String()
+	macroContent[cdntypes.VCLMacroDeliver] = deliverBuf.String()
 	macroContent[cdntypes.VCLMacroBackendFetch] = backendFetchBuf.String()
 	macroContent[cdntypes.VCLMacroBackendResponse] = backendRespBuf.String()
 
@@ -11711,6 +11719,7 @@ func domainVerifier(ctx context.Context, logger zerolog.Logger, dbPool *pgxpool.
 type configTemplates struct {
 	vclPreamble          *template.Template
 	vclMacroRecv         *template.Template
+	vclMacroDeliver      *template.Template
 	vclMacroBackendFetch *template.Template
 	vclMacroBackendResp  *template.Template
 	haproxy              *template.Template
@@ -11724,10 +11733,17 @@ func newConfigTemplates() (configTemplates, error) {
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL preamble template: %w", err)
 	}
+
 	confTemplates.vclMacroRecv, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_recv.vcl")
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_recv template: %w", err)
 	}
+
+	confTemplates.vclMacroDeliver, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_deliver.vcl")
+	if err != nil {
+		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_deliver template: %w", err)
+	}
+
 	confTemplates.vclMacroBackendFetch, err = template.ParseFS(templateFS, "templates/vcl-macro-vcl_backend_fetch.vcl")
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_fetch template: %w", err)
@@ -11737,6 +11753,7 @@ func newConfigTemplates() (configTemplates, error) {
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create VCL macro vcl_backend_response template: %w", err)
 	}
+
 	confTemplates.haproxy, err = template.ParseFS(templateFS, "templates/haproxy.cfg")
 	if err != nil {
 		return configTemplates{}, fmt.Errorf("unable to create haproxy template: %w", err)
