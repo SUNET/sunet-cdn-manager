@@ -29,3 +29,8 @@
       unset resp.http.Vary;
     }
   }
+
+  # Remove the platform-provided object metadata added in
+  # vcl_backend_response, it is not meant for client responses.
+  unset resp.http.Sunet-Cdn-Obj-Url;
+  unset resp.http.Sunet-Cdn-Obj-Host;

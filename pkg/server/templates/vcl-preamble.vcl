@@ -28,3 +28,27 @@ backend {{$originGroup.Name}}_http {
 }
 {{- end}}
 {{- end}}
+
+sub sunet_cdn_stored_object {
+  # Rules that must apply to every object entering the cache, whether
+  # from a backend response (vcl_backend_response) or a synthetic
+  # response (vcl_backend_error).
+
+  # Use slash/fellow for storage
+  set beresp.storage = storage.fellow;
+
+  # https://www.varnish-software.com/developers/tutorials/avoid-http-to-https-redirect-loops-varnish/#create-cache-variations-based-on-the-x-forwarded-proto-header
+  if (!beresp.http.Vary) {
+    set beresp.http.Vary = "X-Forwarded-Proto";
+  } elseif (beresp.http.Vary !~ "(?i)X-Forwarded-Proto") {
+    set beresp.http.Vary = beresp.http.Vary + ", X-Forwarded-Proto";
+  }
+
+  # Platform-provided object metadata (URL and Host of the backend request),
+  # available to tenant VCL as obj.http.Sunet-Cdn-Obj-Url and
+  # obj.http.Sunet-Cdn-Obj-Host, e.g. for ban-lurker-friendly bans.
+  # Tenant VCL must not modify or remove these.
+  # https://vinyl-cache.org/docs/9.1/users-guide/purging.html
+  set beresp.http.Sunet-Cdn-Obj-Url = bereq.url;
+  set beresp.http.Sunet-Cdn-Obj-Host = bereq.http.host;
+}
