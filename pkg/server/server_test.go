@@ -14091,6 +14091,10 @@ sub vcl_backend_fetch {
   #SUNET-CDN-MANAGER vcl_backend_fetch
 }
 
+sub vcl_backend_refresh {
+  #SUNET-CDN-MANAGER vcl_backend_refresh
+}
+
 sub vcl_backend_response {
   #SUNET-CDN-MANAGER vcl_backend_response
 }
@@ -14140,6 +14144,10 @@ sub vcl_synth {
 
 sub vcl_backend_fetch {
   #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_refresh {
+  #SUNET-CDN-MANAGER vcl_backend_refresh
 }
 
 sub vcl_backend_response {
@@ -14198,6 +14206,10 @@ sub vcl_backend_fetch {
   #SUNET-CDN-MANAGER vcl_backend_fetch
 }
 
+sub vcl_backend_refresh {
+  #SUNET-CDN-MANAGER vcl_backend_refresh
+}
+
 sub vcl_backend_response {
   #SUNET-CDN-MANAGER vcl_backend_response
 }
@@ -14208,6 +14220,63 @@ sub vcl_backend_error {
 `,
 			expectErr:   true,
 			errContains: "duplicate macro: #SUNET-CDN-MANAGER vcl_recv",
+		},
+		{
+			// Templates stored before vcl_backend_refresh became a
+			// required macro look like this until migration 00020 adds it.
+			description: "missing vcl_backend_refresh macro",
+			template: `#SUNET-CDN-MANAGER preamble
+
+sub vcl_recv {
+  #SUNET-CDN-MANAGER vcl_recv
+}
+
+sub vcl_pipe {
+  #SUNET-CDN-MANAGER vcl_pipe
+}
+
+sub vcl_pass {
+  #SUNET-CDN-MANAGER vcl_pass
+}
+
+sub vcl_hash {
+  #SUNET-CDN-MANAGER vcl_hash
+}
+
+sub vcl_purge {
+  #SUNET-CDN-MANAGER vcl_purge
+}
+
+sub vcl_miss {
+  #SUNET-CDN-MANAGER vcl_miss
+}
+
+sub vcl_hit {
+  #SUNET-CDN-MANAGER vcl_hit
+}
+
+sub vcl_deliver {
+  #SUNET-CDN-MANAGER vcl_deliver
+}
+
+sub vcl_synth {
+  #SUNET-CDN-MANAGER vcl_synth
+}
+
+sub vcl_backend_fetch {
+  #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_response {
+  #SUNET-CDN-MANAGER vcl_backend_response
+}
+
+sub vcl_backend_error {
+  #SUNET-CDN-MANAGER vcl_backend_error
+}
+`,
+			expectErr:   true,
+			errContains: "missing required macro: #SUNET-CDN-MANAGER vcl_backend_refresh",
 		},
 		{
 			description: "unknown macro",
@@ -14266,6 +14335,10 @@ sub vcl_synth {
 
 sub vcl_backend_fetch {
   #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_refresh {
+  #SUNET-CDN-MANAGER vcl_backend_refresh
 }
 
 sub vcl_backend_response {
