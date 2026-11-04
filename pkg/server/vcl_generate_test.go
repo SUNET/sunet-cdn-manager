@@ -386,6 +386,39 @@ func TestGenerateCompleteVclBackendResponse(t *testing.T) {
 	}
 }
 
+// TestGenerateCompleteVclBackendRefresh verifies the default template has a
+// vcl_backend_refresh sub between vcl_backend_fetch and vcl_backend_response
+// (the order Vinyl calls them in) and that the manager adds no content of
+// its own to it.
+func TestGenerateCompleteVclBackendRefresh(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{
+		testOrigin(testUUID(1), "198.51.100.10", 80, false),
+		testOrigin(testUUID(1), "198.51.100.11", 443, true),
+	}
+	vcl, err := generateCompleteVcl(confTemplates, groups, origins, cdntypes.DefaultVCLTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedBackendRefreshBlock := `# end SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_refresh {
+# begin SUNET-CDN-MANAGER vcl_backend_refresh
+# end SUNET-CDN-MANAGER vcl_backend_refresh
+}
+
+sub vcl_backend_response {
+`
+	if !strings.Contains(vcl, expectedBackendRefreshBlock) {
+		t.Errorf("generated VCL missing %q:\n%s", expectedBackendRefreshBlock, vcl)
+	}
+}
+
 func TestGenerateCompleteVclBackendError(t *testing.T) {
 	confTemplates, err := newConfigTemplates()
 	if err != nil {

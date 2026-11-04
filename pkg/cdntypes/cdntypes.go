@@ -244,6 +244,7 @@ const (
 	VCLMacroDeliver         = "vcl_deliver"
 	VCLMacroSynth           = "vcl_synth"
 	VCLMacroBackendFetch    = "vcl_backend_fetch"
+	VCLMacroBackendRefresh  = "vcl_backend_refresh"
 	VCLMacroBackendResponse = "vcl_backend_response"
 	VCLMacroBackendError    = "vcl_backend_error"
 )
@@ -252,6 +253,11 @@ const (
 // VCL template. The "preamble" macro marks where the system-generated VCL
 // version, imports, and backend definitions are injected. The remaining
 // macros each correspond to a Vinyl subroutine.
+//
+// vcl_init and vcl_fini are left out on purpose. They run once when a VCL
+// is loaded or discarded rather than per request, and are mostly used to
+// set up vmod objects such as directors, which is backend wiring the
+// manager does itself in the preamble.
 var vclRequiredMacros = []string{
 	VCLMacroPreamble,
 	VCLMacroRecv,
@@ -264,6 +270,7 @@ var vclRequiredMacros = []string{
 	VCLMacroDeliver,
 	VCLMacroSynth,
 	VCLMacroBackendFetch,
+	VCLMacroBackendRefresh,
 	VCLMacroBackendResponse,
 	VCLMacroBackendError,
 }
@@ -315,6 +322,10 @@ sub vcl_synth {
 
 sub vcl_backend_fetch {
 #SUNET-CDN-MANAGER vcl_backend_fetch
+}
+
+sub vcl_backend_refresh {
+#SUNET-CDN-MANAGER vcl_backend_refresh
 }
 
 sub vcl_backend_response {

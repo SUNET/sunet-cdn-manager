@@ -712,3 +712,129 @@ func TestDomainRetirementMigration(t *testing.T) {
 		t.Fatalf("registering a retired fqdn in another org failed: %s", err)
 	}
 }
+
+// TestBackendRefreshMigration verifies that migration 00020 adds a
+// vcl_backend_refresh sub holding the new macro to every stored VCL template:
+// right before the vcl_backend_response sub when its opening line can be
+// found exactly once, otherwise at the end of the template.
+func TestBackendRefreshMigration(t *testing.T) {
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See TestVersionedOriginGroupsMigration for why the cdn schema is
+	// created here.
+	bootstrapPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA cdn"); err != nil {
+		bootstrapPool.Close()
+		t.Fatalf("creating cdn schema failed: %s", err)
+	}
+	bootstrapPool.Close()
+	pgConfig.ConnConfig.RuntimeParams["search_path"] = "cdn,public"
+
+	if err := upTo(ctx, logger, pgConfig, 19); err != nil {
+		t.Fatalf("migrating up to version 19 failed: %s", err)
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	const (
+		orgID     = "94000000-0000-0000-0000-000000000001"
+		serviceID = "94000000-0000-0000-0000-000000000002"
+	)
+	seed := []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO orgs (id, name) VALUES ($1, 'mig-org')", []any{orgID}},
+		{"INSERT INTO services (id, org_id, name, uid_range) VALUES ($1, $2, 'svc-a', '(1000010000, 1000019999)')", []any{serviceID, orgID}},
+	}
+	for _, stmt := range seed {
+		if _, err := dbPool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("seed statement failed: %s: %s", stmt.sql, err)
+		}
+	}
+
+	tests := []struct {
+		description string
+		template    string
+		expected    string
+	}{
+		{
+			description: "default template before 00020",
+			template: "#SUNET-CDN-MANAGER preamble\n\n" +
+				"sub vcl_backend_fetch {\n#SUNET-CDN-MANAGER vcl_backend_fetch\n}\n\n" +
+				"sub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\n" +
+				"sub vcl_backend_error {\n#SUNET-CDN-MANAGER vcl_backend_error\n}",
+			expected: "#SUNET-CDN-MANAGER preamble\n\n" +
+				"sub vcl_backend_fetch {\n#SUNET-CDN-MANAGER vcl_backend_fetch\n}\n\n" +
+				"sub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}\n\n" +
+				"sub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\n" +
+				"sub vcl_backend_error {\n#SUNET-CDN-MANAGER vcl_backend_error\n}",
+		},
+		{
+			description: "indented opening line with irregular spacing",
+			template:    "  sub  vcl_backend_response{\n  #SUNET-CDN-MANAGER vcl_backend_response\n  }\n",
+			expected:    "sub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}\n\n  sub  vcl_backend_response{\n  #SUNET-CDN-MANAGER vcl_backend_response\n  }\n",
+		},
+		{
+			description: "commented out opening line is not an anchor",
+			template:    "# sub vcl_backend_response {\nsub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}",
+			expected:    "# sub vcl_backend_response {\nsub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}\n\nsub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}",
+		},
+		{
+			description: "brace on its own line, no trailing newline",
+			template:    "sub vcl_backend_response\n{\n#SUNET-CDN-MANAGER vcl_backend_response\n}",
+			expected:    "sub vcl_backend_response\n{\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\nsub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}",
+		},
+		{
+			description: "brace on its own line, trailing newline",
+			template:    "sub vcl_backend_response\n{\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n",
+			expected:    "sub vcl_backend_response\n{\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\nsub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}\n",
+		},
+		{
+			description: "vcl_backend_response defined twice",
+			template:    "sub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\nsub vcl_backend_response {\n  set beresp.ttl = 1m;\n}",
+			expected:    "sub vcl_backend_response {\n#SUNET-CDN-MANAGER vcl_backend_response\n}\n\nsub vcl_backend_response {\n  set beresp.ttl = 1m;\n}\n\nsub vcl_backend_refresh {\n#SUNET-CDN-MANAGER vcl_backend_refresh\n}",
+		},
+	}
+
+	versionIDs := make([]string, len(tests))
+	for i, test := range tests {
+		versionIDs[i] = fmt.Sprintf("94000000-0000-0000-0000-%012d", 100+i)
+		_, err := dbPool.Exec(ctx, "INSERT INTO service_versions (id, service_id, version) VALUES ($1, $2, $3)", versionIDs[i], serviceID, i+1)
+		if err != nil {
+			t.Fatalf("seeding service version for %q failed: %s", test.description, err)
+		}
+		_, err = dbPool.Exec(ctx, "INSERT INTO service_vcls (service_version_id, vcl_template) VALUES ($1, $2)", versionIDs[i], test.template)
+		if err != nil {
+			t.Fatalf("seeding vcl for %q failed: %s", test.description, err)
+		}
+	}
+
+	if err := upTo(ctx, logger, pgConfig, 20); err != nil {
+		t.Fatalf("migrating to version 20 failed: %s", err)
+	}
+
+	for i, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			var got string
+			err := dbPool.QueryRow(ctx, "SELECT vcl_template FROM service_vcls WHERE service_version_id = $1", versionIDs[i]).Scan(&got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.expected {
+				t.Errorf("got %q, want %q", got, test.expected)
+			}
+		})
+	}
+}

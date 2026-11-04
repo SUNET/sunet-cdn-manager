@@ -47,6 +47,10 @@ sub vcl_backend_fetch {
   #SUNET-CDN-MANAGER vcl_backend_fetch
 }
 
+sub vcl_backend_refresh {
+  #SUNET-CDN-MANAGER vcl_backend_refresh
+}
+
 sub vcl_backend_response {
   #SUNET-CDN-MANAGER vcl_backend_response
 }

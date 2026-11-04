@@ -8671,6 +8671,14 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	// expand to empty delimiter blocks. When adding system-generated
 	// content for a new macro, add its template to configTemplates and
 	// set the corresponding entry here.
+	//
+	// vcl_backend_refresh, called when a revalidation gets a 304 response,
+	// needs no content of its own: after a merge, beresp or obj_stale
+	// return Vinyl still runs vcl_backend_response, so the rules in
+	// sunet_cdn_stored_object already apply to refreshed objects. The
+	// remaining returns skip vcl_backend_response: retry starts the fetch
+	// over, abandon and fail store nothing, and error goes through
+	// vcl_backend_error, which calls sunet_cdn_stored_object as well.
 	macroContent := map[string]string{}
 	for _, name := range cdntypes.VCLRequiredMacros() {
 		macroContent[name] = ""
