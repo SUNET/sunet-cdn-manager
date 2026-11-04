@@ -8686,8 +8686,14 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	// Use line-based replacement to avoid matching macro text inside user
 	// comments or strings — only lines where the trimmed content is exactly
 	// a macro directive are replaced.
+	//
+	// The loop terminates every line it outputs with "\n". If the template
+	// ends with a newline, SplitSeq yields a final empty piece, which the
+	// loop would then output as a stray blank line. Trimming trailing
+	// newlines from the template first avoids that and makes the result
+	// end in exactly one newline regardless of how the template ends.
 	var resultBuf strings.Builder
-	for line := range strings.SplitSeq(vclTemplate, "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(vclTemplate, "\n"), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if after, ok := strings.CutPrefix(trimmed, cdntypes.VCLMacroPrefix); ok {
 			macroName := strings.TrimSpace(after)
@@ -8706,7 +8712,7 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 		resultBuf.WriteByte('\n')
 	}
 
-	return strings.TrimRight(resultBuf.String(), "\n"), nil
+	return resultBuf.String(), nil
 }
 
 type haproxyConfInput struct {

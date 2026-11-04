@@ -459,3 +459,31 @@ func TestGenerateCompleteVclPreamble(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateCompleteVclTrailingNewline verifies the generated VCL ends in
+// exactly one newline no matter how the stored template ends.
+func TestGenerateCompleteVclTrailingNewline(t *testing.T) {
+	confTemplates, err := newConfigTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []cdntypes.OriginGroup{testGroup(1, "default", true, nil, 0)}
+	origins := []cdntypes.Origin{testOrigin(testUUID(1), "10.0.0.1", 443, true)}
+
+	base := strings.TrimRight(cdntypes.DefaultVCLTemplate, "\n")
+	for name, suffix := range map[string]string{
+		"none":     "",
+		"one":      "\n",
+		"multiple": "\n\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			vcl, err := generateCompleteVcl(confTemplates, groups, origins, base+suffix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(vcl, "\n") || strings.HasSuffix(vcl, "\n\n") {
+				t.Errorf("want exactly one trailing newline, got:\n%q", vcl)
+			}
+		})
+	}
+}
