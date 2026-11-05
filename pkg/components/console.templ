@@ -1084,8 +1084,14 @@ templ addOriginGroupButton(orgName string, serviceName string, index string) {
 
 templ CreateServiceVersionContent(serviceName string, serviceID pgtype.UUID, orgName string, domains []cdntypes.Domain, submittedData *cdntypes.CreateServiceVersionForm, vclTemplateValue string, cloneData cdntypes.ServiceVersionCloneData, err error, errDetails string) {
 	if err != nil {
+		{{ identical, isIdentical := errors.AsType[*cdnerrors.IdenticalServiceVersionError](err) }}
 		<article id="error-message" aria-label="Error" role="alert">
 			switch  {
+				case isIdentical:
+					<div>
+						<strong>Not created:</strong> Identical to version { strconv.FormatInt(identical.Version, 10) }, which already exists.
+						<a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/%d", orgName, serviceID.String(), identical.Version)) }>View version { strconv.FormatInt(identical.Version, 10) }</a>
+					</div>
 				case errors.Is(err, cdnerrors.ErrInvalidFormData):
 					<div><strong>Error:</strong> Invalid form data</div>
 				case errors.Is(err, cdnerrors.ErrInvalidVCL):

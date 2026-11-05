@@ -15,6 +15,7 @@ var (
 	ErrNotFound                    = errors.New("resource not found")
 	ErrUnprocessable               = errors.New("resource not processable")
 	ErrAlreadyExists               = errors.New("resource already exists")
+	ErrIdenticalServiceVersion     = errors.New("identical service version exists")
 	ErrCheckViolation              = errors.New("invalid input data")
 	ErrExclutionViolation          = errors.New("conflicting data in database")
 	ErrBadPassword                 = errors.New("bad password")
@@ -229,6 +230,23 @@ func (e *DomainsNotVerifiedError) Unwrap() error {
 
 func (e *DomainsNotVerifiedError) UserMessage() string {
 	return e.Error()
+}
+
+// IdenticalServiceVersionError identifies as ErrIdenticalServiceVersion and
+// reports that submitted service version content is identical to an
+// existing version of the same service, so no version was created. The API
+// answers such a submission with the existing version instead; the console
+// shows this on the create-version form.
+type IdenticalServiceVersionError struct {
+	Version int64
+}
+
+func (e *IdenticalServiceVersionError) Error() string {
+	return "identical to existing service version " + strconv.FormatInt(e.Version, 10)
+}
+
+func (e *IdenticalServiceVersionError) Unwrap() error {
+	return ErrIdenticalServiceVersion
 }
 
 // VCLValidationError identifies as ErrInvalidVCL error but also includes a

@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -2290,10 +2291,17 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			// page the user filled in are two independent name lookups that
 			// can disagree, and the version lands on a service the user
 			// never saw.
-			_, err = insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgIdent.id.String(), serviceIdent.id.String(), formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
+			insertRes, err := insertServiceVersion(ctx, logger, confTemplates, ad, dbc, vclValidator, orgIdent.id.String(), serviceIdent.id.String(), formData.Domains, conditionalGroups, defaultGroupInput, false, formData.VCLTemplate, formData.Description)
+			if err == nil && insertRes.existing {
+				// Nothing was created. Show the form again, as
+				// submitted, pointing at the version it matches,
+				// rather than redirecting as if a version had been
+				// added.
+				err = &cdnerrors.IdenticalServiceVersionError{Version: insertRes.version}
+			}
 			if err != nil {
 				switch {
-				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation):
+				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation), errors.Is(err, cdnerrors.ErrIdenticalServiceVersion):
 					errDetails := ""
 					if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
 						errDetails = ve.Details
@@ -8003,6 +8011,10 @@ type serviceVersionInsertResult struct {
 	originIDs     []pgtype.UUID
 	deactivatedID *pgtype.UUID
 	vclID         pgtype.UUID
+	// existing is set when the submitted content matched an existing
+	// version, which is what the other fields then describe. Only
+	// versionID, version, active and description are filled in for it.
+	existing bool
 }
 
 func deactivatePreviousServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceIdent serviceIdentifier) (*pgtype.UUID, error) {
@@ -8035,10 +8047,134 @@ func deactivatePreviousServiceVersionTx(ctx context.Context, tx pgx.Tx, serviceI
 	return deactivatedServiceVersionID, nil
 }
 
+// serviceVersionForeignKeys lists migrations.ServiceVersionForeignKeys for
+// SET CONSTRAINTS, which insertServiceVersionTx uses to insert a version's
+// rows before its service_versions row.
+var serviceVersionForeignKeys = strings.Join(migrations.ServiceVersionForeignKeys, ", ")
+
+// errIdenticalServiceVersion rolls back the savepoint in
+// insertServiceVersionTx when the submitted content matches an existing
+// version. It never leaves insertServiceVersionTx.
+var errIdenticalServiceVersion = errors.New("service version content matches an existing version")
+
+// insertServiceVersionTx creates a service version, unless its content is
+// identical to an existing version of the service (see migration 00021 for
+// what counts as content). In that case nothing is inserted, the existing
+// version is returned with existing set, and it is activated if active is
+// requested. A matching version is never deactivated.
+//
+// The caller must hold the services row FOR UPDATE. That serializes every
+// version insert for the service, so the lookup of a matching version below
+// cannot race with another insert of the same content.
 func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string, description string) (serviceVersionInsertResult, error) {
-	var serviceVersionID pgtype.UUID
+	// The content hash is computed by the database from the version's
+	// rows, so the rows are inserted before the service_versions row they
+	// point to, which carries the hash. The foreign keys are deferred for
+	// that and set back to immediate below, which checks them right away
+	// rather than at commit.
+	_, err := tx.Exec(ctx, "SET CONSTRAINTS "+serviceVersionForeignKeys+" DEFERRED")
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to defer service version foreign keys: %w", err)
+	}
+
+	var res serviceVersionInsertResult
+	var existing serviceVersionInsertResult
+
+	// Everything is written in a savepoint, so content matching an
+	// existing version is undone completely, the version_counter bump
+	// included: a duplicate does not use up a version number. Because
+	// BeginFunc is given tx, an open transaction, rather than the pool, it
+	// starts a SAVEPOINT instead of a new transaction: returning an error
+	// rolls back to the savepoint, and the outer transaction carries on
+	// with the service row still locked.
+	err = pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) error {
+		var err error
+		res, err = insertServiceVersionRowsTx(ctx, sp, orgIdent, serviceIdent, domains, conditionalGroups, defaultGroup, active, vclTemplate, description)
+		if err != nil {
+			return err
+		}
+
+		var contentHash []byte
+		err = sp.QueryRow(ctx, "SELECT service_version_content_hash($1)", res.versionID).Scan(&contentHash)
+		if err != nil {
+			return fmt.Errorf("unable to hash service version content: %w", err)
+		}
+
+		err = sp.QueryRow(
+			ctx,
+			"SELECT id, version, active, description FROM service_versions WHERE service_id=$1 AND content_hash=$2",
+			serviceIdent.id,
+			contentHash,
+		).Scan(&existing.versionID, &existing.version, &existing.active, &existing.description)
+		switch {
+		case err == nil:
+			return errIdenticalServiceVersion
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("unable to look up service version by content: %w", err)
+		}
+
+		if active {
+			res.deactivatedID, err = deactivatePreviousServiceVersionTx(ctx, sp, serviceIdent)
+			if err != nil {
+				return err
+			}
+		}
+
+		_, err = sp.Exec(
+			ctx,
+			"INSERT INTO service_versions (id, service_id, version, active, description, content_hash) VALUES ($1, $2, $3, $4, $5, $6)",
+			res.versionID,
+			serviceIdent.id,
+			res.version,
+			active,
+			description,
+			contentHash,
+		)
+		if err != nil {
+			return fmt.Errorf("unable to INSERT service version: %w", err)
+		}
+
+		return nil
+	})
+	identical := errors.Is(err, errIdenticalServiceVersion)
+	if err != nil && !identical {
+		return serviceVersionInsertResult{}, err
+	}
+
+	_, err = tx.Exec(ctx, "SET CONSTRAINTS "+serviceVersionForeignKeys+" IMMEDIATE")
+	if err != nil {
+		return serviceVersionInsertResult{}, fmt.Errorf("unable to check service version foreign keys: %w", err)
+	}
+
+	if !identical {
+		return res, nil
+	}
+
+	existing.existing = true
+	if active && !existing.active {
+		// Through activateServiceVersionTx rather than flipping the flag:
+		// an existing version gets the same domain checks as any other
+		// activation.
+		_, err = activateServiceVersionTx(ctx, tx, serviceIdent, existing.version)
+		if err != nil {
+			return serviceVersionInsertResult{}, err
+		}
+		existing.active = true
+	}
+
+	return existing, nil
+}
+
+// insertServiceVersionRowsTx bumps the service's version counter and inserts
+// the domain, origin group, origin and VCL rows of a new version, all pointing
+// at a new version id. It does not insert the service_versions row itself,
+// see insertServiceVersionTx.
+func insertServiceVersionRowsTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifier, serviceIdent serviceIdentifier, domains []cdntypes.DomainString, conditionalGroups []cdntypes.InputConditionalOriginGroup, defaultGroup cdntypes.InputDefaultOriginGroup, active bool, vclTemplate string, description string) (serviceVersionInsertResult, error) {
+	// The id is generated here rather than by the column default, since
+	// the rows below point to it before the service_versions row exists.
+	// NewV4 matches the gen_random_uuid() the other tables default to.
+	serviceVersionID := pgtype.UUID{Bytes: uuid.NewV4(), Valid: true}
 	var versionCounter int64
-	var deactivatedServiceVersionID *pgtype.UUID
 
 	err := tx.QueryRow(
 		ctx,
@@ -8047,26 +8183,6 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 	).Scan(&versionCounter)
 	if err != nil {
 		return serviceVersionInsertResult{}, fmt.Errorf("unable to UPDATE version_counter for service version: %w", err)
-	}
-
-	// If the new version is expected to be active we need to deactivate the currently active version
-	if active {
-		deactivatedServiceVersionID, err = deactivatePreviousServiceVersionTx(ctx, tx, serviceIdent)
-		if err != nil {
-			return serviceVersionInsertResult{}, err
-		}
-	}
-
-	err = tx.QueryRow(
-		ctx,
-		"INSERT INTO service_versions (service_id, version, active, description) VALUES ($1, $2, $3, $4) RETURNING id",
-		serviceIdent.id,
-		versionCounter,
-		active,
-		description,
-	).Scan(&serviceVersionID)
-	if err != nil {
-		return serviceVersionInsertResult{}, fmt.Errorf("unable to INSERT service version: %w", err)
 	}
 
 	var serviceDomainIDs []pgtype.UUID
@@ -8169,14 +8285,13 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 	}
 
 	res := serviceVersionInsertResult{
-		versionID:     serviceVersionID,
-		version:       versionCounter,
-		domainIDs:     serviceDomainIDs,
-		originIDs:     serviceOriginIDs,
-		deactivatedID: deactivatedServiceVersionID,
-		vclID:         serviceVclID,
-		active:        active,
-		description:   description,
+		versionID:   serviceVersionID,
+		version:     versionCounter,
+		domainIDs:   serviceDomainIDs,
+		originIDs:   serviceOriginIDs,
+		vclID:       serviceVclID,
+		active:      active,
+		description: description,
 	}
 
 	return res, nil
@@ -8309,6 +8424,12 @@ func insertServiceVersion(ctx context.Context, logger *zerolog.Logger, confTempl
 				case "service_domains_service_version_id_domain_id_key":
 					return serviceVersionInsertResult{}, cdnerrors.ErrUnprocessable
 				case "service_versions_service_id_version_key", "service_versions_active_only_1_true":
+					return serviceVersionInsertResult{}, cdnerrors.ErrAlreadyExists
+				case "service_versions_service_id_content_hash_key":
+					// Not expected: inserts for a service are
+					// serialized on its row lock and look for a
+					// matching version first. Reported like the
+					// other already-exists races if it happens.
 					return serviceVersionInsertResult{}, cdnerrors.ErrAlreadyExists
 				}
 			case pgCheckViolation:
@@ -10363,11 +10484,20 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 		huma.Register(
 			api,
 			huma.Operation{
-				OperationID:   huma.GenerateOperationID(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
-				Summary:       huma.GenerateSummary(http.MethodPost, postServiceVersionsPath, &serviceVersionOutput{}),
+				OperationID:   huma.GenerateOperationID(http.MethodPost, postServiceVersionsPath, &serviceVersionCreateOutput{}),
+				Summary:       huma.GenerateSummary(http.MethodPost, postServiceVersionsPath, &serviceVersionCreateOutput{}),
+				Description:   "Creates a service version (201). If the submitted content is identical to an existing version of the service, no version is created and that version is returned instead (200), activated first if active is set. The description is not part of the content and is not changed on the existing version.",
 				Method:        http.MethodPost,
 				Path:          postServiceVersionsPath,
 				DefaultStatus: http.StatusCreated,
+				Responses: map[string]*huma.Response{
+					strconv.Itoa(http.StatusOK): {
+						Description: "Identical to an existing version, which is returned",
+						Content: map[string]*huma.MediaType{
+							"application/json": {Schema: api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[cdntypes.ServiceVersion](), true, "")},
+						},
+					},
+				},
 			},
 			func(ctx context.Context, input *struct {
 				Service string `path:"service" doc:"Service name or ID" minLength:"1" maxLength:"63"`
@@ -10381,7 +10511,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					Description             string                                 `json:"description,omitempty" doc:"Description of the service version" maxLength:"512"`
 				}
 			},
-			) (*serviceVersionOutput, error) {
+			) (*serviceVersionCreateOutput, error) {
 				logger := zlog.Ctx(ctx)
 
 				ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
@@ -10417,7 +10547,10 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					logger.Err(err).Msg("unable to add service version")
 					return nil, apiError(err)
 				}
-				resp := &serviceVersionOutput{}
+				resp := &serviceVersionCreateOutput{Status: http.StatusCreated}
+				if serviceVersionInsertRes.existing {
+					resp.Status = http.StatusOK
+				}
 				resp.Body.ID = serviceVersionInsertRes.versionID
 				resp.Body.Version = serviceVersionInsertRes.version
 				resp.Body.Active = serviceVersionInsertRes.active
@@ -11343,8 +11476,12 @@ type servicesOutput struct {
 	Body []cdntypes.Service
 }
 
-type serviceVersionOutput struct {
-	Body cdntypes.ServiceVersion
+// serviceVersionCreateOutput is the result of creating a service version,
+// with the status chosen per request: 201 for a new version, 200 when the
+// submitted content matched an existing version, which is returned instead.
+type serviceVersionCreateOutput struct {
+	Status int
+	Body   cdntypes.ServiceVersion
 }
 
 type serviceVersionVCLOutput struct {

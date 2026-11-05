@@ -58,6 +58,11 @@ const (
 	// Constraint name from migration 00006_name_not_uuid.sql
 	pgConstraintValidName = "valid_name"
 
+	// Test data inserts service versions directly, before their rows exist,
+	// with a placeholder content_hash. This replaces it with the real one,
+	// see migration 00021_service_version_content_hash.sql.
+	rehashServiceVersionsSQL = "UPDATE service_versions SET content_hash = service_version_content_hash(id)"
+
 	// User that connects to the database
 	dbUser     = "cdn"
 	dbPassword = "cdn-password"
@@ -153,33 +158,33 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// Service versions
 		// org1, last version is active
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org1-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000001', id, version_counter FROM services WHERE name='org1-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000001', id, version_counter, sha256('00000004-0000-0000-0000-000000000001'::bytea) FROM services WHERE name='org1-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org1-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000002', id, version_counter FROM services WHERE name='org1-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000002', id, version_counter, sha256('00000004-0000-0000-0000-000000000002'::bytea) FROM services WHERE name='org1-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org1-service1'",
-		"INSERT INTO service_versions (id, service_id, version, active) SELECT '00000004-0000-0000-0000-000000000003', id, version_counter, TRUE FROM services WHERE name='org1-service1'",
+		"INSERT INTO service_versions (id, service_id, version, active, content_hash) SELECT '00000004-0000-0000-0000-000000000003', id, version_counter, TRUE, sha256('00000004-0000-0000-0000-000000000003'::bytea) FROM services WHERE name='org1-service1'",
 
 		// org2, second version is active
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org2-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000004', id, version_counter FROM services WHERE name='org2-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000004', id, version_counter, sha256('00000004-0000-0000-0000-000000000004'::bytea) FROM services WHERE name='org2-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org2-service1'",
-		"INSERT INTO service_versions (id, service_id, version, active) SELECT '00000004-0000-0000-0000-000000000005', id, version_counter, TRUE FROM services WHERE name='org2-service1'",
+		"INSERT INTO service_versions (id, service_id, version, active, content_hash) SELECT '00000004-0000-0000-0000-000000000005', id, version_counter, TRUE, sha256('00000004-0000-0000-0000-000000000005'::bytea) FROM services WHERE name='org2-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org2-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000006', id, version_counter FROM services WHERE name='org2-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000006', id, version_counter, sha256('00000004-0000-0000-0000-000000000006'::bytea) FROM services WHERE name='org2-service1'",
 
 		// org3, no version is active
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org3-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000007', id, version_counter FROM services WHERE name='org3-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000007', id, version_counter, sha256('00000004-0000-0000-0000-000000000007'::bytea) FROM services WHERE name='org3-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org3-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000008', id, version_counter FROM services WHERE name='org3-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000008', id, version_counter, sha256('00000004-0000-0000-0000-000000000008'::bytea) FROM services WHERE name='org3-service1'",
 
 		"UPDATE services SET version_counter = version_counter + 1 WHERE name='org3-service1'",
-		"INSERT INTO service_versions (id, service_id, version) SELECT '00000004-0000-0000-0000-000000000009', id, version_counter FROM services WHERE name='org3-service1'",
+		"INSERT INTO service_versions (id, service_id, version, content_hash) SELECT '00000004-0000-0000-0000-000000000009', id, version_counter, sha256('00000004-0000-0000-0000-000000000009'::bytea) FROM services WHERE name='org3-service1'",
 
 		// Service origin groups (one default group per service version)
 		"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000001', true, 'default', 0)",
@@ -217,13 +222,27 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// org1-service1-version3
 		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000001', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000003', '198.51.100.10', 80, false)",
 		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000002', '00000004-0000-0000-0000-000000000003', '00000020-0000-0000-0000-000000000003', '198.51.100.11', 443, true)",
-		// org1-service1-version2
-		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000002', '00000020-0000-0000-0000-000000000002', '198.51.100.10', 80, false)",
+		// org1-service1-version2 (port 8080 so its content differs from
+		// version1: a service cannot have two identical versions)
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000003', '00000004-0000-0000-0000-000000000002', '00000020-0000-0000-0000-000000000002', '198.51.100.10', 8080, false)",
 		// org1-service1-version1
 		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000004', '00000004-0000-0000-0000-000000000001', '00000020-0000-0000-0000-000000000001', '198.51.100.10', 80, false)",
 
 		// org2-service1-version2
 		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000005', '00000004-0000-0000-0000-000000000005', '00000020-0000-0000-0000-000000000005', '198.51.100.20', 80, false)",
+
+		// The org2 and org3 versions have no VCL row and no domains.
+		// Without an origin each, the versions below would only have an
+		// empty default group, identical to version 1 of their service
+		// (and in org3 to each other), which UNIQUE (service_id,
+		// content_hash) rejects when the fixtures are rehashed. A
+		// different origin each keeps them apart.
+		// org2-service1-version3
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000006', '00000004-0000-0000-0000-000000000006', '00000020-0000-0000-0000-000000000006', '198.51.100.21', 80, false)",
+		// org3-service1-version2
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000007', '00000004-0000-0000-0000-000000000008', '00000020-0000-0000-0000-000000000008', '198.51.100.30', 80, false)",
+		// org3-service1-version3
+		"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-000000000008', '00000004-0000-0000-0000-000000000009', '00000020-0000-0000-0000-000000000009', '198.51.100.31', 80, false)",
 
 		// Auth providers
 		"INSERT INTO auth_providers (id, name) VALUES ('00000010-0000-0000-0000-000000000001', 'local')",
@@ -500,6 +519,14 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 			if err != nil {
 				return err
 			}
+		}
+
+		// The versions above are inserted with a placeholder hash
+		// because their rows do not exist yet at that point. Now that
+		// they do, store the real one, as the manager does.
+		_, err := tx.Exec(ctx, rehashServiceVersionsSQL)
+		if err != nil {
+			return err
 		}
 
 		gorillaAuthKey, err := generateRandomKey(32)
@@ -6486,10 +6513,13 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
+			// Port 8080 rather than 80 so the content differs from
+			// "successful superuser request with name": identical
+			// content would return that version instead (200).
 			defaultGroup: cdntypes.InputDefaultOriginGroup{
 				Origins: []cdntypes.InputOrigin{
 					{Host: "192.51.100.20", Port: 443, TLS: true},
-					{Host: "192.51.100.21", Port: 80, TLS: false},
+					{Host: "192.51.100.21", Port: 8080, TLS: false},
 				},
 			},
 			expectedStatus:  http.StatusCreated,
@@ -6681,12 +6711,18 @@ func TestPostServiceVersion(t *testing.T) {
 			orgNameOrID:     "org1",
 			serviceNameOrID: "00000003-0000-0000-0000-000000000001",
 			domains:         []string{"example.com", "example.se"},
+			// The ::ffff: (IPv4-mapped IPv6) default origins below are
+			// stored as plain IPv4, the same as in "successful superuser
+			// request with conditional origin group". With beta's origin
+			// also 198.51.100.30 as there, the content would be identical
+			// and this would get that version back (200) instead of a
+			// new one, so beta uses 198.51.100.31.
 			conditionalGroups: []cdntypes.InputConditionalOriginGroup{
 				{
 					Name:      "beta",
 					Condition: "req.http.host == \"example.com\"",
 					Origins: []cdntypes.InputOrigin{
-						{Host: "198.51.100.30", Port: 443, TLS: true},
+						{Host: "198.51.100.31", Port: 443, TLS: true},
 					},
 				},
 			},
@@ -8384,11 +8420,13 @@ func TestCacheNodeConfigExcludesDisabledServiceNewVersion(t *testing.T) {
 		{"UPDATE services SET time_disabled = now() WHERE id = $1", []any{org1Service1ID}},
 		{"UPDATE service_versions SET active = false WHERE id = '00000004-0000-0000-0000-000000000003'", nil},
 		{"UPDATE services SET version_counter = version_counter + 1 WHERE id = $1", []any{org1Service1ID}},
-		{"INSERT INTO service_versions (id, service_id, version, active) SELECT '00000004-0000-0000-0000-0000000000f1', id, version_counter, TRUE FROM services WHERE id = $1", []any{org1Service1ID}},
+		{"INSERT INTO service_versions (id, service_id, version, active, content_hash) SELECT '00000004-0000-0000-0000-0000000000f1', id, version_counter, TRUE, sha256('00000004-0000-0000-0000-0000000000f1'::bytea) FROM services WHERE id = $1", []any{org1Service1ID}},
 		{"INSERT INTO service_origin_groups (id, service_version_id, default_group, name, position) VALUES ('00000020-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', true, 'default', 0)", nil},
 		{"INSERT INTO service_origins (id, service_version_id, origin_group_id, host, port, tls) VALUES ('00000009-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', '00000020-0000-0000-0000-0000000000f1', '198.51.100.10', 80, false)", nil},
 		{"INSERT INTO service_domains (id, service_version_id, domain_id) VALUES ('00000008-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', '00000015-0000-0000-0000-000000000001')", nil},
 		{"INSERT INTO service_vcls (id, service_version_id, vcl_template) VALUES ('00000007-0000-0000-0000-0000000000f1', '00000004-0000-0000-0000-0000000000f1', $1)", []any{vclTemplate}},
+		// Replace the placeholder hash now that the version's rows exist.
+		{rehashServiceVersionsSQL, nil},
 	}
 
 	for _, stmt := range stmts {

@@ -31,6 +31,17 @@ func (gl gooseLogger) Printf(format string, v ...any) {
 //go:embed files/*.sql
 var embedMigrations embed.FS
 
+// ServiceVersionForeignKeys are the foreign keys from a service version's
+// rows to its service_versions row. Migration 00021 made them DEFERRABLE
+// INITIALLY IMMEDIATE so that the manager can insert those rows first and
+// the service_versions row, with the hash of their content, last.
+var ServiceVersionForeignKeys = []string{
+	"service_domains_service_version_id_fkey",
+	"service_origin_groups_service_version_id_fkey",
+	"service_origins_service_version_id_fkey",
+	"service_vcls_service_version_id_fkey",
+}
+
 func Up(ctx context.Context, logger zerolog.Logger, pgConfig *pgxpool.Config) error {
 	return upTo(ctx, logger, pgConfig, goose.MaxVersion)
 }

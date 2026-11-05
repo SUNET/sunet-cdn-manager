@@ -107,12 +107,20 @@ type postResult struct {
 // service through the API and reports the outcome on the returned channel. It
 // runs on its own goroutine, so it reports errors instead of using t.
 func postServiceVersionAsync(ctx context.Context, serverURL string, username string, password string, serviceID string) <-chan postResult {
-	return postServiceVersionForOrgAsync(ctx, serverURL, username, password, serviceID, "00000002-0000-0000-0000-000000000001")
+	return postServiceVersionWithOriginAsync(ctx, serverURL, username, password, serviceID, "00000002-0000-0000-0000-000000000001", "198.51.100.20")
 }
 
 // postServiceVersionForOrgAsync is postServiceVersionAsync with the org named
 // in the request body chosen by the caller.
 func postServiceVersionForOrgAsync(ctx context.Context, serverURL string, username string, password string, serviceID string, orgID string) <-chan postResult {
+	return postServiceVersionWithOriginAsync(ctx, serverURL, username, password, serviceID, orgID, "198.51.100.20")
+}
+
+// postServiceVersionWithOriginAsync is postServiceVersionForOrgAsync with the
+// host of the single origin chosen by the caller. Identical submissions return
+// the existing version rather than creating one, so a test that needs several
+// new versions gives each its own origin host.
+func postServiceVersionWithOriginAsync(ctx context.Context, serverURL string, username string, password string, serviceID string, orgID string, originHost string) <-chan postResult {
 	resCh := make(chan postResult, 1)
 	go func() {
 		body, err := json.Marshal(struct {
@@ -124,7 +132,7 @@ func postServiceVersionForOrgAsync(ctx context.Context, serverURL string, userna
 			Org:     orgID,
 			Domains: []string{"example.com"},
 			DefaultOriginGroup: cdntypes.InputDefaultOriginGroup{
-				Origins: []cdntypes.InputOrigin{{Host: "198.51.100.20", Port: 443, TLS: true}},
+				Origins: []cdntypes.InputOrigin{{Host: originHost, Port: 443, TLS: true}},
 			},
 			VCLTemplate: cdntypes.DefaultVCLTemplate,
 		})
@@ -381,8 +389,10 @@ func TestPostServiceVersionConcurrentValidation(t *testing.T) {
 	}
 	before := versionCount()
 
-	first := postServiceVersionAsync(ctx, ts.URL, "admin", validAdminPassword, serviceID)
-	second := postServiceVersionAsync(ctx, ts.URL, "admin", validAdminPassword, serviceID)
+	// Different origins, so both are new versions. Identical concurrent
+	// submissions are covered by TestPostServiceVersionConcurrentDuplicates.
+	first := postServiceVersionWithOriginAsync(ctx, ts.URL, "admin", validAdminPassword, serviceID, "00000002-0000-0000-0000-000000000001", "198.51.100.20")
+	second := postServiceVersionWithOriginAsync(ctx, ts.URL, "admin", validAdminPassword, serviceID, "00000002-0000-0000-0000-000000000001", "198.51.100.21")
 	waitForSignal(t, validator.seen, "the first validator request")
 	waitForSignal(t, validator.seen, "the second validator request while the first is still held")
 
