@@ -139,6 +139,7 @@ run at the top level directory prior to commiting:
 
 * `gofumpt -l -w .` (see [gofumpt](https://github.com/mvdan/gofumpt))
 * `go vet ./...`
+* `go fix ./...`
 * `staticcheck ./...` (see [staticcheck](https://staticcheck.io))
 * `gosec ./...` (see [gosec](https://github.com/securego/gosec))
 * `golangci-lint run` (see [golangci-lint](https://golangci-lint.run))
