@@ -37,6 +37,9 @@ var unmappedSentinels = map[error]string{
 	// Only raised in the OIDC login flow, which renders its own page.
 	cdnerrors.ErrKeyCloakEmailUnverified: "only raised in the OIDC login flow, which renders its own page",
 	cdnerrors.ErrKeyCloakUserExists:      "only raised in the OIDC login flow, which renders its own page",
+	// The API answers identical content with the existing version (200),
+	// only the console reports it, on its own form.
+	cdnerrors.ErrIdenticalServiceVersion: "API returns the existing version instead, only the console shows it",
 }
 
 func TestLookupExpectedError(t *testing.T) {
