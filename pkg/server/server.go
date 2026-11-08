@@ -147,6 +147,7 @@ const (
 	consoleServiceQuotaBelowUsage    = "Cannot be lower than the current number of services"
 	consoleDomainQuotaBelowUsage     = "Cannot be lower than the current number of domains"
 	consoleTokenQuotaBelowUsage      = "Cannot be lower than the current number of client tokens"
+	consoleQuotaNotNumber            = "Must be a whole number 0 or greater"
 	consoleDeleteRequiresSuperuser   = "Service deletion requires an operator. You can disable a service yourself, which takes it offline and clears its cache, but a disabled service keeps its IP addresses, UID range and quota slot. Only deletion releases those, and only an operator can delete. Contact an administrator if this service should be removed."
 	consoleServiceNotFound           = "Service not found"
 	consoleActivationFailed          = "Service version activation failed"
@@ -205,6 +206,11 @@ const (
 
 	keycloakPath         = "/oidc/keycloak"
 	keycloakCallbackPath = keycloakPath + "/callback"
+)
+
+const (
+	consoleServiceVersionQuotaBelowUsage = "Cannot be lower than the current number of service versions"
+	consoleServiceVersionQuotaFailed     = "Version quota update failed"
 )
 
 var (
@@ -598,6 +604,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 
 func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, org orgIdentifier) (cdntypes.DashboardData, error) {
 	var serviceQuota, servicesUsed, domainQuota, domainsUsed, clientTokenQuota, clientTokensUsed int64
+	var serviceVersions []cdntypes.ServiceVersionUsage
 
 	// Must be either superuser or a member of an org
 	if !ad.Superuser && ad.OrgID == nil {
@@ -633,6 +640,25 @@ func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData,
 			return fmt.Errorf("unable to get quota usage: %w", err)
 		}
 
+		// Same transaction so the per-service counts are consistent with
+		// the org-level numbers above.
+		rows, err := tx.Query(
+			ctx,
+			`SELECT id, name, (SELECT count(*) FROM service_versions WHERE service_id = services.id), version_quota, time_disabled IS NOT NULL FROM services WHERE org_id = $1 ORDER BY name`,
+			org.id,
+		)
+		if err != nil {
+			return fmt.Errorf("unable to query service version usage: %w", err)
+		}
+		serviceVersions, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (cdntypes.ServiceVersionUsage, error) {
+			var u cdntypes.ServiceVersionUsage
+			err := row.Scan(&u.ID, &u.Name, &u.Used, &u.Quota, &u.Disabled)
+			return u, err
+		})
+		if err != nil {
+			return fmt.Errorf("unable to read service version usage: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -642,6 +668,8 @@ func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData,
 	return cdntypes.DashboardData{
 		ResourceAccess:   true,
 		OrgDashboard:     true,
+		OrgName:          org.name,
+		ServiceVersions:  serviceVersions,
 		ServiceUsed:      servicesUsed,
 		ServiceQuota:     serviceQuota,
 		DomainUsed:       domainsUsed,
@@ -1971,8 +1999,6 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		title := "Service"
-
 		ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
 		if !ok {
 			logger.Error().Msg(consoleMissingAuthData)
@@ -1980,27 +2006,138 @@ func consoleServiceHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		serviceVersions, serviceIdent, err := selectServiceVersions(ctx, dbc, ad, serviceName, orgName)
-		if err != nil {
-			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, consoleServiceRenderErr)
+		renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgName, serviceName, nil, "")
+	}
+}
+
+// renderConsoleServicePage renders the service page. It is shared by the page
+// handler and the version quota form handler's error path so the two cannot
+// drift. quotaInput is nil to prefill the form with the current quota, or the
+// submitted value when re-rendering after a rejected submission, in which case
+// quotaErr is the inline field error.
+func renderConsoleServicePage(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, orgName string, serviceNameOrID string, quotaInput *string, quotaErr string) {
+	title := "Service"
+
+	serviceVersions, serviceIdent, versionQuota, err := selectServiceVersions(ctx, dbc, ad, serviceNameOrID, orgName)
+	if err != nil {
+		renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, title, consoleServiceNotFound, err, consoleServiceRenderErr)
+		return
+	}
+
+	input := strconv.FormatInt(versionQuota, 10)
+	if quotaInput != nil {
+		input = *quotaInput
+	}
+
+	// ServiceContent renders create-version, clone and activate links,
+	// which address the service by UUID. Use the identifier
+	// selectServiceVersions resolved rather than looking the name up
+	// again: its FOR SHARE lock is released when that transaction
+	// commits, so a second lookup could land on a different service that
+	// has since taken the name -- which is the very substitution these
+	// links exist to prevent. It is valid even when the version list is
+	// empty, which is exactly the case a second lookup would have been
+	// needed for.
+	view := components.ServiceVersionQuotaView{
+		Used:      int64(len(serviceVersions)),
+		Quota:     versionQuota,
+		Superuser: ad.Superuser,
+		Input:     input,
+		Error:     quotaErr,
+	}
+	err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceIdent.id, serviceVersions, view), serviceIdent.name)
+	if err != nil {
+		logger.Err(err).Msg("unable to render service page")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+}
+
+// consoleServiceVersionQuotaHandler lets an operator change a service's
+// version quota. There is no flash message on success: flashes are stored per
+// org, so one could show up on a sibling service's page. The redirect back to
+// the service page and its updated usage line are the confirmation.
+func consoleServiceVersionQuotaHandler(dbc *dbConn) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := hlog.FromRequest(r)
+		ctx := r.Context()
+
+		ad, _, ok := consoleSuperuserCheck(w, r)
+		if !ok {
 			return
 		}
 
-		// ServiceContent renders create-version, clone and activate links,
-		// which address the service by UUID. Use the identifier
-		// selectServiceVersions resolved rather than looking the name up
-		// again: its FOR SHARE lock is released when that transaction
-		// commits, so a second lookup could land on a different service that
-		// has since taken the name -- which is the very substitution these
-		// links exist to prevent. It is valid even when the version list is
-		// empty, which is exactly the case a second lookup would have been
-		// needed for.
-		err = renderConsolePage(ctx, dbc, w, r, ad, title, orgName, components.ServiceContent(orgName, serviceIdent.id, serviceVersions), serviceIdent.name)
-		if err != nil {
-			logger.Err(err).Msg("unable to render service page")
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		orgName := chi.URLParam(r, "org")
+		if orgName == "" {
+			logger.Error().Msg(consoleMissingOrgPath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
+
+		serviceNameOrID := chi.URLParam(r, "service")
+		if serviceNameOrID == "" {
+			logger.Error().Msg(consoleMissingServicePath)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+
+		orgIdent, serviceIdent, err := resolveConsoleService(ctx, dbc, ad, orgName, serviceNameOrID)
+		if err != nil {
+			renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Service", consoleServiceNotFound, err, consoleServiceRenderErr)
+			return
+		}
+
+		if err := parseLimitedForm(w, r, formMaxSize); err != nil {
+			logger.Err(err).Msg("unable to parse version-quota POST form")
+			return
+		}
+
+		// Re-rendered below with the user's own text, so a value that
+		// does not decode still comes back as typed.
+		submitted := r.PostForm.Get("version-quota")
+
+		// The decoder turns an empty or missing value into 0, which
+		// would pass min=0 and freeze a service without versions even
+		// though no number was given. Only an explicit "0" may do that.
+		if submitted == "" {
+			renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgIdent.name, serviceIdent.id.String(), &submitted, consoleQuotaNotNumber)
+			return
+		}
+
+		var formData struct {
+			VersionQuota int64 `schema:"version-quota" validate:"min=0"`
+		}
+		err = schemaDecoder.Decode(&formData, r.PostForm)
+		if err != nil {
+			logger.Err(err).Msg("unable to decode POST version-quota form data")
+			renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgIdent.name, serviceIdent.id.String(), &submitted, consoleQuotaNotNumber)
+			return
+		}
+
+		err = validate.Struct(formData)
+		if err != nil {
+			// min=0 is the only rule on the form.
+			renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgIdent.name, serviceIdent.id.String(), &submitted, validationMinZero)
+			return
+		}
+
+		err = setServiceVersionQuota(ctx, ad, dbc, orgIdent.id.String(), serviceIdent.id.String(), formData.VersionQuota)
+		if err != nil {
+			switch {
+			case errors.Is(err, cdnerrors.ErrServiceVersionQuotaBelowUsage):
+				renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgIdent.name, serviceIdent.id.String(), &submitted, consoleServiceVersionQuotaBelowUsage)
+			case errors.Is(err, cdnerrors.ErrNotFound):
+				renderConsoleServiceUnavailable(ctx, logger, dbc, w, r, ad, "Service", consoleServiceNotFound, err, consoleServiceRenderErr)
+			default:
+				// Shown inline like the org edit form's update error,
+				// since htmx does not swap a 5xx response.
+				logger.Err(err).Msg("service version quota update failed")
+				renderConsoleServicePage(ctx, logger, dbc, w, r, ad, orgIdent.name, serviceIdent.id.String(), &submitted, consoleServiceVersionQuotaFailed)
+			}
+			return
+		}
+
+		validatedRedirect(fmt.Sprintf(consoleServiceOrgRedirect, orgIdent.name, serviceIdent.id.String()), w, r, http.StatusSeeOther)
 	}
 }
 
@@ -2301,7 +2438,7 @@ func consoleCreateServiceVersionHandler(dbc *dbConn, vclValidator *vclValidatorC
 			}
 			if err != nil {
 				switch {
-				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation), errors.Is(err, cdnerrors.ErrIdenticalServiceVersion):
+				case errors.Is(err, cdnerrors.ErrAlreadyExists), errors.Is(err, cdnerrors.ErrInvalidVCL), errors.Is(err, cdnerrors.ErrCheckViolation), errors.Is(err, cdnerrors.ErrIdenticalServiceVersion), errors.Is(err, cdnerrors.ErrServiceVersionQuotaHit):
 					errDetails := ""
 					if ve, ok := errors.AsType[*cdnerrors.VCLValidationError](err); ok {
 						errDetails = ve.Details
@@ -2739,6 +2876,33 @@ type createOrgForm struct {
 	ServiceQuota     int64  `schema:"service-quota" validate:"min=0"`
 	DomainQuota      int64  `schema:"domain-quota" validate:"min=0"`
 	ClientTokenQuota int64  `schema:"client-token-quota" validate:"min=0"`
+}
+
+// markEmptyOrgQuotas gives every quota left empty or missing in a submitted
+// org form a field error, blanks its re-rendered value, and reports whether
+// there was any. The decoder turns an empty value into 0, which passes min=0
+// and would set a quota of 0 though no number was given; only an explicit "0"
+// may do that.
+func markEmptyOrgQuotas(form url.Values, orgFormData *components.OrgFormData) bool {
+	fields := []struct {
+		name  string
+		value *string
+		err   *string
+	}{
+		{"service-quota", &orgFormData.ServiceQuota, &orgFormData.Errors.ServiceQuota},
+		{"domain-quota", &orgFormData.DomainQuota, &orgFormData.Errors.DomainQuota},
+		{"client-token-quota", &orgFormData.ClientTokenQuota, &orgFormData.Errors.ClientTokenQuota},
+	}
+
+	empty := false
+	for _, f := range fields {
+		if form.Get(f.name) == "" {
+			*f.value = ""
+			*f.err = consoleQuotaNotNumber
+			empty = true
+		}
+	}
+	return empty
 }
 
 type nodeGroupAssignForm struct {
@@ -4161,6 +4325,49 @@ func setServiceDisabled(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, 
 	})
 	if err != nil {
 		return fmt.Errorf("setServiceDisabled transaction failed: %w", err)
+	}
+
+	return nil
+}
+
+// setServiceVersionQuota changes the maximum number of versions a service may
+// have. Only superusers may change it, and it cannot go below the number of
+// versions the service already has.
+func setServiceVersionQuota(ctx context.Context, ad cdntypes.AuthData, dbc *dbConn, orgNameOrID string, serviceNameOrID string, quota int64) error {
+	if !ad.Superuser {
+		return cdnerrors.ErrForbidden
+	}
+
+	dbCtx, cancel := dbc.detachedContext(ctx)
+	defer cancel()
+
+	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
+		// The services row is locked FOR UPDATE, the same lock
+		// insertServiceVersionTx requires its caller to hold, so the
+		// number of versions cannot change between the usage check
+		// below and the UPDATE.
+		serviceIdent, err := resolveService(dbCtx, tx, ad, serviceNameOrID, orgNameOrID, lockUpdate)
+		if err != nil {
+			return err
+		}
+
+		count, err := countServiceVersionsTx(dbCtx, tx, serviceIdent.id)
+		if err != nil {
+			return err
+		}
+		if quota < count {
+			return fmt.Errorf("%w (quota %d, usage %d)", cdnerrors.ErrServiceVersionQuotaBelowUsage, quota, count)
+		}
+
+		_, err = tx.Exec(dbCtx, "UPDATE services SET version_quota = $1 WHERE id = $2", quota, serviceIdent.id)
+		if err != nil {
+			return fmt.Errorf("unable to update version_quota for service: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("setServiceVersionQuota transaction failed: %w", err)
 	}
 
 	return nil
@@ -6046,6 +6253,28 @@ func selectServices(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgN
 	return services, nil
 }
 
+// selectServicesQuery selects every cdntypes.Service field. The list, single
+// service and create endpoints all build their response from it so they
+// return the same fields for the same service.
+const selectServicesQuery = "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled, services.version_quota FROM services JOIN orgs ON services.org_id = orgs.id"
+
+// selectServiceByIDTx returns the service with the given ID. It does no
+// authorization; callers resolve the service against the caller's scope
+// first.
+func selectServiceByIDTx(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID) (cdntypes.Service, error) {
+	rows, err := tx.Query(ctx, selectServicesQuery+" WHERE services.id = $1", serviceID)
+	if err != nil {
+		return cdntypes.Service{}, fmt.Errorf("unable to query for service: %w", err)
+	}
+
+	service, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[cdntypes.Service])
+	if err != nil {
+		return cdntypes.Service{}, fmt.Errorf("unable to collect service: %w", err)
+	}
+
+	return service, nil
+}
+
 func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Service, error) {
 	var err error
 	var orgFilter pgtype.UUID
@@ -6074,12 +6303,12 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 
 	var rows pgx.Rows
 	if orgFilter.Valid {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id WHERE services.org_id=$1 ORDER BY services.time_created", orgFilter)
+		rows, err = tx.Query(ctx, selectServicesQuery+" WHERE services.org_id=$1 ORDER BY services.time_created", orgFilter)
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
 		}
 	} else {
-		rows, err = tx.Query(ctx, "SELECT services.id, services.org_id, services.name, lower(services.uid_range) AS uid_range_first, upper(services.uid_range)-1 AS uid_range_last, orgs.name AS org_name, services.time_disabled FROM services JOIN orgs ON services.org_id = orgs.id ORDER BY services.time_created")
+		rows, err = tx.Query(ctx, selectServicesQuery+" ORDER BY services.time_created")
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for all services: %w", err)
 		}
@@ -6094,7 +6323,7 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 }
 
 func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, serviceNameOrID string, ad cdntypes.AuthData) (cdntypes.Service, error) {
-	s := cdntypes.Service{}
+	var s cdntypes.Service
 
 	err := pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Looking up a service by ID works without supplying an org,
@@ -6106,12 +6335,9 @@ func selectService(ctx context.Context, dbc *dbConn, orgNameOrID string, service
 			return err
 		}
 
-		s.Name = serviceIdent.name
-		s.ID = serviceIdent.id
-
-		err = tx.QueryRow(ctx, "SELECT time_disabled FROM services WHERE id = $1", serviceIdent.id).Scan(&s.TimeDisabled)
+		s, err = selectServiceByIDTx(ctx, tx, serviceIdent.id)
 		if err != nil {
-			return fmt.Errorf("selectService: unable to select time_disabled: %w", err)
+			return fmt.Errorf("selectService: %w", err)
 		}
 
 		return nil
@@ -6934,20 +7160,20 @@ const (
 	uidRangeAllocLockID advisoryLockID = iota + 1
 )
 
-func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (pgtype.UUID, error) {
-	var serviceID pgtype.UUID
+func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, name string, orgNameOrID *string, ad cdntypes.AuthData) (cdntypes.Service, error) {
+	var service cdntypes.Service
 
 	var orgIdent orgIdentifier
 	var err error
 
 	if !ad.Superuser && ad.OrgID == nil {
 		logger.Error().Msg("insertService: not superuser or member of an org")
-		return pgtype.UUID{}, cdnerrors.ErrForbidden
+		return cdntypes.Service{}, cdnerrors.ErrForbidden
 	}
 
 	if orgNameOrID == nil {
 		logger.Error().Msg("insertService: missing orgNameOrID")
-		return pgtype.UUID{}, cdnerrors.ErrUnprocessable
+		return cdntypes.Service{}, cdnerrors.ErrUnprocessable
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
@@ -7016,6 +7242,7 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 			return err
 		}
 
+		var serviceID pgtype.UUID
 		err = tx.QueryRow(dbCtx, "INSERT INTO services (name, org_id, uid_range) VALUES ($1, $2, $3) RETURNING id", name, orgIdent.id, uidRange).Scan(&serviceID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT service: %w", err)
@@ -7027,6 +7254,14 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 			return fmt.Errorf("unable to allocate service IPs: %w", err)
 		}
 
+		// Read the row back so the response carries the same fields
+		// as the list and single service endpoints, including the
+		// column defaults.
+		service, err = selectServiceByIDTx(dbCtx, tx, serviceID)
+		if err != nil {
+			return err
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -7034,15 +7269,15 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
 			case pgUniqueViolation:
-				return pgtype.UUID{}, cdnerrors.ErrAlreadyExists
+				return cdntypes.Service{}, cdnerrors.ErrAlreadyExists
 			case pgCheckViolation:
-				return pgtype.UUID{}, cdnerrors.ErrCheckViolation
+				return cdntypes.Service{}, cdnerrors.ErrCheckViolation
 			}
 		}
-		return pgtype.UUID{}, fmt.Errorf("insertService transaction failed: %w", err)
+		return cdntypes.Service{}, fmt.Errorf("insertService transaction failed: %w", err)
 	}
 
-	return serviceID, nil
+	return service, nil
 }
 
 // deleteService permanently removes a service and everything cascading from
@@ -7570,12 +7805,15 @@ func selectL4LBNodeConfig(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData
 // a second time: the FOR SHARE lock taken here is released when this
 // transaction commits, so a second lookup can land on a different service
 // that has since taken the name. The returned slice may be empty, but the
-// identifier is always valid when err is nil.
-func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersionListItem, serviceIdentifier, error) {
+// identifier is always valid when err is nil. The returned int64 is the
+// service's version quota, read in the same transaction as the versions so
+// the usage shown against it is consistent.
+func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, serviceNameOrID string, orgNameOrID string) ([]cdntypes.ServiceVersionListItem, serviceIdentifier, int64, error) {
 	var rows pgx.Rows
 
 	var err error
 	var resolvedService serviceIdentifier
+	var versionQuota int64
 	serviceVersions := []cdntypes.ServiceVersionListItem{}
 	err = pgx.BeginFunc(ctx, dbc.dbPool, func(tx pgx.Tx) error {
 		// Looking up a service by ID works without supplying an org,
@@ -7588,6 +7826,11 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		}
 
 		resolvedService = serviceIdent
+
+		err = tx.QueryRow(ctx, "SELECT version_quota FROM services WHERE id = $1", serviceIdent.id).Scan(&versionQuota)
+		if err != nil {
+			return fmt.Errorf("unable to query for service version quota: %w", err)
+		}
 
 		rows, err = tx.Query(
 			ctx,
@@ -7640,10 +7883,10 @@ func selectServiceVersions(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 		return nil
 	})
 	if err != nil {
-		return nil, serviceIdentifier{}, fmt.Errorf("selectServiceVersions: transaction failed: %w", err)
+		return nil, serviceIdentifier{}, 0, fmt.Errorf("selectServiceVersions: transaction failed: %w", err)
 	}
 
-	return serviceVersions, resolvedService, nil
+	return serviceVersions, resolvedService, versionQuota, nil
 }
 
 var hostnameProfile = idna.New(
@@ -8057,6 +8300,16 @@ var serviceVersionForeignKeys = strings.Join(migrations.ServiceVersionForeignKey
 // version. It never leaves insertServiceVersionTx.
 var errIdenticalServiceVersion = errors.New("service version content matches an existing version")
 
+// countServiceVersionsTx returns how many versions a service has.
+func countServiceVersionsTx(ctx context.Context, tx pgx.Tx, serviceID pgtype.UUID) (int64, error) {
+	var count int64
+	err := tx.QueryRow(ctx, "SELECT count(*) FROM service_versions WHERE service_id = $1", serviceID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("unable to count service versions: %w", err)
+	}
+	return count, nil
+}
+
 // insertServiceVersionTx creates a service version, unless its content is
 // identical to an existing version of the service (see migration 00021 for
 // what counts as content). In that case nothing is inserted, the existing
@@ -8111,6 +8364,28 @@ func insertServiceVersionTx(ctx context.Context, tx pgx.Tx, orgIdent orgIdentifi
 			return errIdenticalServiceVersion
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("unable to look up service version by content: %w", err)
+		}
+
+		// The quota is checked here, after the dedup lookup, because a
+		// duplicate creates no row and so must still succeed when the
+		// service is full. Returning the error from the savepoint rolls
+		// back the version_counter bump, so a refused attempt does not
+		// use up a version number. The caller holds the services row
+		// FOR UPDATE, which serializes this count with other inserts
+		// and with setServiceVersionQuota. It counts rows rather than
+		// reading version_counter because the row count is what the
+		// quota bounds.
+		var quota int64
+		err = sp.QueryRow(ctx, "SELECT version_quota FROM services WHERE id = $1", serviceIdent.id).Scan(&quota)
+		if err != nil {
+			return fmt.Errorf("unable to read service version quota: %w", err)
+		}
+		count, err := countServiceVersionsTx(ctx, sp, serviceIdent.id)
+		if err != nil {
+			return err
+		}
+		if count >= quota {
+			return &cdnerrors.QuotaError{Quota: cdnerrors.ServiceVersionQuota, Used: count, Limit: quota}
 		}
 
 		if active {
@@ -9234,6 +9509,7 @@ func newChiRouter(conf config.Config, logger zerolog.Logger, dbc *dbConn, a2Slot
 		r.Get("/org/{org}/services/{service}/disable", consoleServiceDisableHandler(dbc))
 		r.Post("/org/{org}/services/{service}/disable", consoleServiceDisableHandler(dbc))
 		r.Post("/org/{org}/services/{service}/enable", consoleServiceEnableHandler(dbc))
+		r.Post("/org/{org}/services/{service}/version-quota", consoleServiceVersionQuotaHandler(dbc))
 		r.Get("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
 		r.Post("/org/{org}/create/service", consoleCreateServiceHandler(dbc))
 		r.Get("/org/{org}/services/{service}/{version}", consoleServiceVersionHandler(dbc))
@@ -10403,6 +10679,41 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 			return nil, nil
 		})
 
+		huma.Put(api, "/v1/services/{service}/version-quota", func(ctx context.Context, input *struct {
+			Service string `path:"service" example:"my-service" doc:"Service ID or name" minLength:"1" maxLength:"63"`
+			Org     string `query:"org" example:"my-org" doc:"Organization ID or name, required if service is supplied by name" minLength:"1" maxLength:"63"`
+			Body    struct {
+				VersionQuota int64 `json:"version_quota" example:"1000" minimum:"0" doc:"Maximum number of versions allowed for the service"`
+			}
+		},
+		) (*struct{}, error) {
+			logger := zlog.Ctx(ctx)
+
+			ad, ok := ctx.Value(authDataKey{}).(cdntypes.AuthData)
+			if !ok {
+				return nil, errors.New("unable to read auth data from service version quota PUT handler")
+			}
+
+			err := setServiceVersionQuota(ctx, ad, dbc, input.Org, input.Service, input.Body.VersionQuota)
+			if err != nil {
+				switch {
+				case errors.Is(err, cdnerrors.ErrForbidden):
+					return nil, huma.Error403Forbidden(api403String)
+				case errors.Is(err, cdnerrors.ErrNotFound):
+					return nil, huma.Error404NotFound(serviceNotFound)
+				case errors.Is(err, cdnerrors.ErrServiceVersionQuotaBelowUsage):
+					// A client mistake, not a server failure: report the
+					// counts wrapped around the sentinel and do not log it
+					// as an error.
+					return nil, huma.Error422UnprocessableEntity(err.Error())
+				}
+				logger.Err(err).Msg("unable to set service version quota")
+				return nil, apiError(err)
+			}
+
+			return nil, nil
+		})
+
 		postServicesPath := "/v1/services"
 		huma.Register(
 			api,
@@ -10427,7 +10738,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, errors.New("unable to read auth data from service POST handler")
 				}
 
-				id, err := insertService(ctx, logger, dbc, input.Body.Name, &input.Body.Org, ad)
+				service, err := insertService(ctx, logger, dbc, input.Body.Name, &input.Body.Org, ad)
 				if err != nil {
 					var ipAllocErr *cdnerrors.IPAllocationError
 					switch {
@@ -10447,8 +10758,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, apiError(err)
 				}
 				resp := &serviceOutput{}
-				resp.Body.ID = id
-				resp.Body.Name = input.Body.Name
+				resp.Body = service
 				return resp, nil
 			},
 		)
@@ -10465,7 +10775,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				return nil, errors.New("unable to read auth data from service-versions GET handler")
 			}
 
-			serviceVersions, _, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
+			serviceVersions, _, _, err := selectServiceVersions(ctx, dbc, ad, input.Service, input.Org)
 			if err != nil {
 				if errors.Is(err, cdnerrors.ErrNotFound) {
 					return nil, huma.Error404NotFound(serviceNotFound)
@@ -10543,6 +10853,9 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 							return nil, huma.Error422UnprocessableEntity(ve.Details)
 						}
 						return nil, huma.Error422UnprocessableEntity("VCL validation failed without details")
+					case errors.Is(err, cdnerrors.ErrServiceVersionQuotaHit):
+						// Expected error, so not logged as a failure
+						return nil, apiError(err)
 					}
 					logger.Err(err).Msg("unable to add service version")
 					return nil, apiError(err)
@@ -12673,6 +12986,11 @@ func consoleCreateOrgHandler(dbc *dbConn) http.HandlerFunc {
 						}
 					}
 				}
+			}
+			// Call markEmptyOrgQuotas before checking err: after it,
+			// || would skip the call when validation already failed
+			// and leave empty quotas unmarked.
+			if markEmptyOrgQuotas(r.PostForm, &orgFormData) || err != nil {
 				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.CreateOrgContent(orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render org creation page on validation error")
@@ -12827,6 +13145,11 @@ func consoleEditOrgHandler(dbc *dbConn) http.HandlerFunc {
 						}
 					}
 				}
+			}
+			// Call markEmptyOrgQuotas before checking err: after it,
+			// || would skip the call when validation already failed
+			// and leave empty quotas unmarked.
+			if markEmptyOrgQuotas(r.PostForm, &orgFormData) || err != nil {
 				err = renderConsolePage(ctx, dbc, w, r, ad, title, sh.selectedOrgName, components.EditOrgContent(orgName, orgFormData))
 				if err != nil {
 					logger.Err(err).Msg("unable to render edit org page on validation error")
