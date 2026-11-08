@@ -22,6 +22,27 @@ func activeAttr(section string, u *url.URL) templ.Attributes {
 	return templ.Attributes{}
 }
 
+// fieldErrorAttrs ties a form control to its error message for screen
+// readers: it marks the control invalid and points aria-describedby at the
+// message fieldError renders for the same id. Without a message it adds
+// nothing.
+func fieldErrorAttrs(id string, msg string) templ.Attributes {
+	if msg == "" {
+		return templ.Attributes{}
+	}
+	return templ.Attributes{"aria-invalid": "true", "aria-describedby": id + "-error"}
+}
+
+// fieldError renders a form control's error message with the id
+// fieldErrorAttrs points the control at. It is an alert so screen readers
+// announce it when the re-rendered form is swapped in. Nothing is rendered
+// without a message.
+templ fieldError(id string, msg string) {
+	if msg != "" {
+		<span id={ id + "-error" } class="error-text" role="alert" aria-live="polite">{ msg }</span>
+	}
+}
+
 func ipNetworkFamily(prefix netip.Prefix) string {
 	if prefix.Addr().Is6() {
 		return "IPv6"
@@ -571,22 +592,9 @@ templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cd
 		<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/version-quota", orgName, serviceID.String())) } hx-push-url={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", orgName, serviceID.String()))) } hx-disabled-elt="find button[type='submit']">
 			<label for="version-quota">
 				Version quota
-				<input
-					type="number"
-					id="version-quota"
-					name="version-quota"
-					min="0"
-					value={ quota.Input }
-					required
-					if quota.Error != "" {
-						aria-invalid="true"
-						aria-describedby="version-quota-error"
-					}
-				/>
+				<input type="number" id="version-quota" { fieldErrorAttrs("version-quota", quota.Error)... } name="version-quota" min="0" value={ quota.Input } required/>
 			</label>
-			if quota.Error != "" {
-				<span id="version-quota-error" class="error-text" role="alert" aria-live="polite">{ quota.Error }</span>
-			}
+			@fieldError("version-quota", quota.Error)
 			<button type="submit">Update version quota</button>
 		</form>
 	}
@@ -663,9 +671,9 @@ templ CreateDomainContent(orgName string, dData DomainData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/domain", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="fqdn">
 			FQDN
-			<input type="text" id="fqdn" name="fqdn" placeholder="Enter domain name..." value={ dData.FQDN } required/>
+			<input type="text" id="fqdn" { fieldErrorAttrs("fqdn", dData.Errors.FQDN)... } name="fqdn" placeholder="Enter domain name..." value={ dData.FQDN } required/>
 		</label>
-		<span class="error-text">{ dData.Errors.FQDN }</span>
+		@fieldError("fqdn", dData.Errors.FQDN)
 		<button type="submit">Add domain</button>
 	</form>
 }
@@ -677,14 +685,14 @@ templ CreateAPITokenContent(orgName string, atData APITokenData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/create/api-token", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter API token name..." value={ atData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", atData.Errors.Name)... } name="name" placeholder="Enter API token name..." value={ atData.Name } required/>
 		</label>
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter a description..." value={ atData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", atData.Errors.Description)... } name="description" placeholder="Enter a description..." value={ atData.Description } required/>
 		</label>
-		<span class="error-text">{ atData.Errors.Name }</span>
-		<span class="error-text">{ atData.Errors.Description }</span>
+		@fieldError("name", atData.Errors.Name)
+		@fieldError("description", atData.Errors.Description)
 		<button type="submit">Add API token</button>
 	</form>
 }
@@ -1537,19 +1545,19 @@ templ CreateCacheNodeContent(formData CacheNodeFormData) {
 	<form method="post" action="/console/superuser/create/cache-node" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<label for="addresses">
 			Addresses (one per line, IPv4 and/or IPv6)
-			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+			<textarea id="addresses" { fieldErrorAttrs("addresses", formData.Errors.Addresses)... } name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
 		</label>
-		<span class="error-text">{ formData.Errors.Addresses }</span>
+		@fieldError("addresses", formData.Errors.Addresses)
 		<button type="submit">Add cache node</button>
 	</form>
 }
@@ -1561,19 +1569,19 @@ templ EditCacheNodeContent(nodeName string, formData CacheNodeFormData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/cache-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter cache node name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<label for="addresses">
 			Addresses (one per line, IPv4 and/or IPv6)
-			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+			<textarea id="addresses" { fieldErrorAttrs("addresses", formData.Errors.Addresses)... } name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
 		</label>
-		<span class="error-text">{ formData.Errors.Addresses }</span>
+		@fieldError("addresses", formData.Errors.Addresses)
 		<button type="submit">Save changes</button>
 	</form>
 }
@@ -1657,19 +1665,19 @@ templ CreateL4LBNodeContent(formData L4LBNodeFormData) {
 	<form method="post" action="/console/superuser/create/l4lb-node" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<label for="addresses">
 			Addresses (one per line, IPv4 and/or IPv6)
-			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+			<textarea id="addresses" { fieldErrorAttrs("addresses", formData.Errors.Addresses)... } name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
 		</label>
-		<span class="error-text">{ formData.Errors.Addresses }</span>
+		@fieldError("addresses", formData.Errors.Addresses)
 		<button type="submit">Add L4LB node</button>
 	</form>
 }
@@ -1681,19 +1689,19 @@ templ EditL4LBNodeContent(nodeName string, formData L4LBNodeFormData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/l4lb-nodes/%s/edit", nodeName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter L4LB node name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<label for="addresses">
 			Addresses (one per line, IPv4 and/or IPv6)
-			<textarea id="addresses" name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
+			<textarea id="addresses" { fieldErrorAttrs("addresses", formData.Errors.Addresses)... } name="addresses" placeholder="192.0.2.1&#10;2001:db8::1" rows="4">{ formData.Addresses }</textarea>
 		</label>
-		<span class="error-text">{ formData.Errors.Addresses }</span>
+		@fieldError("addresses", formData.Errors.Addresses)
 		<button type="submit">Save changes</button>
 	</form>
 }
@@ -1751,14 +1759,14 @@ templ CreateNodeGroupContent(formData NodeGroupFormData) {
 	<form method="post" action="/console/superuser/create/node-group" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<button type="submit">Add node group</button>
 	</form>
 }
@@ -1770,14 +1778,14 @@ templ EditNodeGroupContent(groupName string, formData NodeGroupFormData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/node-groups/%s/edit", groupName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter node group name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="description">
 			Description
-			<input type="text" id="description" name="description" placeholder="Enter description..." value={ formData.Description } required/>
+			<input type="text" id="description" { fieldErrorAttrs("description", formData.Errors.Description)... } name="description" placeholder="Enter description..." value={ formData.Description } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Description }</span>
+		@fieldError("description", formData.Errors.Description)
 		<button type="submit">Save changes</button>
 	</form>
 }
@@ -1838,9 +1846,9 @@ templ CreateIPNetworkContent(formData IPNetworkFormData) {
 	<form method="post" action="/console/superuser/create/ip-network" hx-disabled-elt="find button[type='submit']">
 		<label for="network">
 			Network prefix
-			<input type="text" id="network" name="network" placeholder="e.g. 198.51.100.0/24" value={ formData.Network } required/>
+			<input type="text" id="network" { fieldErrorAttrs("network", formData.Errors.Network)... } name="network" placeholder="e.g. 198.51.100.0/24" value={ formData.Network } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Network }</span>
+		@fieldError("network", formData.Errors.Network)
 		<button type="submit">Add IP network</button>
 	</form>
 }
@@ -1902,24 +1910,24 @@ templ CreateOrgContent(formData OrgFormData) {
 	<form method="post" action="/console/superuser/create/org" hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="service-quota">
 			Service quota
-			<input type="number" id="service-quota" name="service-quota" min="0" placeholder="1" value={ formData.ServiceQuota } required/>
+			<input type="number" id="service-quota" { fieldErrorAttrs("service-quota", formData.Errors.ServiceQuota)... } name="service-quota" min="0" placeholder="1" value={ formData.ServiceQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.ServiceQuota }</span>
+		@fieldError("service-quota", formData.Errors.ServiceQuota)
 		<label for="domain-quota">
 			Domain quota
-			<input type="number" id="domain-quota" name="domain-quota" min="0" placeholder="5" value={ formData.DomainQuota } required/>
+			<input type="number" id="domain-quota" { fieldErrorAttrs("domain-quota", formData.Errors.DomainQuota)... } name="domain-quota" min="0" placeholder="5" value={ formData.DomainQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.DomainQuota }</span>
+		@fieldError("domain-quota", formData.Errors.DomainQuota)
 		<label for="client-token-quota">
 			Client token quota
-			<input type="number" id="client-token-quota" name="client-token-quota" min="0" placeholder="10" value={ formData.ClientTokenQuota } required/>
+			<input type="number" id="client-token-quota" { fieldErrorAttrs("client-token-quota", formData.Errors.ClientTokenQuota)... } name="client-token-quota" min="0" placeholder="10" value={ formData.ClientTokenQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.ClientTokenQuota }</span>
+		@fieldError("client-token-quota", formData.Errors.ClientTokenQuota)
 		<button type="submit">Add organization</button>
 	</form>
 }
@@ -1931,24 +1939,24 @@ templ EditOrgContent(orgName string, formData OrgFormData) {
 	<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", orgName)) } hx-disabled-elt="find button[type='submit']">
 		<label for="name">
 			Name
-			<input type="text" id="name" name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
+			<input type="text" id="name" { fieldErrorAttrs("name", formData.Errors.Name)... } name="name" placeholder="Enter organization name..." value={ formData.Name } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Name }</span>
+		@fieldError("name", formData.Errors.Name)
 		<label for="service-quota">
 			Service quota
-			<input type="number" id="service-quota" name="service-quota" min="0" value={ formData.ServiceQuota } required/>
+			<input type="number" id="service-quota" { fieldErrorAttrs("service-quota", formData.Errors.ServiceQuota)... } name="service-quota" min="0" value={ formData.ServiceQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.ServiceQuota }</span>
+		@fieldError("service-quota", formData.Errors.ServiceQuota)
 		<label for="domain-quota">
 			Domain quota
-			<input type="number" id="domain-quota" name="domain-quota" min="0" value={ formData.DomainQuota } required/>
+			<input type="number" id="domain-quota" { fieldErrorAttrs("domain-quota", formData.Errors.DomainQuota)... } name="domain-quota" min="0" value={ formData.DomainQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.DomainQuota }</span>
+		@fieldError("domain-quota", formData.Errors.DomainQuota)
 		<label for="client-token-quota">
 			Client token quota
-			<input type="number" id="client-token-quota" name="client-token-quota" min="0" value={ formData.ClientTokenQuota } required/>
+			<input type="number" id="client-token-quota" { fieldErrorAttrs("client-token-quota", formData.Errors.ClientTokenQuota)... } name="client-token-quota" min="0" value={ formData.ClientTokenQuota } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.ClientTokenQuota }</span>
+		@fieldError("client-token-quota", formData.Errors.ClientTokenQuota)
 		<button type="submit">Save changes</button>
 	</form>
 }
@@ -2022,38 +2030,38 @@ templ CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdn
 	<form method="post" action="/console/superuser/create/user" hx-disabled-elt="find button[type='submit']">
 		<label for="display_name">
 			Display name
-			<input type="text" id="display_name" name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
+			<input type="text" id="display_name" { fieldErrorAttrs("display_name", formData.Errors.DisplayName)... } name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
 		</label>
-		<span class="error-text">{ formData.Errors.DisplayName }</span>
+		@fieldError("display_name", formData.Errors.DisplayName)
 		<label for="role">
 			Role
-			<select id="role" name="role" required>
+			<select id="role" { fieldErrorAttrs("role", formData.Errors.Role)... } name="role" required>
 				for _, role := range roles {
 					<option value={ role.Name } selected?={ role.Name == formData.Role }>{ role.Name }</option>
 				}
 			</select>
 		</label>
-		<span class="error-text">{ formData.Errors.Role }</span>
+		@fieldError("role", formData.Errors.Role)
 		<label for="org">
 			Organization
-			<select id="org" name="org">
+			<select id="org" { fieldErrorAttrs("org", formData.Errors.Org)... } name="org">
 				<option value={ cdntypes.OrgNotSelected } selected?={ formData.Org == "" || formData.Org == cdntypes.OrgNotSelected }>{ cdntypes.OrgNotSelected }</option>
 				for _, org := range orgs {
 					<option value={ org.Name } selected?={ org.Name == formData.Org }>{ org.Name }</option>
 				}
 			</select>
 		</label>
-		<span class="error-text">{ formData.Errors.Org }</span>
+		@fieldError("org", formData.Errors.Org)
 		<label for="password">
 			Password
-			<input type="password" id="password" name="password" placeholder="Enter password (min 15 characters)..." required/>
+			<input type="password" id="password" { fieldErrorAttrs("password", formData.Errors.Password)... } name="password" placeholder="Enter password (min 15 characters)..." required/>
 		</label>
-		<span class="error-text">{ formData.Errors.Password }</span>
+		@fieldError("password", formData.Errors.Password)
 		<label for="confirm-password">
 			Confirm password
-			<input type="password" id="confirm-password" name="confirm-password" placeholder="Confirm password..." required/>
+			<input type="password" id="confirm-password" { fieldErrorAttrs("confirm-password", formData.Errors.ConfirmPassword)... } name="confirm-password" placeholder="Confirm password..." required/>
 		</label>
-		<span class="error-text">{ formData.Errors.ConfirmPassword }</span>
+		@fieldError("confirm-password", formData.Errors.ConfirmPassword)
 		<button type="submit">Add user</button>
 	</form>
 }
@@ -2066,31 +2074,31 @@ templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnty
 		<label for="display_name">
 			Display name
 			if authProvider != cdntypes.LocalAuthProvider {
-				<input type="text" id="display_name" name="display_name" value={ formData.DisplayName } readonly/>
+				<input type="text" id="display_name" { fieldErrorAttrs("display_name", formData.Errors.DisplayName)... } name="display_name" value={ formData.DisplayName } readonly/>
 			} else {
-				<input type="text" id="display_name" name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
+				<input type="text" id="display_name" { fieldErrorAttrs("display_name", formData.Errors.DisplayName)... } name="display_name" placeholder="Enter display name..." value={ formData.DisplayName } required/>
 			}
 		</label>
-		<span class="error-text">{ formData.Errors.DisplayName }</span>
+		@fieldError("display_name", formData.Errors.DisplayName)
 		<label for="role">
 			Role
-			<select id="role" name="role" required>
+			<select id="role" { fieldErrorAttrs("role", formData.Errors.Role)... } name="role" required>
 				for _, role := range roles {
 					<option value={ role.Name } selected?={ role.Name == formData.Role }>{ role.Name }</option>
 				}
 			</select>
 		</label>
-		<span class="error-text">{ formData.Errors.Role }</span>
+		@fieldError("role", formData.Errors.Role)
 		<label for="org">
 			Organization
-			<select id="org" name="org">
+			<select id="org" { fieldErrorAttrs("org", formData.Errors.Org)... } name="org">
 				<option value={ cdntypes.OrgNotSelected } selected?={ formData.Org == "" || formData.Org == cdntypes.OrgNotSelected }>{ cdntypes.OrgNotSelected }</option>
 				for _, org := range orgs {
 					<option value={ org.Name } selected?={ org.Name == formData.Org }>{ org.Name }</option>
 				}
 			</select>
 		</label>
-		<span class="error-text">{ formData.Errors.Org }</span>
+		@fieldError("org", formData.Errors.Org)
 		<label>
 			Auth Provider
 			<input type="text" value={ authProvider } readonly/>
@@ -2110,14 +2118,14 @@ templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnty
 		<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userID)) } hx-push-url={ string(templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", userID))) } hx-disabled-elt="find button[type='submit']">
 			<label for="password">
 				New password
-				<input type="password" id="password" name="password" placeholder="Enter new password (min 15 characters)..." required/>
+				<input type="password" id="password" { fieldErrorAttrs("password", passwordResetData.Errors.Password)... } name="password" placeholder="Enter new password (min 15 characters)..." required/>
 			</label>
-			<span class="error-text">{ passwordResetData.Errors.Password }</span>
+			@fieldError("password", passwordResetData.Errors.Password)
 			<label for="confirm-password">
 				Confirm password
-				<input type="password" id="confirm-password" name="confirm-password" placeholder="Confirm new password..." required/>
+				<input type="password" id="confirm-password" { fieldErrorAttrs("confirm-password", passwordResetData.Errors.ConfirmPassword)... } name="confirm-password" placeholder="Confirm new password..." required/>
 			</label>
-			<span class="error-text">{ passwordResetData.Errors.ConfirmPassword }</span>
+			@fieldError("confirm-password", passwordResetData.Errors.ConfirmPassword)
 			<button type="submit">Reset password</button>
 		</form>
 	}
