@@ -10,44 +10,46 @@ import (
 
 // Errors that can be shared across the other packages
 var (
-	ErrDatabaseInitialized         = errors.New("database is already initialized")
-	ErrForbidden                   = errors.New("access to resource is not allowed")
-	ErrNotFound                    = errors.New("resource not found")
-	ErrUnprocessable               = errors.New("resource not processable")
-	ErrAlreadyExists               = errors.New("resource already exists")
-	ErrIdenticalServiceVersion     = errors.New("identical service version exists")
-	ErrCheckViolation              = errors.New("invalid input data")
-	ErrExclutionViolation          = errors.New("conflicting data in database")
-	ErrBadPassword                 = errors.New("bad password")
-	ErrKeyCloakEmailUnverified     = errors.New("keycloak user email is not verified")
-	ErrKeyCloakUserExists          = errors.New("keycloak username already exists with other UUID")
-	ErrBadOldPassword              = errors.New("old password is invalid")
-	ErrUnableToParseNameOrID       = errors.New("unable to parse name or ID")
-	ErrInvalidFormData             = errors.New("invalid form data")
-	ErrServiceByNameNeedsOrg       = errors.New("looking up service by name requires org")
-	ErrServiceQuotaHit             = errors.New("not allowed to create more services")
-	ErrDomainQuotaHit              = errors.New("not allowed to create more domains")
-	ErrOrgClientTokenQuotaHit      = errors.New("not allowed to create more org client tokens")
-	ErrServiceQuotaBelowUsage      = errors.New("service quota is below current usage")
-	ErrDomainQuotaBelowUsage       = errors.New("domain quota is below current usage")
-	ErrClientTokenQuotaBelowUsage  = errors.New("client token quota is below current usage")
-	ErrInvalidVCL                  = errors.New("VCL is invalid")
-	ErrUnknownDomain               = errors.New("unknown domain name")
-	ErrReEncryptionMissingPassword = errors.New("re-encryption needs at least two configured encryption passwords")
-	ErrReEncryptionFailed          = errors.New("re-encryption failed for at least one token")
-	ErrHasDependents               = errors.New("resource has dependent resources")
-	ErrNotLocalUser                = errors.New("operation is only available for local users")
-	ErrOldPasswordRequired         = errors.New("old password is required")
-	ErrSelfDelete                  = errors.New("users cannot delete themselves")
-	ErrNoServiceIPAddresses        = errors.New("no service IP addresses available for allocation")
-	ErrServiceNotDisabled          = errors.New("service must be disabled before it can be deleted")
-	ErrConfirmNameMismatch         = errors.New("confirmation name does not match resource name")
-	ErrLoginRateLimited            = errors.New("too many login attempts")
-	ErrLoginBusy                   = errors.New("server busy handling logins")
-	ErrDomainRetired               = errors.New("domain is retired")
-	ErrDomainUnused                = errors.New("domain is not used by any service version, delete it instead")
-	ErrDomainNotVerified           = errors.New("domain is not verified")
-	ErrDomainChallengeTooLong      = errors.New("domain is too long to fit challenge label")
+	ErrDatabaseInitialized           = errors.New("database is already initialized")
+	ErrForbidden                     = errors.New("access to resource is not allowed")
+	ErrNotFound                      = errors.New("resource not found")
+	ErrUnprocessable                 = errors.New("resource not processable")
+	ErrAlreadyExists                 = errors.New("resource already exists")
+	ErrIdenticalServiceVersion       = errors.New("identical service version exists")
+	ErrCheckViolation                = errors.New("invalid input data")
+	ErrExclutionViolation            = errors.New("conflicting data in database")
+	ErrBadPassword                   = errors.New("bad password")
+	ErrKeyCloakEmailUnverified       = errors.New("keycloak user email is not verified")
+	ErrKeyCloakUserExists            = errors.New("keycloak username already exists with other UUID")
+	ErrBadOldPassword                = errors.New("old password is invalid")
+	ErrUnableToParseNameOrID         = errors.New("unable to parse name or ID")
+	ErrInvalidFormData               = errors.New("invalid form data")
+	ErrServiceByNameNeedsOrg         = errors.New("looking up service by name requires org")
+	ErrServiceQuotaHit               = errors.New("not allowed to create more services")
+	ErrDomainQuotaHit                = errors.New("not allowed to create more domains")
+	ErrOrgClientTokenQuotaHit        = errors.New("not allowed to create more org client tokens")
+	ErrServiceVersionQuotaHit        = errors.New("not allowed to create more service versions")
+	ErrServiceVersionQuotaBelowUsage = errors.New("service version quota is below current usage")
+	ErrServiceQuotaBelowUsage        = errors.New("service quota is below current usage")
+	ErrDomainQuotaBelowUsage         = errors.New("domain quota is below current usage")
+	ErrClientTokenQuotaBelowUsage    = errors.New("client token quota is below current usage")
+	ErrInvalidVCL                    = errors.New("VCL is invalid")
+	ErrUnknownDomain                 = errors.New("unknown domain name")
+	ErrReEncryptionMissingPassword   = errors.New("re-encryption needs at least two configured encryption passwords")
+	ErrReEncryptionFailed            = errors.New("re-encryption failed for at least one token")
+	ErrHasDependents                 = errors.New("resource has dependent resources")
+	ErrNotLocalUser                  = errors.New("operation is only available for local users")
+	ErrOldPasswordRequired           = errors.New("old password is required")
+	ErrSelfDelete                    = errors.New("users cannot delete themselves")
+	ErrNoServiceIPAddresses          = errors.New("no service IP addresses available for allocation")
+	ErrServiceNotDisabled            = errors.New("service must be disabled before it can be deleted")
+	ErrConfirmNameMismatch           = errors.New("confirmation name does not match resource name")
+	ErrLoginRateLimited              = errors.New("too many login attempts")
+	ErrLoginBusy                     = errors.New("server busy handling logins")
+	ErrDomainRetired                 = errors.New("domain is retired")
+	ErrDomainUnused                  = errors.New("domain is not used by any service version, delete it instead")
+	ErrDomainNotVerified             = errors.New("domain is not verified")
+	ErrDomainChallengeTooLong        = errors.New("domain is too long to fit challenge label")
 	// ErrReferencedOrgNotFound is deliberately the same for an unknown org
 	// and for an org the caller may not use, so the response cannot be used
 	// to probe for which orgs exist.
@@ -69,6 +71,7 @@ const (
 	ServiceQuota Quota = iota
 	DomainQuota
 	ClientCredentialQuota
+	ServiceVersionQuota
 )
 
 // String returns the human readable name of the resource the quota limits,
@@ -81,6 +84,8 @@ func (q Quota) String() string {
 		return "domain"
 	case ClientCredentialQuota:
 		return "client credential"
+	case ServiceVersionQuota:
+		return "service version"
 	default:
 		return fmt.Sprintf("Quota(%d)", int(q))
 	}
@@ -95,6 +100,8 @@ func (q Quota) hitErr() error {
 		return ErrDomainQuotaHit
 	case ClientCredentialQuota:
 		return ErrOrgClientTokenQuotaHit
+	case ServiceVersionQuota:
+		return ErrServiceVersionQuotaHit
 	default:
 		return nil
 	}
@@ -118,6 +125,11 @@ func (e *QuotaError) Unwrap() error {
 }
 
 func (e *QuotaError) UserMessage() string {
+	// Tenants cannot delete service versions, so the only way forward when
+	// this quota is hit is an operator raising the limit.
+	if e.Quota == ServiceVersionQuota {
+		return e.Error() + ", contact an operator to raise it"
+	}
 	return e.Error()
 }
 

@@ -11,6 +11,8 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdntypes"
@@ -107,6 +109,16 @@ type CacheNodeFormData struct {
 type L4LBNodeFormData struct {
 	NodeFormFields
 	Errors NodeFormErrors
+}
+
+// ServiceVersionQuotaView is what the service page shows about the service's
+// version quota.
+type ServiceVersionQuotaView struct {
+	Used      int64
+	Quota     int64
+	Superuser bool   // operators get the edit form
+	Input     string // value to prefill; the submitted value when re-rendering an error
+	Error     string // inline field error
 }
 
 type OrgFormFields struct {
@@ -220,6 +232,18 @@ func serviceQuotaErrMsg(err error) string {
 		return quotaErr.Error()
 	}
 	return cdnerrors.ErrServiceQuotaHit.Error()
+}
+
+// quotaErrMsg returns the user-facing message of the QuotaError in err's
+// chain, with its first letter upper-cased to start a sentence, and falls
+// back to err's own text when there is none.
+func quotaErrMsg(err error) string {
+	msg := err.Error()
+	if quotaErr, ok := errors.AsType[*cdnerrors.QuotaError](err); ok {
+		msg = quotaErr.UserMessage()
+	}
+	r, size := utf8.DecodeRuneInString(msg)
+	return string(unicode.ToUpper(r)) + msg[size:]
 }
 
 // AddressesString formats a node's addresses as newline-separated text for

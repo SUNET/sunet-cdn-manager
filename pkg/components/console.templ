@@ -175,6 +175,25 @@ templ Dashboard(dashData cdntypes.DashboardData) {
 					}
 				</article>
 			</div>
+			if len(dashData.ServiceVersions) > 0 {
+				<h2>Service versions</h2>
+				<div class="dashboard-grid">
+					for _, sv := range dashData.ServiceVersions {
+						<article>
+							<header>
+								<strong><a href={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s", dashData.OrgName, sv.ID.String())) }>{ sv.Name }</a></strong>
+								if sv.Disabled {
+									{ "(disabled)" }
+								}
+							</header>
+							<div class="quota-value">{ sv.Used }/{ sv.Quota }</div>
+							if sv.Quota > 0 {
+								<progress aria-label={ sv.Name + " version quota" } value={ strconv.FormatInt(sv.Used, 10) } max={ strconv.FormatInt(sv.Quota, 10) }></progress>
+							}
+						</article>
+					}
+				</div>
+			}
 		} else {
 			<article class="empty-state">
 				<p>Select an organization from the sidebar to manage its resources.</p>
@@ -542,7 +561,35 @@ templ DeleteServiceContent(orgName string, serviceName string, serviceID string,
 // a service deleted and recreated under that name while this page sits open
 // receives a version meant for its predecessor, silently. The form behind
 // these links takes minutes to fill in, so that window is wide.
-templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cdntypes.ServiceVersionListItem) {
+templ ServiceContent(orgName string, serviceID pgtype.UUID, serviceVersions []cdntypes.ServiceVersionListItem, quota ServiceVersionQuotaView) {
+	<p class="quota-usage">{ strconv.FormatInt(quota.Used, 10) } of { strconv.FormatInt(quota.Quota, 10) } versions used</p>
+	if quota.Superuser {
+		// The address bar shows the service page even when a refused
+		// change re-renders it, so a reload asks for the service page
+		// rather than the POST-only form URL. An accepted change
+		// redirects to the same page.
+		<form method="post" action={ templ.URL(fmt.Sprintf("/console/org/%s/services/%s/version-quota", orgName, serviceID.String())) } hx-push-url={ string(templ.URL(fmt.Sprintf("/console/org/%s/services/%s", orgName, serviceID.String()))) } hx-disabled-elt="find button[type='submit']">
+			<label for="version-quota">
+				Version quota
+				<input
+					type="number"
+					id="version-quota"
+					name="version-quota"
+					min="0"
+					value={ quota.Input }
+					required
+					if quota.Error != "" {
+						aria-invalid="true"
+						aria-describedby="version-quota-error"
+					}
+				/>
+			</label>
+			if quota.Error != "" {
+				<span id="version-quota-error" class="error-text" role="alert" aria-live="polite">{ quota.Error }</span>
+			}
+			<button type="submit">Update version quota</button>
+		</form>
+	}
 	if len(serviceVersions) == 0 {
 		<article class="empty-state">
 			<p>No versions created yet</p>
@@ -1101,6 +1148,8 @@ templ CreateServiceVersionContent(serviceName string, serviceID pgtype.UUID, org
 					<pre>{ errDetails }</pre>
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					<div><strong>Duplication error:</strong> { err.Error() }</div>
+				case errors.Is(err, cdnerrors.ErrServiceVersionQuotaHit):
+					<div><strong>Not created:</strong> { quotaErrMsg(err) }</div>
 				default:
 					<div><strong>Error:</strong> Service version creation failed</div>
 			}
@@ -2054,7 +2103,11 @@ templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnty
 		if passwordResetData.Errors.ServerError != "" {
 			<span class="error-text" role="alert" aria-live="polite">{ passwordResetData.Errors.ServerError }</span>
 		}
-		<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userID)) } hx-disabled-elt="find button[type='submit']">
+		// The address bar shows the edit page even when a refused reset
+		// re-renders it, so a reload asks for the edit page rather than
+		// the POST-only form URL. A successful reset redirects to the
+		// same page.
+		<form method="post" action={ templ.URL(fmt.Sprintf("/console/superuser/users/%s/reset-password", userID)) } hx-push-url={ string(templ.URL(fmt.Sprintf("/console/superuser/users/%s/edit", userID))) } hx-disabled-elt="find button[type='submit']">
 			<label for="password">
 				New password
 				<input type="password" id="password" name="password" placeholder="Enter new password (min 15 characters)..." required/>

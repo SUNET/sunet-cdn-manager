@@ -65,6 +65,20 @@ func TestLookupExpectedError(t *testing.T) {
 			wantOK:     true,
 		},
 		{
+			name:       "service version quota error tells user to contact an operator",
+			err:        fmt.Errorf("wrapped: %w", &cdnerrors.QuotaError{Quota: cdnerrors.ServiceVersionQuota, Used: 1000, Limit: 1000}),
+			wantStatus: 409,
+			wantMsg:    "service version quota reached (1000 of 1000), contact an operator to raise it",
+			wantOK:     true,
+		},
+		{
+			name:       "service version quota below usage is unprocessable",
+			err:        fmt.Errorf("%w (quota 1, usage 2)", cdnerrors.ErrServiceVersionQuotaBelowUsage),
+			wantStatus: 422,
+			wantMsg:    "service version quota is below current usage",
+			wantOK:     true,
+		},
+		{
 			name: "wrapped domain in use error uses user message",
 			err: fmt.Errorf("x: %w", &cdnerrors.DomainInUseError{
 				Domain:   "example.se",

@@ -23,6 +23,32 @@ func TestQuotaError(t *testing.T) {
 	}
 }
 
+func TestServiceVersionQuotaError(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &QuotaError{Quota: ServiceVersionQuota, Used: 1000, Limit: 1000})
+
+	if !errors.Is(err, ErrServiceVersionQuotaHit) {
+		t.Errorf("expected error to match ErrServiceVersionQuotaHit")
+	}
+	if errors.Is(err, ErrServiceQuotaHit) {
+		t.Errorf("did not expect error to match ErrServiceQuotaHit")
+	}
+
+	um, ok := errors.AsType[UserMessager](err)
+	if !ok {
+		t.Fatalf("expected error to implement UserMessager")
+	}
+	want := "service version quota reached (1000 of 1000), contact an operator to raise it"
+	if got := um.UserMessage(); got != want {
+		t.Errorf("unexpected user message: got %q, want %q", got, want)
+	}
+
+	// Other quotas keep their plain message.
+	other := &QuotaError{Quota: DomainQuota, Used: 5, Limit: 5}
+	if got, want := other.UserMessage(), "domain quota reached (5 of 5)"; got != want {
+		t.Errorf("unexpected user message: got %q, want %q", got, want)
+	}
+}
+
 func TestDomainInUseError(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -838,3 +838,73 @@ func TestBackendRefreshMigration(t *testing.T) {
 		})
 	}
 }
+
+// TestServiceVersionQuotaMigration verifies that migration 00022 gives
+// existing services the default version quota and that the database refuses
+// a negative quota while accepting zero.
+func TestServiceVersionQuotaMigration(t *testing.T) {
+	ctx := context.Background()
+	pgConfig, err := prepareDatabase(ctx, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See TestVersionedOriginGroupsMigration for why the cdn schema is
+	// created here.
+	bootstrapPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA cdn"); err != nil {
+		bootstrapPool.Close()
+		t.Fatalf("creating cdn schema failed: %s", err)
+	}
+	bootstrapPool.Close()
+	pgConfig.ConnConfig.RuntimeParams["search_path"] = "cdn,public"
+
+	if err := upTo(ctx, logger, pgConfig, 21); err != nil {
+		t.Fatalf("migrating up to version 21 failed: %s", err)
+	}
+
+	dbPool, err := pgxpool.NewWithConfig(ctx, pgConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbPool.Close()
+
+	const serviceID = "94000000-0000-0000-0000-000000000002"
+
+	seed := []string{
+		"INSERT INTO orgs (id, name) VALUES ('94000000-0000-0000-0000-000000000001', 'mig-org')",
+		"INSERT INTO services (id, org_id, name, uid_range) VALUES ('" + serviceID + "', '94000000-0000-0000-0000-000000000001', 'mig-service', '(1000010000, 1000019999)')",
+	}
+	for _, stmt := range seed {
+		if _, err := dbPool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed statement failed: %s: %s", stmt, err)
+		}
+	}
+
+	if err := upTo(ctx, logger, pgConfig, 22); err != nil {
+		t.Fatalf("migrating up to version 22 failed: %s", err)
+	}
+
+	var quota int64
+	err = dbPool.QueryRow(ctx, "SELECT version_quota FROM services WHERE id = $1", serviceID).Scan(&quota)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quota != 1000 {
+		t.Fatalf("expected existing service to get version_quota 1000, got %d", quota)
+	}
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET version_quota = -1 WHERE id = $1", serviceID)
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok || pgErr.Code != "23514" || pgErr.ConstraintName != "version_quota_nonnegative" {
+		t.Fatalf("expected version_quota_nonnegative check violation, got: %v", err)
+	}
+
+	_, err = dbPool.Exec(ctx, "UPDATE services SET version_quota = 0 WHERE id = $1", serviceID)
+	if err != nil {
+		t.Fatalf("expected version_quota 0 to be accepted, got: %v", err)
+	}
+}

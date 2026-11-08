@@ -95,6 +95,7 @@ type Service struct {
 	UIDRangeFirst int64       `json:"uid_range_first" doc:"First process UID allocated to this service" db:"uid_range_first"`
 	UIDRangeEnd   int64       `json:"uid_range_last" doc:"Last UID allocated to this service" db:"uid_range_last"`
 	TimeDisabled  *time.Time  `json:"time_disabled" db:"time_disabled" doc:"When the service was disabled, null if the service is enabled"`
+	VersionQuota  int64       `json:"version_quota" db:"version_quota" example:"1000" doc:"maximum number of versions allowed for this service"`
 }
 
 type ServiceVersion struct {
@@ -505,9 +506,21 @@ type UserEditData struct {
 	AuthProvider string // "local" or "keycloak"
 }
 
+// ServiceVersionUsage is one service's version count against its quota, for
+// the org dashboard.
+type ServiceVersionUsage struct {
+	ID       pgtype.UUID
+	Name     string
+	Used     int64
+	Quota    int64
+	Disabled bool
+}
+
 type DashboardData struct {
 	ResourceAccess   bool
 	OrgDashboard     bool
+	OrgName          string
+	ServiceVersions  []ServiceVersionUsage
 	ServiceQuota     int64
 	ServiceUsed      int64
 	DomainQuota      int64

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -5586,13 +5587,13 @@ func TestInsertServiceReusesFreedUIDRange(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-			serviceID, err := insertService(ctx, &logger, dbc, test.name, &org, ad)
+			service, err := insertService(ctx, &logger, dbc, test.name, &org, ad)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			var lower, upper int64
-			err = dbPool.QueryRow(ctx, "SELECT lower(uid_range), upper(uid_range) FROM services WHERE id = $1", serviceID).Scan(&lower, &upper)
+			err = dbPool.QueryRow(ctx, "SELECT lower(uid_range), upper(uid_range) FROM services WHERE id = $1", service.ID).Scan(&lower, &upper)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -5601,6 +5602,78 @@ func TestInsertServiceReusesFreedUIDRange(t *testing.T) {
 				t.Errorf("expected uid_range [%d,%d), got [%d,%d)", test.expectedLower, test.expectedLower+10000, lower, upper)
 			}
 		})
+	}
+}
+
+// TestServiceResponsesMatchList checks that creating a service and fetching
+// it on its own return the same fields as the service list, so neither leaves
+// fields at their zero values.
+func TestServiceResponsesMatchList(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	doJSON := func(method string, path string, body io.Reader, wantStatus int, out any) {
+		t.Helper()
+
+		req, err := http.NewRequest(method, ts.URL+path, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("username1", validUserPassword)
+
+		resp, err := http.DefaultClient.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("%s %s: got status %d, want %d: %s", method, path, resp.StatusCode, wantStatus, b)
+		}
+
+		err = json.Unmarshal(b, out)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var created cdntypes.Service
+	doJSON(http.MethodPost, "/api/v1/services", strings.NewReader(`{"name": "response-match-service", "org": "org1"}`), http.StatusCreated, &created)
+
+	var single cdntypes.Service
+	doJSON(http.MethodGet, "/api/v1/services/"+created.ID.String(), nil, http.StatusOK, &single)
+
+	var list []cdntypes.Service
+	doJSON(http.MethodGet, "/api/v1/services?org=org1", nil, http.StatusOK, &list)
+
+	idx := slices.IndexFunc(list, func(s cdntypes.Service) bool { return s.ID == created.ID })
+	if idx < 0 {
+		t.Fatalf("created service %s not in service list", created.ID)
+	}
+	listed := list[idx]
+
+	// Guard against all three being equally empty.
+	if !listed.OrgID.Valid || listed.OrgName != "org1" || listed.UIDRangeFirst == 0 || listed.UIDRangeEnd == 0 || listed.VersionQuota != 1000 {
+		t.Fatalf("listed service is missing fields: %+v", listed)
+	}
+
+	if !reflect.DeepEqual(created, listed) {
+		t.Errorf("POST response differs from list:\n got  %+v\n want %+v", created, listed)
+	}
+
+	if !reflect.DeepEqual(single, listed) {
+		t.Errorf("GET response differs from list:\n got  %+v\n want %+v", single, listed)
 	}
 }
 
@@ -12763,6 +12836,110 @@ func TestConsoleEditOrgQuotaBelowUsage(t *testing.T) {
 	}
 	if serviceQuota != 100 || domainQuota != 100 {
 		t.Fatalf("expected quotas to be unchanged (100/100), got %d/%d", serviceQuota, domainQuota)
+	}
+}
+
+// TestConsoleOrgFormsRequireQuotas checks that the create and edit org forms
+// refuse an empty or missing quota rather than decoding it as 0, while an
+// explicit "0" is accepted.
+func TestConsoleOrgFormsRequireQuotas(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+
+	post := func(path string, form url.Values) *goquery.Document {
+		t.Helper()
+
+		req, err := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err := client.Do(req) // #nosec G704 -- filled in by test, so not susceptible to SSRF
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s returned %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+
+	// checkFields compares each field's error and re-rendered value.
+	checkFields := func(doc *goquery.Document, wantErrs map[string]string, wantValues map[string]string) {
+		t.Helper()
+		for field, want := range wantErrs {
+			if got := strings.TrimSpace(doc.Find(fmt.Sprintf("label[for=%q] + span.error-text", field)).Text()); got != want {
+				t.Errorf("%s error is %q, want %q", field, got, want)
+			}
+		}
+		for field, want := range wantValues {
+			if got, _ := doc.Find("input#" + field).Attr("value"); got != want {
+				t.Errorf("%s value is %q, want %q", field, got, want)
+			}
+		}
+	}
+
+	quotas := func(name string) (int64, int64, int64, bool) {
+		t.Helper()
+		var sq, dq, ctq int64
+		err := dbPool.QueryRow(context.Background(), "SELECT service_quota, domain_quota, client_token_quota FROM orgs WHERE name = $1", name).Scan(&sq, &dq, &ctq)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, 0, 0, false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sq, dq, ctq, true
+	}
+
+	// Create: an empty and a missing quota are refused, the org is not
+	// created, and the empty field comes back empty rather than as "0".
+	// The invalid name checks that empty quotas are reported alongside
+	// other validation errors rather than instead of them.
+	doc := post("/console/superuser/create/org", url.Values{"name": {"quota_req_a"}, "service-quota": {""}, "client-token-quota": {"2"}})
+	checkFields(doc,
+		map[string]string{"name": validationNotDNSLabel, "service-quota": consoleQuotaNotNumber, "domain-quota": consoleQuotaNotNumber, "client-token-quota": ""},
+		map[string]string{"service-quota": "", "domain-quota": "", "client-token-quota": "2"})
+	if _, _, _, ok := quotas("quota_req_a"); ok {
+		t.Fatal("org created despite empty quotas")
+	}
+
+	// Create: explicit zeros are accepted.
+	post("/console/superuser/create/org", url.Values{"name": {"quota-req-a"}, "service-quota": {"0"}, "domain-quota": {"0"}, "client-token-quota": {"0"}})
+	if sq, dq, ctq, ok := quotas("quota-req-a"); !ok || sq != 0 || dq != 0 || ctq != 0 {
+		t.Fatalf("org quota-req-a: created %t, quotas %d/%d/%d, want created with 0/0/0", ok, sq, dq, ctq)
+	}
+
+	// Edit: an empty and a missing quota are refused and nothing changes.
+	post("/console/superuser/create/org", url.Values{"name": {"quota-req-b"}, "service-quota": {"3"}, "domain-quota": {"3"}, "client-token-quota": {"3"}})
+	doc = post("/console/superuser/orgs/quota-req-b/edit", url.Values{"name": {"quota-req-b"}, "domain-quota": {""}, "service-quota": {"4"}})
+	checkFields(doc,
+		map[string]string{"service-quota": "", "domain-quota": consoleQuotaNotNumber, "client-token-quota": consoleQuotaNotNumber},
+		map[string]string{"service-quota": "4", "domain-quota": "", "client-token-quota": ""})
+	if sq, dq, ctq, _ := quotas("quota-req-b"); sq != 3 || dq != 3 || ctq != 3 {
+		t.Fatalf("org quota-req-b quotas are %d/%d/%d after refused edit, want 3/3/3", sq, dq, ctq)
+	}
+
+	// Edit: explicit zeros are accepted for an org without usage.
+	post("/console/superuser/orgs/quota-req-b/edit", url.Values{"name": {"quota-req-b"}, "service-quota": {"0"}, "domain-quota": {"0"}, "client-token-quota": {"0"}})
+	if sq, dq, ctq, _ := quotas("quota-req-b"); sq != 0 || dq != 0 || ctq != 0 {
+		t.Fatalf("org quota-req-b quotas are %d/%d/%d after edit, want 0/0/0", sq, dq, ctq)
 	}
 }
 
