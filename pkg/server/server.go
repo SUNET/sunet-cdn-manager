@@ -8926,9 +8926,9 @@ func generateCompleteVcl(confTemplates configTemplates, originGroups []cdntypes.
 	// If we blindly add all existing origin groups to the vinyl
 	// configuration it will fail to load:
 	// ===
-	// Unused backend haproxy_http_origin-group-2, defined:
+	// Unused backend http_origin-group-2, defined:
 	// ('/tmp/vcl-content2391245548' Line 11 Pos 9)
-	// backend haproxy_http_origin-group-2 {
+	// backend http_origin-group-2 {
 	// --------###########################--
 	//
 	// Running VCC-compiler failed, exited with 2
