@@ -43,7 +43,7 @@ services:
         condition: service_healthy
     command: "start-dev"
   sunet-vcl-validator:
-    image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator@sha256:7f90b18f6bec6270af650c2af43fc0b0b6ece0fa1b75a6dd252c7ed7fb4f5d06"
+    image: "platform.sunet.se/sunet-cdn/sunet-vcl-validator@sha256:6c73cb4a9c08f266154e24ca654e65e875666d04bb6bd76d954307192995cac2"
     platform: linux/amd64
     ports:
       - "8888:8888"

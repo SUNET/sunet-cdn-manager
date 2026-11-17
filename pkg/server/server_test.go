@@ -83,7 +83,7 @@ const (
 
 	// The validator image is currently only built for amd64. On arm64 hosts
 	// (e.g. Apple Silicon) it runs under emulation.
-	vclValidatorImage         = "platform.sunet.se/sunet-cdn/sunet-vcl-validator@sha256:7f90b18f6bec6270af650c2af43fc0b0b6ece0fa1b75a6dd252c7ed7fb4f5d06"
+	vclValidatorImage         = "platform.sunet.se/sunet-cdn/sunet-vcl-validator@sha256:6c73cb4a9c08f266154e24ca654e65e875666d04bb6bd76d954307192995cac2"
 	vclValidatorImagePlatform = "linux/amd64"
 )
 
