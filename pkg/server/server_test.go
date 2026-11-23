@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -427,6 +428,16 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				id:           "00000006-0000-0000-0000-000000000010",
 				authProvider: "local",
 			},
+			{
+				// A non-superuser in org1 (here) and org2 (added after
+				// the loop), never org3, for the multi-org behavior.
+				name:         "multi-org-user",
+				password:     validUserPassword,
+				role:         "user",
+				orgName:      "org1",
+				id:           "00000006-0000-0000-0000-000000000011",
+				authProvider: "local",
+			},
 		}
 
 		for _, localUser := range localUsers {
@@ -436,24 +447,23 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 				return err
 			}
 
-			var orgID *pgtype.UUID // may be nil
 			var authProviderID pgtype.UUID
-
-			if localUser.orgName != "" {
-				err := tx.QueryRow(ctx, "SELECT id FROM orgs WHERE name=$1", localUser.orgName).Scan(&orgID)
-				if err != nil {
-					return err
-				}
-			}
 
 			err = tx.QueryRow(ctx, "SELECT id FROM auth_providers WHERE name=$1", localUser.authProvider).Scan(&authProviderID)
 			if err != nil {
 				return err
 			}
 
-			_, err = tx.Exec(ctx, "INSERT INTO users (id, org_id, display_name, role_id, auth_provider_id) VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name=$4), (SELECT id from auth_providers WHERE name=$5))", userID, orgID, localUser.name, localUser.role, localUser.authProvider)
+			_, err = tx.Exec(ctx, "INSERT INTO users (id, display_name, role_id, auth_provider_id) VALUES ($1, $2, (SELECT id FROM roles WHERE name=$3), (SELECT id from auth_providers WHERE name=$4))", userID, localUser.name, localUser.role, localUser.authProvider)
 			if err != nil {
 				return err
+			}
+
+			if localUser.orgName != "" {
+				_, err = tx.Exec(ctx, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, (SELECT id FROM orgs WHERE name=$2))", userID, localUser.orgName)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Set a local password for the user if not empty
@@ -477,6 +487,11 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 					return err
 				}
 			}
+		}
+
+		_, err := tx.Exec(ctx, "INSERT INTO user_orgs (user_id, org_id) VALUES ('00000006-0000-0000-0000-000000000011', '00000002-0000-0000-0000-000000000002')")
+		if err != nil {
+			return err
 		}
 
 		vcls := []struct {
@@ -530,7 +545,7 @@ func populateTestData(dbPool *pgxpool.Pool, encryptedSessionKey bool) error {
 		// The versions above are inserted with a placeholder hash
 		// because their rows do not exist yet at that point. Now that
 		// they do, store the real one, as the manager does.
-		_, err := tx.Exec(ctx, rehashServiceVersionsSQL)
+		_, err = tx.Exec(ctx, rehashServiceVersionsSQL)
 		if err != nil {
 			return err
 		}
@@ -1006,12 +1021,22 @@ func TestGetUsers(t *testing.T) {
 		username       string
 		password       string
 		expectedStatus int
+		// wantOrgIDs maps display names to the org_ids expected for
+		// them in the response. Users not listed are not checked.
+		wantOrgIDs map[string][]any
 	}{
 		{
 			description:    "successful superuser request",
 			username:       "admin",
 			password:       validAdminPassword,
 			expectedStatus: http.StatusOK,
+			wantOrgIDs: map[string][]any{
+				"admin":            {},
+				"username1":        {csOrg1ID},
+				"username2":        {csOrg2ID},
+				"username3-no-org": {},
+				"admin-with-org":   {csOrg1ID},
+			},
 		},
 		{
 			description:    "failed superuser request, bad password",
@@ -1024,6 +1049,9 @@ func TestGetUsers(t *testing.T) {
 			username:       "username1",
 			password:       validUserPassword,
 			expectedStatus: http.StatusOK,
+			wantOrgIDs: map[string][]any{
+				"username1": {csOrg1ID},
+			},
 		},
 		{
 			description:    "failed user request, bad password",
@@ -1068,6 +1096,25 @@ func TestGetUsers(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.wantOrgIDs == nil {
+				return
+			}
+
+			var users []map[string]any
+			if err := json.Unmarshal(jsonData, &users); err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]any{}
+			for _, u := range users {
+				name, _ := u["display_name"].(string)
+				got[name] = u["org_ids"]
+			}
+			for name, want := range test.wantOrgIDs {
+				if !reflect.DeepEqual(got[name], want) {
+					t.Errorf("org_ids of %s: got %#v, want %#v", name, got[name], want)
+				}
+			}
 		})
 	}
 }
@@ -1088,6 +1135,7 @@ func TestGetUser(t *testing.T) {
 		password       string
 		userID         string
 		expectedStatus int
+		wantOrgIDs     []any
 	}{
 		{
 			description:    "successful superuser request with ID",
@@ -1095,6 +1143,15 @@ func TestGetUser(t *testing.T) {
 			password:       validAdminPassword,
 			userID:         "00000006-0000-0000-0000-000000000001",
 			expectedStatus: http.StatusOK,
+			wantOrgIDs:     []any{},
+		},
+		{
+			description:    "successful superuser request for a user in an org",
+			username:       "admin",
+			password:       validAdminPassword,
+			userID:         "00000006-0000-0000-0000-000000000003",
+			expectedStatus: http.StatusOK,
+			wantOrgIDs:     []any{csOrg2ID},
 		},
 		{
 			description:    "successful user request for itself with ID",
@@ -1102,6 +1159,7 @@ func TestGetUser(t *testing.T) {
 			password:       validUserPassword,
 			userID:         "00000006-0000-0000-0000-000000000002",
 			expectedStatus: http.StatusOK,
+			wantOrgIDs:     []any{csOrg1ID},
 		},
 		{
 			description:    "failed user request, bad password",
@@ -1162,8 +1220,49 @@ func TestGetUser(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus != http.StatusOK {
+				return
+			}
+
+			var u map[string]any
+			if err := json.Unmarshal(jsonData, &u); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(u["org_ids"], test.wantOrgIDs) {
+				t.Errorf("org_ids: got %#v, want %#v", u["org_ids"], test.wantOrgIDs)
+			}
 		})
 	}
+}
+
+// userOrgIDs returns the IDs of the orgs userID is a member of according to
+// user_orgs, ordered by org name like the API does.
+func userOrgIDs(t *testing.T, dbPool *pgxpool.Pool, userID string) []string {
+	t.Helper()
+	rows, err := dbPool.Query(context.Background(), "SELECT uo.org_id FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = $1 ORDER BY o.name", userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
+		var id pgtype.UUID
+		err := row.Scan(&id)
+		return id.String(), err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+// jsonOrgIDs converts org IDs to what json.Unmarshal into an any gives for
+// an org_ids array.
+func jsonOrgIDs(ids []string) []any {
+	out := []any{}
+	for _, id := range ids {
+		out = append(out, id)
+	}
+	return out
 }
 
 func TestPostUsers(t *testing.T) {
@@ -1183,7 +1282,8 @@ func TestPostUsers(t *testing.T) {
 		expectedStatus int
 		addedUser      string
 		roleIDorName   string
-		orgIDorName    string
+		orgs           []string
+		wantOrgIDs     []string
 	}{
 		{
 			description:    "successful superuser request with IDs",
@@ -1192,7 +1292,8 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-1",
 			roleIDorName:   "00000005-0000-0000-0000-000000000002",
-			orgIDorName:    "00000002-0000-0000-0000-000000000001",
+			orgs:           []string{csOrg1ID},
+			wantOrgIDs:     []string{csOrg1ID},
 		},
 		{
 			description:    "successful superuser request with names",
@@ -1201,7 +1302,8 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-2",
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
+			wantOrgIDs:     []string{csOrg1ID},
 		},
 		{
 			description:    "successful superuser request with IDs and no org",
@@ -1210,7 +1312,35 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      "admin-created-user-3",
 			roleIDorName:   "00000005-0000-0000-0000-000000000002",
-			orgIDorName:    "",
+			wantOrgIDs:     []string{},
+		},
+		{
+			description:    "successful superuser request with two orgs",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusCreated,
+			addedUser:      "admin-created-user-4",
+			roleIDorName:   "user",
+			orgs:           []string{"org2", "org1"},
+			wantOrgIDs:     []string{csOrg1ID, csOrg2ID},
+		},
+		{
+			description:    "failed superuser request with an unknown org",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusNotFound,
+			addedUser:      "admin-created-user-5",
+			roleIDorName:   "user",
+			orgs:           []string{"org1", "no-such-org"},
+		},
+		{
+			description:    "failed superuser request with a malformed org",
+			username:       "admin",
+			password:       validAdminPassword,
+			expectedStatus: http.StatusBadRequest,
+			addedUser:      "admin-created-user-6",
+			roleIDorName:   "user",
+			orgs:           []string{"Not A Label"},
 		},
 		{
 			description:    "successful superuser request with name right at limit",
@@ -1219,7 +1349,8 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			addedUser:      strings.Repeat("a", 63),
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
+			wantOrgIDs:     []string{csOrg1ID},
 		},
 		{
 			description:    "failed superuser request with name above limit",
@@ -1228,7 +1359,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      strings.Repeat("a", 64),
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
 		},
 		{
 			description:    "failed superuser request with name below limit",
@@ -1237,7 +1368,7 @@ func TestPostUsers(t *testing.T) {
 			expectedStatus: http.StatusUnprocessableEntity,
 			addedUser:      "",
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
 		},
 		{
 			description:    "failed non-superuser request",
@@ -1245,7 +1376,7 @@ func TestPostUsers(t *testing.T) {
 			password:       validUserPassword,
 			addedUser:      "user-created-user-1",
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
 			expectedStatus: http.StatusForbidden,
 		},
 		{
@@ -1254,7 +1385,7 @@ func TestPostUsers(t *testing.T) {
 			password:       "nodeuserpass1",
 			addedUser:      "user-created-user-1",
 			roleIDorName:   "user",
-			orgIDorName:    "org1",
+			orgs:           []string{"org1"},
 			expectedStatus: http.StatusForbidden,
 		},
 	}
@@ -1262,12 +1393,12 @@ func TestPostUsers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			newUser := struct {
-				DisplayName string `json:"display_name"`
-				Role        string `json:"role"`
-				Org         string `json:"org,omitempty"`
+				DisplayName string   `json:"display_name"`
+				Role        string   `json:"role"`
+				Orgs        []string `json:"orgs,omitempty"`
 			}{
 				DisplayName: test.addedUser,
-				Org:         test.orgIDorName,
+				Orgs:        test.orgs,
 				Role:        test.roleIDorName,
 			}
 
@@ -1307,8 +1438,41 @@ func TestPostUsers(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus != http.StatusCreated {
+				var n int
+				err := dbPool.QueryRow(context.Background(), "SELECT count(*) FROM users WHERE display_name = $1", test.addedUser).Scan(&n)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n != 0 {
+					t.Fatalf("a failed POST created user %q", test.addedUser)
+				}
+				return
+			}
+
+			var created map[string]any
+			if err := json.Unmarshal(jsonData, &created); err != nil {
+				t.Fatal(err)
+			}
+			if want := jsonOrgIDs(test.wantOrgIDs); !reflect.DeepEqual(created["org_ids"], want) {
+				t.Errorf("org_ids in response: got %#v, want %#v", created["org_ids"], want)
+			}
+			userID, _ := created["id"].(string)
+			if got := userOrgIDs(t, dbPool, userID); !slices.Equal(got, test.wantOrgIDs) {
+				t.Errorf("user_orgs rows: got %v, want %v", got, test.wantOrgIDs)
+			}
 		})
 	}
+}
+
+// manyOrgNames returns n distinct, syntactically valid org names.
+func manyOrgNames(n int) []string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("many-org-%d", i)
+	}
+	return names
 }
 
 func TestPutUser(t *testing.T) {
@@ -1321,45 +1485,139 @@ func TestPutUser(t *testing.T) {
 	}
 	defer ts.Close()
 
+	// An org whose name sorts before org1 and org2 but whose ID sorts
+	// after theirs, so that ordering by name can be told apart from
+	// ordering by ID or by input.
+	const aaaOrgID = "00000002-0000-0000-0000-0000000000a1"
+	execSQL(t, dbPool, "INSERT INTO orgs (id, name) VALUES ($1, 'aaa-org')", aaaOrgID)
+
+	const putUserID = "00000014-0000-0000-0000-000000000001"
+
 	tests := []struct {
 		description         string
 		username            string
 		password            string
 		expectedStatus      int
 		targetUserID        string
-		updatedOrgIDorName  string
+		updatedOrgs         []string
 		updatedRoleIDorName string
 		updatedName         string
+		// wantOrgIDs is the org_ids expected in a 200 response, and
+		// the memberships expected in the database after any request
+		// for putUserID, failed or not.
+		wantOrgIDs []string
+		// explicitEmptyOrgs sends "orgs": [] instead of omitting it.
+		explicitEmptyOrgs bool
 	}{
 		{
 			description:         "successful superuser request with IDs",
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserID:        "00000014-0000-0000-0000-000000000001",
-			updatedOrgIDorName:  "00000002-0000-0000-0000-000000000001",
+			targetUserID:        putUserID,
+			updatedOrgs:         []string{csOrg1ID},
 			updatedRoleIDorName: "00000005-0000-0000-0000-000000000002",
 			updatedName:         "put-user-1",
+			wantOrgIDs:          []string{csOrg1ID},
 		},
 		{
-			description:         "successful superuser request with names for org and role",
+			description:         "successful superuser request with names for orgs and role",
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserID:        "00000014-0000-0000-0000-000000000001",
+			targetUserID:        putUserID,
 			updatedName:         "put-user-1",
-			updatedOrgIDorName:  "org2",
+			updatedOrgs:         []string{"org1", "org2"},
 			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{csOrg1ID, csOrg2ID},
 		},
 		{
-			description:         "successful superuser request, null org",
+			description:         "successful superuser request, org_ids ordered by org name",
 			username:            "admin",
 			password:            validAdminPassword,
 			expectedStatus:      http.StatusOK,
-			targetUserID:        "00000014-0000-0000-0000-000000000001",
+			targetUserID:        putUserID,
 			updatedName:         "put-user-1",
-			updatedOrgIDorName:  "",
+			updatedOrgs:         []string{"org2", "aaa-org"},
 			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{aaaOrgID, csOrg2ID},
+		},
+		{
+			description:         "successful superuser request, same org by name and ID",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusOK,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         []string{"org1", csOrg1ID},
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{csOrg1ID},
+		},
+		{
+			description:         "failed superuser request, unknown org name",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusNotFound,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         []string{"org1", "no-such-org"},
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{csOrg1ID},
+		},
+		{
+			description:         "failed superuser request, unknown org ID",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusNotFound,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         []string{"org2", "00000002-0000-0000-0000-0000000000ff"},
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{csOrg1ID},
+		},
+		{
+			description:         "failed superuser request, malformed org",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusBadRequest,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         []string{"Not A Label"},
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{csOrg1ID},
+		},
+		{
+			description:         "successful superuser request, no orgs",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusOK,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{},
+		},
+		{
+			description:         "failed superuser request, too many orgs",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusUnprocessableEntity,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         manyOrgNames(101),
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{},
+		},
+		{
+			description:         "successful superuser request, explicit empty orgs array",
+			username:            "admin",
+			password:            validAdminPassword,
+			expectedStatus:      http.StatusOK,
+			targetUserID:        putUserID,
+			updatedName:         "put-user-1",
+			updatedOrgs:         []string{},
+			updatedRoleIDorName: "user",
+			wantOrgIDs:          []string{},
+			explicitEmptyOrgs:   true,
 		},
 		{
 			description:         "failed non-superuser request",
@@ -1368,7 +1626,7 @@ func TestPutUser(t *testing.T) {
 			expectedStatus:      http.StatusForbidden,
 			targetUserID:        "00000006-0000-0000-0000-000000000002",
 			updatedName:         "username1",
-			updatedOrgIDorName:  "org1",
+			updatedOrgs:         []string{"org1"},
 			updatedRoleIDorName: "user",
 		},
 		{
@@ -1378,7 +1636,6 @@ func TestPutUser(t *testing.T) {
 			expectedStatus:      http.StatusUnprocessableEntity,
 			targetUserID:        "00000014-0000-0000-0000-000000000004",
 			updatedName:         "renamed-keycloak-user",
-			updatedOrgIDorName:  "",
 			updatedRoleIDorName: "user",
 		},
 		{
@@ -1388,7 +1645,7 @@ func TestPutUser(t *testing.T) {
 			expectedStatus:      http.StatusUnprocessableEntity,
 			targetUserID:        "not-a-uuid",
 			updatedName:         "some-user",
-			updatedOrgIDorName:  "org1",
+			updatedOrgs:         []string{"org1"},
 			updatedRoleIDorName: "user",
 		},
 	}
@@ -1396,11 +1653,11 @@ func TestPutUser(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
 			putUser := struct {
-				Org         string `json:"org,omitempty"`
-				Role        string `json:"role"`
-				DisplayName string `json:"display_name"`
+				Orgs        []string `json:"orgs,omitempty"`
+				Role        string   `json:"role"`
+				DisplayName string   `json:"display_name"`
 			}{
-				Org:         test.updatedOrgIDorName,
+				Orgs:        test.updatedOrgs,
 				Role:        test.updatedRoleIDorName,
 				DisplayName: test.updatedName,
 			}
@@ -1408,6 +1665,17 @@ func TestPutUser(t *testing.T) {
 			b, err := json.Marshal(putUser)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if test.explicitEmptyOrgs {
+				// omitempty drops an empty slice, so build the body by hand
+				b, err = json.Marshal(map[string]any{
+					"orgs":         []string{},
+					"role":         test.updatedRoleIDorName,
+					"display_name": test.updatedName,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			r := bytes.NewReader(b)
@@ -1443,6 +1711,22 @@ func TestPutUser(t *testing.T) {
 			}
 
 			t.Logf("%s\n", jsonData)
+
+			if test.expectedStatus == http.StatusOK {
+				var updated map[string]any
+				if err := json.Unmarshal(jsonData, &updated); err != nil {
+					t.Fatal(err)
+				}
+				if want := jsonOrgIDs(test.wantOrgIDs); !reflect.DeepEqual(updated["org_ids"], want) {
+					t.Errorf("org_ids in response: got %#v, want %#v", updated["org_ids"], want)
+				}
+			}
+
+			if test.targetUserID == putUserID {
+				if got := userOrgIDs(t, dbPool, putUserID); !slices.Equal(got, test.wantOrgIDs) {
+					t.Errorf("user_orgs rows: got %v, want %v", got, test.wantOrgIDs)
+				}
+			}
 		})
 	}
 }
@@ -11002,7 +11286,7 @@ func TestConsoleDashboardRedirect(t *testing.T) {
 
 	// Verify existing behavior is unchanged: a superuser without org
 	// membership (admin user) gets the generic dashboard (200) with
-	// no redirect, since ad.OrgName is nil.
+	// no redirect, since ad.Orgs is empty.
 	t.Run("superuser without org sees generic dashboard", func(t *testing.T) {
 		client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
 
@@ -13754,7 +14038,7 @@ func TestConsoleCreateUser(t *testing.T) {
 			formData: url.Values{
 				"display_name":     {"test-console-user"},
 				"role":             {"user"},
-				"org":              {"org1"},
+				"orgs":             {"org1"},
 				"password":         {"testpassword12345"},
 				"confirm-password": {"testpassword12345"},
 			},
@@ -13765,7 +14049,6 @@ func TestConsoleCreateUser(t *testing.T) {
 			formData: url.Values{
 				"display_name":     {"test-mismatch-user"},
 				"role":             {"user"},
-				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"testpassword12345"},
 				"confirm-password": {"different12345678"},
 			},
@@ -13776,7 +14059,6 @@ func TestConsoleCreateUser(t *testing.T) {
 			formData: url.Values{
 				"display_name":     {"test-short-pw-user"},
 				"role":             {"user"},
-				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"short"},
 				"confirm-password": {"short"},
 			},
@@ -13787,7 +14069,6 @@ func TestConsoleCreateUser(t *testing.T) {
 			formData: url.Values{
 				"display_name":     {"admin"},
 				"role":             {"admin"},
-				"org":              {cdntypes.OrgNotSelected},
 				"password":         {"testpassword12345"},
 				"confirm-password": {"testpassword12345"},
 			},
@@ -13896,7 +14177,6 @@ func TestConsoleEditUser(t *testing.T) {
 			formData: url.Values{
 				"display_name": {"username6"},
 				"role":         {"admin"},
-				"org":          {cdntypes.OrgNotSelected},
 			},
 			expectRedirect: true,
 		},
@@ -13907,7 +14187,6 @@ func TestConsoleEditUser(t *testing.T) {
 			formData: url.Values{
 				"display_name": {"nonexistent-user"},
 				"role":         {"user"},
-				"org":          {cdntypes.OrgNotSelected},
 			},
 			expectedErrorMsg: consoleUserNotFound,
 		},
@@ -15438,6 +15717,29 @@ func TestRequestDeadlineMiddleware(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining > budget || remaining < budget-deadlineSlack {
 		t.Fatalf("expected about %s remaining, got %s", budget, remaining)
+	}
+}
+
+// TestAddUserToRequestLogOrgIDs checks that a request log names every org of
+// the caller, by ID, and no longer carries a single org name.
+func TestAddUserToRequestLogOrgIDs(t *testing.T) {
+	orgA := mustPgUUID(t, "00000002-0000-0000-0000-00000000000a")
+	orgB := mustPgUUID(t, "00000002-0000-0000-0000-00000000000b")
+
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf)
+	addUserToRequestLog(&logger, cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: orgA, Name: "org-a"}, {ID: orgB, Name: "org-b"}}})
+	logger.Info().Msg("test")
+
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("unable to parse log line %q: %s", buf.String(), err)
+	}
+	if got, want := entry["org_ids"], []any{orgA.String(), orgB.String()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("org_ids: got %#v, want %#v", got, want)
+	}
+	if _, ok := entry["org_name"]; ok {
+		t.Fatalf("unexpected org_name in log line: %s", buf.String())
 	}
 }
 
@@ -17012,4 +17314,465 @@ func TestServiceVersionExistenceIsHidden(t *testing.T) {
 			t.Fatalf("no org: unexpected status %d (%s), want 403", resp.StatusCode, body)
 		}
 	})
+}
+
+// consoleOrgFormPost posts form data as a logged in superuser without
+// following the redirect and returns the response and the client (whose
+// cookies carry the flash message).
+func consoleOrgFormPost(t *testing.T, tsURL string, path string, form url.Values) (*http.Client, *http.Response) {
+	t.Helper()
+	client, _ := consoleLogin(t, tsURL, "admin", validAdminPassword)
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	req, err := http.NewRequest(http.MethodPost, tsURL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return client, resp
+}
+
+// consoleUsersPageText returns the text of the users page, where the flash
+// message of a redirected user form is shown.
+func consoleUsersPageText(t *testing.T, tsURL string, client *http.Client) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, tsURL+"/console/superuser/users", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc.Find("main").Text()
+}
+
+func TestConsoleEditUserOrgs(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	const (
+		userID    = "00000006-0000-0000-0000-000000000007"
+		org1ID    = "00000002-0000-0000-0000-000000000001"
+		org2ID    = "00000002-0000-0000-0000-000000000002"
+		loggedOut = "Role or organization memberships changed, the user was logged out."
+	)
+	editPath := "/console/superuser/users/" + userID + "/edit"
+
+	t.Run("two orgs", func(t *testing.T) {
+		client, resp := consoleOrgFormPost(t, ts.URL, editPath, url.Values{
+			"display_name": {"username6"}, "role": {"user"}, "orgs": {"org1", "org2"},
+		})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d", resp.StatusCode)
+		}
+		if got := userOrgIDs(t, dbPool, userID); !slices.Equal(got, []string{org1ID, org2ID}) {
+			t.Fatalf("memberships: got %v, want org1 and org2", got)
+		}
+		if page := consoleUsersPageText(t, ts.URL, client); !strings.Contains(page, loggedOut) {
+			t.Fatalf("flash lacks %q: %s", loggedOut, page)
+		}
+	})
+
+	t.Run("display name only keeps sessions", func(t *testing.T) {
+		client, resp := consoleOrgFormPost(t, ts.URL, editPath, url.Values{
+			"display_name": {"username6-renamed"}, "role": {"user"}, "orgs": {"org1", "org2"},
+		})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d", resp.StatusCode)
+		}
+		page := consoleUsersPageText(t, ts.URL, client)
+		if !strings.Contains(page, "updated!") || strings.Contains(page, loggedOut) {
+			t.Fatalf("unexpected flash: %s", page)
+		}
+	})
+
+	t.Run("unknown org", func(t *testing.T) {
+		_, resp := consoleOrgFormPost(t, ts.URL, editPath, url.Values{
+			"display_name": {"username6-renamed"}, "role": {"user"}, "orgs": {"no-such-org"},
+		})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(doc.Find("#orgs-error").Text()); got != consoleOrgDoesNotExist {
+			t.Fatalf("org field error: got %q, want %q", got, consoleOrgDoesNotExist)
+		}
+		if got := userOrgIDs(t, dbPool, userID); !slices.Equal(got, []string{org1ID, org2ID}) {
+			t.Fatalf("memberships changed: %v", got)
+		}
+	})
+
+	t.Run("no orgs", func(t *testing.T) {
+		_, resp := consoleOrgFormPost(t, ts.URL, editPath, url.Values{
+			"display_name": {"username6-renamed"}, "role": {"user"},
+		})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d", resp.StatusCode)
+		}
+		if got := userOrgIDs(t, dbPool, userID); len(got) != 0 {
+			t.Fatalf("memberships: got %v, want none", got)
+		}
+	})
+}
+
+func TestConsoleCreateUserOrgs(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/create/user", url.Values{
+		"display_name":     {"created-multi-org-user"},
+		"role":             {"user"},
+		"orgs":             {"org1", "org2"},
+		"password":         {"testpassword12345"},
+		"confirm-password": {"testpassword12345"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", resp.StatusCode)
+	}
+	var userID string
+	err = dbPool.QueryRow(context.Background(), "SELECT id::text FROM users WHERE display_name = 'created-multi-org-user'").Scan(&userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"00000002-0000-0000-0000-000000000001", "00000002-0000-0000-0000-000000000002"}
+	if got := userOrgIDs(t, dbPool, userID); !slices.Equal(got, want) {
+		t.Fatalf("memberships: got %v, want %v", got, want)
+	}
+}
+
+// TestConsoleUserUnknownRoleOrOrg checks that an unknown org or role on the
+// user forms is reported on its own field, and that nothing is created.
+func TestConsoleUserUnknownRoleOrOrg(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	fieldErrors := func(t *testing.T, resp *http.Response) (string, string, string) {
+		t.Helper()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(doc.Find("#orgs-error").Text()),
+			strings.TrimSpace(doc.Find("#role-error").Text()),
+			strings.TrimSpace(doc.Find("main").Text())
+	}
+	createForm := func(role string, org string) url.Values {
+		return url.Values{
+			"display_name":     {"created-bad-user"},
+			"role":             {role},
+			"orgs":             {org},
+			"password":         {"testpassword12345"},
+			"confirm-password": {"testpassword12345"},
+		}
+	}
+	countUsers := func(t *testing.T) int {
+		t.Helper()
+		var n int
+		err := dbPool.QueryRow(context.Background(), "SELECT count(*) FROM users WHERE display_name = 'created-bad-user'").Scan(&n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("create unknown org", func(t *testing.T) {
+		_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/create/user", createForm("user", "no-such-org"))
+		orgErr, roleErr, _ := fieldErrors(t, resp)
+		if orgErr != consoleOrgDoesNotExist || roleErr != "" {
+			t.Fatalf("org error %q, role error %q", orgErr, roleErr)
+		}
+		if n := countUsers(t); n != 0 {
+			t.Fatalf("user was created")
+		}
+	})
+
+	t.Run("create unknown role", func(t *testing.T) {
+		_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/create/user", createForm("no-such-role", "org1"))
+		orgErr, roleErr, page := fieldErrors(t, resp)
+		if roleErr != consoleRoleDoesNotExist || orgErr != "" || strings.Contains(page, "User creation failed") {
+			t.Fatalf("org error %q, role error %q", orgErr, roleErr)
+		}
+		if n := countUsers(t); n != 0 {
+			t.Fatalf("user was created")
+		}
+	})
+
+	t.Run("edit unknown role", func(t *testing.T) {
+		// The form also asks for a new display name and a different org,
+		// so a write that happened before the role lookup failed would
+		// show up as a changed name or membership below.
+		_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/users/00000006-0000-0000-0000-000000000007/edit", url.Values{
+			"display_name": {"username6-renamed"}, "role": {"no-such-role"}, "orgs": {"org2"},
+		})
+		orgErr, roleErr, page := fieldErrors(t, resp)
+		if roleErr != consoleRoleDoesNotExist || orgErr != "" || strings.Contains(page, "User update failed") {
+			t.Fatalf("org error %q, role error %q", orgErr, roleErr)
+		}
+
+		var displayName, roleName string
+		var orgNames []string
+		err := dbPool.QueryRow(
+			context.Background(),
+			`SELECT u.display_name, r.name,
+			        (SELECT array_agg(o.name ORDER BY o.name) FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = u.id)
+			 FROM users u JOIN roles r ON r.id = u.role_id
+			 WHERE u.id = '00000006-0000-0000-0000-000000000007'`,
+		).Scan(&displayName, &roleName, &orgNames)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if displayName != "username6" || roleName != "user" || !slices.Equal(orgNames, []string{"org1"}) {
+			t.Fatalf("user changed by a failed edit: display name %q, role %q, orgs %v", displayName, roleName, orgNames)
+		}
+	})
+}
+
+func TestConsoleUserTooManyOrgs(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// None of these orgs exist, so getting the too-many error rather than
+	// the does-not-exist one shows the limit is checked before any lookup.
+	tooMany := make([]string, 101)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("no-such-org-%d", i)
+	}
+
+	orgsError := func(t *testing.T, resp *http.Response) string {
+		t.Helper()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(doc.Find("#orgs-error").Text())
+	}
+
+	t.Run("create", func(t *testing.T) {
+		_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/create/user", url.Values{
+			"display_name":     {"too-many-orgs-user"},
+			"role":             {"user"},
+			"orgs":             tooMany,
+			"password":         {"testpassword12345"},
+			"confirm-password": {"testpassword12345"},
+		})
+		if got := orgsError(t, resp); got != consoleTooManyOrgs {
+			t.Fatalf("org error %q, want %q", got, consoleTooManyOrgs)
+		}
+		var n int
+		err := dbPool.QueryRow(context.Background(), "SELECT count(*) FROM users WHERE display_name = 'too-many-orgs-user'").Scan(&n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatal("user was created")
+		}
+	})
+
+	t.Run("edit", func(t *testing.T) {
+		// username6 is a member of org1 only.
+		_, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/users/00000006-0000-0000-0000-000000000007/edit", url.Values{
+			"display_name": {"username6"}, "role": {"user"}, "orgs": tooMany,
+		})
+		if got := orgsError(t, resp); got != consoleTooManyOrgs {
+			t.Fatalf("org error %q, want %q", got, consoleTooManyOrgs)
+		}
+		var orgNames []string
+		err := dbPool.QueryRow(
+			context.Background(),
+			"SELECT array_agg(o.name ORDER BY o.name) FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = '00000006-0000-0000-0000-000000000007'",
+		).Scan(&orgNames)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(orgNames, []string{"org1"}) {
+			t.Fatalf("memberships changed by a refused edit: %v", orgNames)
+		}
+	})
+}
+
+func TestConsoleUsersListOrgs(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	// username1 is in org1 only; add org2.
+	_, err = dbPool.Exec(context.Background(), "INSERT INTO user_orgs (user_id, org_id) VALUES ('00000006-0000-0000-0000-000000000002', '00000002-0000-0000-0000-000000000002')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, _ := consoleLogin(t, ts.URL, "admin", validAdminPassword)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/console/superuser/users", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req) // #nosec G704
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orgCells := map[string]string{}
+	doc.Find("main #contents table tbody tr").Each(func(_ int, row *goquery.Selection) {
+		cells := row.Find("td")
+		orgCells[strings.TrimSpace(cells.Eq(0).Text())] = strings.TrimSpace(cells.Eq(2).Text())
+	})
+	if got := orgCells["username1"]; got != "org1, org2" {
+		t.Errorf("multi-org user: got %q, want %q", got, "org1, org2")
+	}
+	if got := orgCells["username3-no-org"]; got != "—" {
+		t.Errorf("user without org: got %q, want %q", got, "—")
+	}
+}
+
+// TestConsoleEditUserRoleOnlyChange checks that a role change alone, with the
+// org set untouched, ends the user's sessions and says so in the flash.
+func TestConsoleEditUserRoleOnlyChange(t *testing.T) {
+	ts, dbPool := newSessionTestServer(t, testServerInput{})
+
+	loginJar(t, ts.URL, "username1", validUserPassword)
+	if n := countUserSessions(t, dbPool, username1ID); n == 0 {
+		t.Fatal("expected a session for the target user before the edit")
+	}
+
+	client, resp := consoleOrgFormPost(t, ts.URL, "/console/superuser/users/"+username1ID+"/edit", url.Values{
+		"display_name": {"username1"}, "role": {"admin"}, "orgs": {"org1"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", resp.StatusCode)
+	}
+	if n := countUserSessions(t, dbPool, username1ID); n != 0 {
+		t.Fatalf("sessions after role change: got %d, want 0", n)
+	}
+	want := "Role or organization memberships changed, the user was logged out."
+	if page := consoleUsersPageText(t, ts.URL, client); !strings.Contains(page, want) {
+		t.Fatalf("flash lacks %q: %s", want, page)
+	}
+}
+
+// TestDeleteOrganizationWithMembers checks that a membership alone blocks
+// deleting an org, and that the org can be deleted once it is removed.
+func TestDeleteOrganizationWithMembers(t *testing.T) {
+	ts, dbPool, err := prepareServer(t, testServerInput{})
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Close()
+
+	ctx := context.Background()
+	_, err = dbPool.Exec(ctx, "INSERT INTO orgs (name) VALUES ('member-only-org')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = dbPool.Exec(ctx, "INSERT INTO user_orgs (user_id, org_id) SELECT u.id, o.id FROM users u, orgs o WHERE u.display_name = 'username3-no-org' AND o.name = 'member-only-org'")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, body := apiJSON(t, http.MethodDelete, ts.URL+"/api/v1/orgs/member-only-org", "admin", validAdminPassword, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("delete with member: got %d (%s), want %d", status, body, http.StatusConflict)
+	}
+	if !strings.Contains(body, "1 users") {
+		t.Fatalf("expected %q in body: %s", "1 users", body)
+	}
+
+	_, err = dbPool.Exec(ctx, "DELETE FROM user_orgs WHERE org_id = (SELECT id FROM orgs WHERE name = 'member-only-org')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, body = apiJSON(t, http.MethodDelete, ts.URL+"/api/v1/orgs/member-only-org", "admin", validAdminPassword, nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("delete without member: got %d (%s), want %d", status, body, http.StatusNoContent)
+	}
+}
+
+// TestConsoleOrgsListUserCount checks the member count in the superuser
+// org list against user_orgs.
+func TestConsoleOrgsListUserCount(t *testing.T) {
+	ts, dbPool := newSessionTestServer(t, testServerInput{})
+
+	var want int
+	err := dbPool.QueryRow(context.Background(), "SELECT COUNT(*) FROM user_orgs WHERE org_id = (SELECT id FROM orgs WHERE name = 'org1')").Scan(&want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want < 2 {
+		t.Fatalf("seed gives org1 %d members, want several", want)
+	}
+
+	jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+	res := doConsole(t, jar, http.MethodGet, ts.URL+consoleSuperuserOrgs, nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("status %d (%s), want %d", res.status, res.body, http.StatusOK)
+	}
+	if !strings.Contains(res.body, "<th>Users</th>") {
+		t.Fatalf("no Users column in body: %s", res.body)
+	}
+	m := regexp.MustCompile(`<td>org1</td>(?:\s*<td>[^<]*</td>){3}\s*<td>(\d+)</td>`).FindStringSubmatch(res.body)
+	if m == nil {
+		t.Fatalf("no org1 row with a user count in body: %s", res.body)
+	}
+	if m[1] != strconv.Itoa(want) {
+		t.Fatalf("org1 user count %s, want %d", m[1], want)
+	}
 }

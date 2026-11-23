@@ -19,21 +19,47 @@ const (
 	DefaultOriginGroupName = "default"
 )
 
+// OrgRef identifies an org the caller is a member of. The fields are in the
+// order of the (o.id, o.name) records the auth queries scan into it, pgx maps
+// a composite to a struct by position.
+type OrgRef struct {
+	ID   pgtype.UUID
+	Name string
+}
+
 // AuthData represents authentication data for a given user or org client credential.
 // The Username and UserID fields are only set for users, not org client
-// credentials and OrgID/OrgName may be unset for users not currently members
-// of an organization.
+// credentials. Orgs holds every org the caller is a member of, sorted by
+// name; it is empty for users not currently members of any organization and
+// holds exactly one org for an org client credential.
 type AuthData struct {
 	Username           *string
 	UserID             *pgtype.UUID
-	OrgID              *pgtype.UUID
-	OrgName            *string
+	Orgs               []OrgRef
 	Superuser          bool
 	RoleID             pgtype.UUID
 	RoleName           string
 	ClientCredName     *string
 	ClientCredID       *pgtype.UUID
 	ClientCredClientID *string
+}
+
+// MemberOf reports whether orgID is one of the caller's orgs. It is pure
+// membership and ignores Superuser, so callers granting access must check
+// Superuser themselves.
+func (ad AuthData) MemberOf(orgID pgtype.UUID) bool {
+	return slices.ContainsFunc(ad.Orgs, func(o OrgRef) bool {
+		return o.ID == orgID
+	})
+}
+
+// OrgIDs returns the IDs of the caller's orgs, in the order of Orgs.
+func (ad AuthData) OrgIDs() []pgtype.UUID {
+	ids := make([]pgtype.UUID, 0, len(ad.Orgs))
+	for _, o := range ad.Orgs {
+		ids = append(ids, o.ID)
+	}
+	return ids
 }
 
 // Types that can be shared across the other packages
@@ -50,6 +76,7 @@ type OrgListItem struct {
 	ServiceCount     int64 `json:"service_count"`
 	DomainCount      int64 `json:"domain_count"`
 	ClientTokenCount int64 `json:"client_token_count"`
+	UserCount        int64 `json:"user_count"`
 }
 
 // OrgClientCredentialSafe contains the fields we can share with users via e.g. the API
@@ -339,6 +366,8 @@ sub vcl_backend_error {
 
 type Domain struct {
 	ID                pgtype.UUID `json:"id"`
+	OrgID             pgtype.UUID `json:"org_id" doc:"ID of related organization"`
+	OrgName           string      `json:"org_name" doc:"Name of related organization"`
 	FQDN              string      `json:"fqdn"`
 	Verified          bool        `json:"verified"`
 	VerificationToken string      `json:"verification_token"`
@@ -492,7 +521,7 @@ type UserListItem struct {
 	ID           pgtype.UUID `json:"id"`
 	DisplayName  string      `json:"display_name"`
 	RoleName     string      `json:"role_name"`
-	OrgName      *string     `json:"org_name"`
+	OrgNames     []string    `json:"org_names"`
 	AuthProvider string      `json:"auth_provider"`
 }
 
@@ -502,8 +531,8 @@ type UserEditData struct {
 	ID           pgtype.UUID
 	DisplayName  string
 	RoleName     string
-	OrgName      *string
-	AuthProvider string // "local" or "keycloak"
+	OrgNames     []string // sorted by name, empty when in no org
+	AuthProvider string   // "local" or "keycloak"
 }
 
 // ServiceVersionUsage is one service's version count against its quota, for

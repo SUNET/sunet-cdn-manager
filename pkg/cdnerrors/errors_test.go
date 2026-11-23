@@ -169,6 +169,22 @@ func TestUnknownDomainError(t *testing.T) {
 	}
 }
 
+func TestDependentsErrorMessage(t *testing.T) {
+	tests := []struct {
+		err  *DependentsError
+		want string
+	}{
+		{&DependentsError{Name: "org1", Users: 2}, `cannot delete "org1": has 2 users`},
+		{&DependentsError{Name: "org1", Services: 1, Users: 2}, `cannot delete "org1": has 1 services and 2 users`},
+		{&DependentsError{Name: "org1", Services: 1, Domains: 3, ClientTokens: 4, Users: 2}, `cannot delete "org1": has 1 services, 3 domains, 4 client tokens, and 2 users`},
+	}
+	for _, test := range tests {
+		if got := test.err.Error(); got != test.want {
+			t.Errorf("got %q, want %q", got, test.want)
+		}
+	}
+}
+
 func TestUserMessages(t *testing.T) {
 	if got := NewValidationError("bad vcl").(UserMessager).UserMessage(); got != "bad vcl" {
 		t.Errorf("unexpected VCL validation user message: %q", got)

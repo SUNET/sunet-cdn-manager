@@ -233,8 +233,11 @@ templ NavBar(u *url.URL, ad cdntypes.AuthData, orgName string, availableOrgNames
 							<p class="nav-section-label">Organization</p>
 							<form hx-get={ templ.URL("/console/org-switcher") } hx-trigger="change" hx-target="body" hx-push-url="true">
 								<select name="org">
-									if ad.OrgID == nil {
-										<option value={ cdntypes.OrgNotSelected } selected>{ cdntypes.OrgNotSelected }</option>
+									// Only superusers have pages outside an org to go
+									// back to. Other users always have an org shown,
+									// the one they picked or their first one.
+									if ad.Superuser {
+										<option value={ cdntypes.OrgNotSelected } selected?={ orgName == "" }>{ cdntypes.OrgNotSelected }</option>
 									}
 									for _, availableOrgName := range availableOrgNames {
 										<option value={ availableOrgName } selected?={ availableOrgName == orgName }>{ availableOrgName }</option>
@@ -1871,6 +1874,7 @@ templ OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMess
 					<th>Services</th>
 					<th>Domains</th>
 					<th>Client tokens</th>
+					<th>Users</th>
 					<th>Actions</th>
 				</tr>
 			</thead>
@@ -1881,6 +1885,7 @@ templ OrgsContent(orgs []cdntypes.OrgListItem, flashMessages []string, errorMess
 						<td>{ fmt.Sprintf("%d/%d", org.ServiceCount, org.ServiceQuota) }</td>
 						<td>{ fmt.Sprintf("%d/%d", org.DomainCount, org.DomainQuota) }</td>
 						<td>{ fmt.Sprintf("%d/%d", org.ClientTokenCount, org.ClientTokenQuota) }</td>
+						<td>{ fmt.Sprintf("%d", org.UserCount) }</td>
 						<td>
 							<a href={ templ.URL(fmt.Sprintf("/console/superuser/orgs/%s/edit", org.Name)) } role="button" class="secondary">Edit</a>
 							<button
@@ -1994,8 +1999,8 @@ templ UsersContent(users []cdntypes.UserListItem, flashMessages []string, errorM
 						<td>{ user.DisplayName }</td>
 						<td>{ user.RoleName }</td>
 						<td>
-							if user.OrgName != nil {
-								{ *user.OrgName }
+							if len(user.OrgNames) > 0 {
+								{ strings.Join(user.OrgNames, ", ") }
 							} else {
 								—
 							}
@@ -2042,16 +2047,17 @@ templ CreateUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdn
 			</select>
 		</label>
 		@fieldError("role", formData.Errors.Role)
-		<label for="org">
-			Organization
-			<select id="org" { fieldErrorAttrs("org", formData.Errors.Org)... } name="org">
-				<option value={ cdntypes.OrgNotSelected } selected?={ formData.Org == "" || formData.Org == cdntypes.OrgNotSelected }>{ cdntypes.OrgNotSelected }</option>
-				for _, org := range orgs {
-					<option value={ org.Name } selected?={ org.Name == formData.Org }>{ org.Name }</option>
-				}
-			</select>
-		</label>
-		@fieldError("org", formData.Errors.Org)
+		<fieldset id="orgs" { fieldErrorAttrs("orgs", formData.Errors.Org)... }>
+			<legend>Organizations</legend>
+			for _, org := range orgs {
+				<label>
+					<input type="checkbox" name="orgs" value={ org.Name } checked?={ slices.Contains(formData.Orgs, org.Name) }/>
+					{ org.Name }
+				</label>
+			}
+			<small>None checked: no organization</small>
+		</fieldset>
+		@fieldError("orgs", formData.Errors.Org)
 		<label for="password">
 			Password
 			<input type="password" id="password" { fieldErrorAttrs("password", formData.Errors.Password)... } name="password" placeholder="Enter password (min 15 characters)..." required/>
@@ -2089,16 +2095,17 @@ templ EditUserContent(formData UserFormData, roles []cdntypes.Role, orgs []cdnty
 			</select>
 		</label>
 		@fieldError("role", formData.Errors.Role)
-		<label for="org">
-			Organization
-			<select id="org" { fieldErrorAttrs("org", formData.Errors.Org)... } name="org">
-				<option value={ cdntypes.OrgNotSelected } selected?={ formData.Org == "" || formData.Org == cdntypes.OrgNotSelected }>{ cdntypes.OrgNotSelected }</option>
-				for _, org := range orgs {
-					<option value={ org.Name } selected?={ org.Name == formData.Org }>{ org.Name }</option>
-				}
-			</select>
-		</label>
-		@fieldError("org", formData.Errors.Org)
+		<fieldset id="orgs" { fieldErrorAttrs("orgs", formData.Errors.Org)... }>
+			<legend>Organizations</legend>
+			for _, org := range orgs {
+				<label>
+					<input type="checkbox" name="orgs" value={ org.Name } checked?={ slices.Contains(formData.Orgs, org.Name) }/>
+					{ org.Name }
+				</label>
+			}
+			<small>None checked: no organization</small>
+		</fieldset>
+		@fieldError("orgs", formData.Errors.Org)
 		<label>
 			Auth Provider
 			<input type="text" value={ authProvider } readonly/>

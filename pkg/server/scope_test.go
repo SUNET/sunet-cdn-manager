@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/SUNET/sunet-cdn-manager/pkg/cdnerrors"
@@ -26,8 +27,27 @@ func scopeTestOrg1Member(t *testing.T) cdntypes.AuthData {
 	if err := orgID.Scan(scopeTestOrg1ID); err != nil {
 		t.Fatal(err)
 	}
-	orgName := "org1"
-	return cdntypes.AuthData{OrgID: &orgID, OrgName: &orgName}
+	return cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: orgID, Name: "org1"}}}
+}
+
+func TestScopeOfMultipleOrgs(t *testing.T) {
+	orgA := mustPgUUID(t, scopeTestOrg1ID)
+	orgB := mustPgUUID(t, scopeTestOrg2ID)
+
+	s := scopeOf(cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: orgA, Name: "org1"}, {ID: orgB, Name: "org2"}}})
+	if want := []pgtype.UUID{orgA, orgB}; !slices.Equal(s.orgIDs, want) {
+		t.Errorf("orgIDs: got %v, want %v", s.orgIDs, want)
+	}
+	if s.hasNoAccess() {
+		t.Error("member of two orgs: hasNoAccess() is true")
+	}
+
+	if !scopeOf(cdntypes.AuthData{}).hasNoAccess() {
+		t.Error("no orgs: hasNoAccess() is false")
+	}
+	if scopeOf(cdntypes.AuthData{Superuser: true}).hasNoAccess() {
+		t.Error("superuser without orgs: hasNoAccess() is true")
+	}
 }
 
 func TestResolveOrg(t *testing.T) {

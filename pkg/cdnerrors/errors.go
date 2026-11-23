@@ -351,6 +351,7 @@ type DependentsError struct {
 	Services     int64
 	Domains      int64
 	ClientTokens int64
+	Users        int64
 }
 
 func (e *DependentsError) Error() string {
@@ -363,6 +364,9 @@ func (e *DependentsError) Error() string {
 	}
 	if e.ClientTokens > 0 {
 		parts = append(parts, fmt.Sprintf("%d client tokens", e.ClientTokens))
+	}
+	if e.Users > 0 {
+		parts = append(parts, fmt.Sprintf("%d users", e.Users))
 	}
 	return fmt.Sprintf("cannot delete %q: has %s", e.Name, joinParts(parts))
 }

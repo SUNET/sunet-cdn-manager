@@ -174,7 +174,8 @@ type sessionHandle struct {
 	store *consolesession.Store
 	id    pgtype.UUID
 	// orgSelected is false until the org switcher was used, or the
-	// dashboard picked the user's own org, see consoleDashboardHandler.
+	// dashboard picked the superuser's only org, see
+	// consoleDashboardHandler.
 	orgSelected bool
 	// selectedOrgName is the org shown in the org switcher, "" for none.
 	// It is a display preference only and never grants access. An org
@@ -235,17 +236,22 @@ func (sh *sessionHandle) setSelectedOrg(ctx context.Context, orgID *pgtype.UUID)
 // scanConsoleAuth builds AuthData from a row selected by loadUserAuth or
 // loadSessionAuth. It also returns the id and name of the selected org, nil
 // and "" if there is none or it no longer exists.
+//
+// The orgs column is an array of (id, name) records sorted by name, read
+// with a correlated subquery so the outer query stays a single row without
+// a GROUP BY and the rights still come from one statement. It is NULL, a nil
+// slice, for a user in no org.
 func scanConsoleAuth(row pgx.Row) (cdntypes.AuthData, *pgtype.UUID, string, error) {
 	var userID, roleID pgtype.UUID
 	var displayName, roleName string
-	var orgID, selectedOrgID *pgtype.UUID // nil if none
-	var orgName, selectedOrgName *string  // same as above
+	var orgs []cdntypes.OrgRef     // nil if the user is in no org
+	var selectedOrgID *pgtype.UUID // nil if none
+	var selectedOrgName *string    // same as above
 	var superuser bool
 	err := row.Scan(
 		&userID,
 		&displayName,
-		&orgID,
-		&orgName,
+		&orgs,
 		&roleID,
 		&roleName,
 		&superuser,
@@ -259,8 +265,7 @@ func scanConsoleAuth(row pgx.Row) (cdntypes.AuthData, *pgtype.UUID, string, erro
 	ad := cdntypes.AuthData{
 		Username:  &displayName,
 		UserID:    &userID,
-		OrgID:     orgID,
-		OrgName:   orgName,
+		Orgs:      orgs,
 		RoleID:    roleID,
 		RoleName:  roleName,
 		Superuser: superuser,
@@ -284,11 +289,11 @@ func loadUserAuth(ctx context.Context, dbc *dbConn, userID pgtype.UUID) (cdntype
 	// Without a session there is no selected org
 	ad, _, _, err := scanConsoleAuth(dbc.dbPool.QueryRow(
 		ctx,
-		`SELECT users.id, users.display_name, users.org_id, orgs.name,
+		`SELECT users.id, users.display_name,
+		        `+userOrgRecordsColumn+`,
 		        users.role_id, roles.name, roles.superuser, NULL::uuid, NULL::text
 		 FROM users
 		 JOIN roles ON users.role_id = roles.id
-		 LEFT JOIN orgs ON users.org_id = orgs.id
 		 WHERE users.id = $1`,
 		userID,
 	))
@@ -310,12 +315,12 @@ func loadUserAuth(ctx context.Context, dbc *dbConn, userID pgtype.UUID) (cdntype
 func loadSessionAuth(ctx context.Context, dbc *dbConn, sessionID pgtype.UUID) (cdntypes.AuthData, *pgtype.UUID, string, error) {
 	return scanConsoleAuth(dbc.dbPool.QueryRow(
 		ctx,
-		`SELECT users.id, users.display_name, users.org_id, orgs.name,
+		`SELECT users.id, users.display_name,
+		        `+userOrgRecordsColumn+`,
 		        users.role_id, roles.name, roles.superuser, sel.id, sel.name
 		 FROM console_sessions s
 		 JOIN users ON users.id = s.user_id
 		 JOIN roles ON users.role_id = roles.id
-		 LEFT JOIN orgs ON users.org_id = orgs.id
 		 LEFT JOIN orgs sel ON sel.id = s.selected_org_id
 		 WHERE s.id = $1`,
 		sessionID,
@@ -324,7 +329,8 @@ func loadSessionAuth(ctx context.Context, dbc *dbConn, sessionID pgtype.UUID) (c
 
 // selectedOrgAllowed applies the membership rule of the org pages to the
 // org switcher selection: superusers may use any org, other users only
-// their own. selectedOrgID is nil if nothing is selected.
+// the orgs they are a member of. selectedOrgID is nil if nothing is
+// selected.
 func selectedOrgAllowed(ad cdntypes.AuthData, selectedOrgID *pgtype.UUID) bool {
 	if selectedOrgID == nil {
 		return false
@@ -332,7 +338,33 @@ func selectedOrgAllowed(ad cdntypes.AuthData, selectedOrgID *pgtype.UUID) bool {
 	if ad.Superuser {
 		return true
 	}
-	return ad.OrgID != nil && *ad.OrgID == *selectedOrgID
+	return ad.MemberOf(*selectedOrgID)
+}
+
+// consoleSidebarOrg is the org whose links the sidebar shows on a page that
+// is not about an org the caller may see, such as the "not found" pages. It
+// never depends on the org named in the URL, or those pages would differ
+// between an org that exists outside the caller's scope and one that does
+// not exist at all.
+//
+// If the caller picked an org in the switcher, it is that org.
+// authenticateConsoleRequest has already dropped the selection if the
+// caller may no longer use it. Otherwise it is the caller's first org by
+// name (ad.Orgs is sorted by name), which is also the org the dashboard
+// sends users to.
+//
+// The exception is a superuser in several orgs with nothing selected: they
+// get no sidebar org. A superuser has work to do outside any org, on the
+// superuser pages, so for them no org is a normal state, not something to
+// pick away from.
+func consoleSidebarOrg(ad cdntypes.AuthData, sh *sessionHandle) string {
+	if sh != nil && sh.selectedOrgName != "" {
+		return sh.selectedOrgName
+	}
+	if len(ad.Orgs) == 0 || (ad.Superuser && len(ad.Orgs) > 1) {
+		return ""
+	}
+	return ad.Orgs[0].Name
 }
 
 // authenticateConsoleRequest checks the session cookie of r against the
