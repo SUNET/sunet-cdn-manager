@@ -130,7 +130,8 @@ using user `testuser` and password `testuser`.
 After logging in as `testuser` for the first time assign it to the sample organization:
 ```
 admin_password=some-secret-string
-curl -k -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" https://manager.sunet-cdn.localhost:8444/api/v1/users/testuser
+testuser_id=$(curl -k -s -u admin:$admin_password https://manager.sunet-cdn.localhost:8444/api/v1/users | jq -r '.[] | select(.display_name == "testuser") | .id')
+curl -k -s -i -u admin:$admin_password -X PUT -d @local-dev/sample-json/set-org.json -H "content-type: application/json" "https://manager.sunet-cdn.localhost:8444/api/v1/users/$testuser_id"
 ```
 
 ### Formatting and linting

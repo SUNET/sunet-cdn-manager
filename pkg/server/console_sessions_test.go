@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/gorilla/securecookie"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -265,6 +267,8 @@ const (
 	csUserRoleID     = "00000005-0000-0000-0000-000000000002"
 	csOrg1ID         = "00000002-0000-0000-0000-000000000001"
 	csOrg2ID         = "00000002-0000-0000-0000-000000000002"
+	csOrg3ID         = "00000002-0000-0000-0000-000000000003"
+	csMultiOrgUserID = "00000006-0000-0000-0000-000000000011" // "multi-org-user": user, org1 and org2
 )
 
 func mustPgUUID(t *testing.T, s string) pgtype.UUID {
@@ -366,12 +370,12 @@ func TestLoadUserAuth(t *testing.T) {
 	if ad.Username == nil || *ad.Username != "username1" || ad.UserID == nil || ad.UserID.String() != username1ID {
 		t.Fatalf("unexpected user in AuthData: %+v", ad)
 	}
-	if ad.OrgName == nil || *ad.OrgName != "org1" || ad.RoleName != "user" || ad.Superuser {
+	if len(ad.Orgs) != 1 || ad.Orgs[0].ID != mustPgUUID(t, csOrg1ID) || ad.Orgs[0].Name != "org1" || ad.RoleName != "user" || ad.Superuser {
 		t.Fatalf("unexpected rights in AuthData: %+v", ad)
 	}
 
 	ad, err = loadUserAuth(ctx, env.dbc, mustPgUUID(t, csAdminID))
-	if err != nil || !ad.Superuser || ad.OrgID != nil {
+	if err != nil || !ad.Superuser || len(ad.Orgs) != 0 {
 		t.Fatalf("admin: got %+v, %v", ad, err)
 	}
 
@@ -398,7 +402,7 @@ func TestLoadSessionAuth(t *testing.T) {
 	if ad.Username == nil || *ad.Username != "username1" || ad.UserID == nil || ad.UserID.String() != username1ID {
 		t.Fatalf("unexpected user in AuthData: %+v", ad)
 	}
-	if ad.OrgName == nil || *ad.OrgName != "org1" || ad.RoleName != "user" || ad.Superuser {
+	if len(ad.Orgs) != 1 || ad.Orgs[0].ID != mustPgUUID(t, csOrg1ID) || ad.Orgs[0].Name != "org1" || ad.RoleName != "user" || ad.Superuser {
 		t.Fatalf("unexpected rights in AuthData: %+v", ad)
 	}
 	if selectedID != nil || selectedName != "" {
@@ -440,10 +444,12 @@ func TestLoadSessionAuthAfterPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	org1 := "org1"
-	_, err = updateUser(ctx, &logger, env.dbc, cdntypes.AuthData{Superuser: true}, sess.UserID, "", &org1, "admin")
+	_, sessionsEnded, err := updateUser(ctx, &logger, env.dbc, cdntypes.AuthData{Superuser: true}, sess.UserID, "", []string{"org1"}, "admin")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !sessionsEnded {
+		t.Fatal("updateUser did not report the sessions as ended")
 	}
 	// A query of its own sees the promotion
 	if ad, err := loadUserAuth(ctx, env.dbc, sess.UserID); err != nil || !ad.Superuser {
@@ -453,6 +459,113 @@ func TestLoadSessionAuthAfterPromotion(t *testing.T) {
 	ad, _, _, err := loadSessionAuth(ctx, env.dbc, sess.ID)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("want pgx.ErrNoRows for the ended session, got %+v, %v", ad, err)
+	}
+}
+
+// TestUpdateUserWaitsForOrgBeingDeleted checks the lock order between
+// updateUser and deleteOrg for an org the user is being removed from. A
+// transaction takes FOR UPDATE on the org, as deleteOrg does first. updateUser
+// must then wait for that org before it writes any user_orgs or
+// console_sessions row. Only then can the DELETE that follows in deleteOrg run
+// without waiting for updateUser, find the membership still there and fail
+// with a foreign key violation instead of deadlocking.
+func TestUpdateUserWaitsForOrgBeingDeleted(t *testing.T) {
+	env := newSessionTestEnv(t)
+	ctx := context.Background()
+	logger := env.logger
+	userID := mustPgUUID(t, username1ID)
+
+	execSQL(t, env.dbPool, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2)", username1ID, csOrg2ID)
+	env.login(t, username1ID)
+
+	// The shared test pool is capped at one connection, which updateUser
+	// uses. Hold the org lock and poll pg_stat_activity from a separate
+	// pool against the same database.
+	lockCfg := env.dbPool.Config().Copy()
+	lockCfg.MaxConns = 2
+	lockPool, err := pgxpool.NewWithConfig(ctx, lockCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockPool.Close()
+
+	deleter, err := lockPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		// Normally already rolled back below, this covers an early
+		// t.Fatal()
+		if rbErr := deleter.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Logf("unable to roll back deleting transaction: %v", rbErr)
+		}
+	}()
+	// A regression that makes the DELETE wait for updateUser fails the
+	// test instead of hanging it.
+	if _, err := deleter.Exec(ctx, "SET LOCAL lock_timeout = '10s'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deleter.Exec(ctx, "SELECT id FROM orgs WHERE id = $1 FOR UPDATE", csOrg2ID); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		sessionsEnded bool
+		err           error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, sessionsEnded, err := updateUser(ctx, &logger, env.dbc, cdntypes.AuthData{Superuser: true}, userID, "", []string{"org1"}, "user")
+		done <- result{sessionsEnded: sessionsEnded, err: err}
+	}()
+
+	// Wait until updateUser is blocked on the lock of the org it removes
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case r := <-done:
+			t.Fatalf("updateUser finished while the org was locked: %+v", r)
+		default:
+		}
+		var waiting int
+		err := lockPool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM user_orgs uo JOIN orgs o%FOR SHARE OF o'").Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("updateUser never waited for the org being deleted")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_, err = deleter.Exec(ctx, "DELETE FROM orgs WHERE id = $1", csOrg2ID)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); !ok || pgErr.Code != pgForeignKeyViolation {
+		t.Fatalf("deleting the org: want a foreign key violation, got %v", err)
+	}
+	if err := deleter.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("updateUser: %v", r.err)
+		}
+		if !r.sessionsEnded {
+			t.Fatal("updateUser did not report the sessions as ended")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("updateUser did not finish after the org lock was released")
+	}
+
+	if got := userOrgIDs(t, env.dbPool, username1ID); !slices.Equal(got, []string{csOrg1ID}) {
+		t.Fatalf("memberships after updateUser: %v", got)
+	}
+	if n := countUserSessions(t, env.dbPool, username1ID); n != 0 {
+		t.Fatalf("%d sessions left after the org change", n)
 	}
 }
 
@@ -563,6 +676,8 @@ func TestAuthenticateConsoleRequestRacingPromotion(t *testing.T) {
 func TestSelectedOrgAllowed(t *testing.T) {
 	org1 := mustPgUUID(t, csOrg1ID)
 	org2 := mustPgUUID(t, csOrg2ID)
+	org3 := mustPgUUID(t, "00000002-0000-0000-0000-0000000000ff")
+	twoOrgs := cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: org1, Name: "org1"}, {ID: org2, Name: "org2"}}}
 	tests := []struct {
 		name string
 		ad   cdntypes.AuthData
@@ -571,13 +686,41 @@ func TestSelectedOrgAllowed(t *testing.T) {
 	}{
 		{name: "nothing selected", ad: cdntypes.AuthData{Superuser: true}, org: nil, want: false},
 		{name: "superuser, any org", ad: cdntypes.AuthData{Superuser: true}, org: &org2, want: true},
-		{name: "own org", ad: cdntypes.AuthData{OrgID: &org1}, org: &org1, want: true},
-		{name: "other org", ad: cdntypes.AuthData{OrgID: &org1}, org: &org2, want: false},
+		{name: "own org", ad: cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: org1, Name: "org1"}}}, org: &org1, want: true},
+		{name: "other org", ad: cdntypes.AuthData{Orgs: []cdntypes.OrgRef{{ID: org1, Name: "org1"}}}, org: &org2, want: false},
 		{name: "no org", ad: cdntypes.AuthData{}, org: &org1, want: false},
+		{name: "two orgs, first", ad: twoOrgs, org: &org1, want: true},
+		{name: "two orgs, second", ad: twoOrgs, org: &org2, want: true},
+		{name: "two orgs, other org", ad: twoOrgs, org: &org3, want: false},
+		{name: "two orgs, nothing selected", ad: twoOrgs, org: nil, want: false},
 	}
 	for _, test := range tests {
 		if got := selectedOrgAllowed(test.ad, test.org); got != test.want {
 			t.Errorf("%s: got %t, want %t", test.name, got, test.want)
+		}
+	}
+}
+
+func TestConsoleSidebarOrg(t *testing.T) {
+	orgA := cdntypes.OrgRef{ID: mustPgUUID(t, csOrg1ID), Name: "org1"}
+	orgB := cdntypes.OrgRef{ID: mustPgUUID(t, csOrg2ID), Name: "org2"}
+	tests := []struct {
+		name string
+		ad   cdntypes.AuthData
+		sh   *sessionHandle
+		want string
+	}{
+		{name: "selected org wins", ad: cdntypes.AuthData{Orgs: []cdntypes.OrgRef{orgA, orgB}}, sh: &sessionHandle{selectedOrgName: "org-b"}, want: "org-b"},
+		{name: "single org, no session", ad: cdntypes.AuthData{Orgs: []cdntypes.OrgRef{orgA}}, sh: nil, want: "org1"},
+		{name: "two orgs, nothing selected", ad: cdntypes.AuthData{Orgs: []cdntypes.OrgRef{orgA, orgB}}, sh: &sessionHandle{}, want: "org1"},
+		{name: "no orgs, no session", ad: cdntypes.AuthData{}, sh: nil, want: ""},
+		{name: "superuser, single org", ad: cdntypes.AuthData{Superuser: true, Orgs: []cdntypes.OrgRef{orgA}}, sh: &sessionHandle{}, want: "org1"},
+		{name: "superuser, two orgs, nothing selected", ad: cdntypes.AuthData{Superuser: true, Orgs: []cdntypes.OrgRef{orgA, orgB}}, sh: &sessionHandle{}, want: ""},
+		{name: "superuser, no orgs", ad: cdntypes.AuthData{Superuser: true}, sh: &sessionHandle{}, want: ""},
+	}
+	for _, test := range tests {
+		if got := consoleSidebarOrg(test.ad, test.sh); got != test.want {
+			t.Errorf("%s: got %q, want %q", test.name, got, test.want)
 		}
 	}
 }
@@ -1570,23 +1713,24 @@ func apiJSON(t *testing.T, method string, target string, username string, passwo
 	return resp.StatusCode, string(b)
 }
 
-// putUserBody is the body of PUT /api/v1/users/{userID}. A nil Org removes
-// the user from their org.
+// putUserBody is the body of PUT /api/v1/users/{userID}. Orgs replaces the
+// user's whole set of orgs, nil or empty removing the user from every org.
 type putUserBody struct {
-	Org         *string `json:"org,omitempty"`
-	Role        string  `json:"role"`
-	DisplayName string  `json:"display_name"`
+	Orgs        []string `json:"orgs,omitempty"`
+	Role        string   `json:"role"`
+	DisplayName string   `json:"display_name"`
 }
 
 // requireOrgAccess checks whether the user of jar may view the org's
-// domains page. A refused org page is a 200 with the org-not-found message.
+// domains page. A refused org page is a 200 with the org-not-found message,
+// or for a user in no org at all the message asking for a membership.
 func requireOrgAccess(t *testing.T, tsURL string, jar http.CookieJar, org string, want bool) {
 	t.Helper()
 	res := doConsole(t, jar, http.MethodGet, tsURL+"/console/org/"+org+"/domains", nil)
 	if res.status != http.StatusOK {
 		t.Fatalf("org %s domains page: got %d to %q", org, res.status, res.location)
 	}
-	allowed := !strings.Contains(res.body, consoleOrgNotFound)
+	allowed := !strings.Contains(res.body, consoleOrgNotFound) && !strings.Contains(res.body, consoleNeedOrgMembershipMsg)
 	if allowed != want {
 		t.Fatalf("org %s domains page: allowed=%t, want %t", org, allowed, want)
 	}
@@ -1604,14 +1748,12 @@ func selectedOrgOption(t *testing.T, body string) string {
 }
 
 func TestSessionAfterDemotion(t *testing.T) {
-	org1 := "org1"
-
 	t.Run("through the API the session ends", func(t *testing.T) {
 		ts, dbPool := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "admin-with-org", validAdminPassword)
 		requireLoggedIn(t, ts.URL, jar)
 
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+csAdminWithOrgID, "admin", validAdminPassword, putUserBody{Org: &org1, Role: "user", DisplayName: "admin-with-org"})
+		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+csAdminWithOrgID, "admin", validAdminPassword, putUserBody{Orgs: []string{"org1"}, Role: "user", DisplayName: "admin-with-org"})
 		if status != http.StatusOK {
 			t.Fatalf("PUT user: %d (%s)", status, body)
 		}
@@ -1641,14 +1783,12 @@ func TestSessionAfterDemotion(t *testing.T) {
 }
 
 func TestSessionAfterPromotion(t *testing.T) {
-	org1 := "org1"
-
 	t.Run("through the API the session ends", func(t *testing.T) {
 		ts, _ := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "username1", validUserPassword)
 		requireLoggedIn(t, ts.URL, jar)
 
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Org: &org1, Role: "admin", DisplayName: "username1"})
+		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Orgs: []string{"org1"}, Role: "admin", DisplayName: "username1"})
 		if status != http.StatusOK {
 			t.Fatalf("PUT user: %d (%s)", status, body)
 		}
@@ -1684,44 +1824,89 @@ func TestSessionAfterPromotion(t *testing.T) {
 }
 
 func TestSessionAfterOrgChange(t *testing.T) {
-	org2 := "org2"
-	org3 := "org3"
-
-	t.Run("moved to another org through the API", func(t *testing.T) {
+	// putOrgs logs username1 in, sets the user's orgs through the API as
+	// the admin and returns the jar holding the session from before the
+	// change. seedOrgs, when not nil, replaces username1's memberships in
+	// the database before logging in.
+	putOrgs := func(t *testing.T, seedOrgs []string, orgs []string) (*httptest.Server, *pgxpool.Pool, http.CookieJar) {
+		t.Helper()
 		ts, dbPool := newSessionTestServer(t, testServerInput{})
+		if seedOrgs != nil {
+			execSQL(t, dbPool, "DELETE FROM user_orgs WHERE user_id = $1", username1ID)
+			for _, orgID := range seedOrgs {
+				execSQL(t, dbPool, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2)", username1ID, orgID)
+			}
+		}
 		jar := loginJar(t, ts.URL, "username1", validUserPassword)
 		requireLoggedIn(t, ts.URL, jar)
 
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Org: &org2, Role: "user", DisplayName: "username1"})
+		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Orgs: orgs, Role: "user", DisplayName: "username1"})
 		if status != http.StatusOK {
 			t.Fatalf("PUT user: %d (%s)", status, body)
 		}
+		return ts, dbPool, jar
+	}
 
-		requireLoggedOut(t, ts.URL, jar)
+	requireNoSessions := func(t *testing.T, dbPool *pgxpool.Pool) {
+		t.Helper()
 		if n := countUserSessions(t, dbPool, username1ID); n != 0 {
 			t.Fatalf("%d sessions left after the org change", n)
 		}
+	}
+
+	t.Run("moved to another org through the API", func(t *testing.T) {
+		ts, dbPool, jar := putOrgs(t, nil, []string{"org2"})
+		requireLoggedOut(t, ts.URL, jar)
+		requireNoSessions(t, dbPool)
+	})
+
+	t.Run("org added through the API", func(t *testing.T) {
+		ts, dbPool, jar := putOrgs(t, nil, []string{"org1", "org2"})
+		requireLoggedOut(t, ts.URL, jar)
+		requireNoSessions(t, dbPool)
 	})
 
 	t.Run("org removed through the API", func(t *testing.T) {
-		ts, _ := newSessionTestServer(t, testServerInput{})
-		jar := loginJar(t, ts.URL, "username7", validUserPassword)
-		requireLoggedIn(t, ts.URL, jar)
-
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+csUsername7ID, "admin", validAdminPassword, putUserBody{Role: "user", DisplayName: "username7"})
-		if status != http.StatusOK {
-			t.Fatalf("PUT user: %d (%s)", status, body)
-		}
-
+		ts, dbPool, jar := putOrgs(t, []string{csOrg1ID, csOrg2ID}, []string{"org1"})
 		requireLoggedOut(t, ts.URL, jar)
+		requireNoSessions(t, dbPool)
 	})
 
-	t.Run("org set through the API", func(t *testing.T) {
+	t.Run("last org removed through the API", func(t *testing.T) {
+		ts, dbPool, jar := putOrgs(t, nil, nil)
+		requireLoggedOut(t, ts.URL, jar)
+		requireNoSessions(t, dbPool)
+
+		fresh := loginJar(t, ts.URL, "username1", validUserPassword)
+		res := doConsole(t, fresh, http.MethodGet, ts.URL+consolePath, nil)
+		if res.status != http.StatusOK || !strings.Contains(res.body, "You do not have access to any resources") {
+			t.Fatalf("dashboard in no org: got %d to %q (%s)", res.status, res.location, res.body)
+		}
+		requireOrgAccess(t, ts.URL, fresh, "org1", false)
+	})
+
+	t.Run("same set reordered through the API", func(t *testing.T) {
+		ts, dbPool, jar := putOrgs(t, []string{csOrg1ID, csOrg2ID}, []string{"org2", "org1"})
+		requireLoggedIn(t, ts.URL, jar)
+		if n := countUserSessions(t, dbPool, username1ID); n != 1 {
+			t.Fatalf("an unchanged set of orgs must not end sessions, %d left", n)
+		}
+	})
+
+	t.Run("same set by name and ID through the API", func(t *testing.T) {
+		ts, dbPool, jar := putOrgs(t, nil, []string{"org1", csOrg1ID})
+		requireLoggedIn(t, ts.URL, jar)
+		if n := countUserSessions(t, dbPool, username1ID); n != 1 {
+			t.Fatalf("an unchanged set of orgs must not end sessions, %d left", n)
+		}
+	})
+
+	t.Run("org set on own superuser through the API", func(t *testing.T) {
 		ts, _ := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "admin", validAdminPassword)
 		requireLoggedIn(t, ts.URL, jar)
 
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+csAdminID, "admin", validAdminPassword, putUserBody{Org: &org3, Role: "admin", DisplayName: "admin"})
+		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+csAdminID, "admin", validAdminPassword, putUserBody{Orgs: []string{"org3"}, Role: "admin", DisplayName: "admin"})
 		if status != http.StatusOK {
 			t.Fatalf("PUT user: %d (%s)", status, body)
 		}
@@ -1737,7 +1922,8 @@ func TestSessionAfterOrgChange(t *testing.T) {
 		requireOrgAccess(t, ts.URL, jar, "org1", true)
 		requireOrgAccess(t, ts.URL, jar, "org2", false)
 
-		execSQL(t, dbPool, "UPDATE users SET org_id = $1 WHERE id = $2", csOrg2ID, username1ID)
+		execSQL(t, dbPool, "DELETE FROM user_orgs WHERE user_id = $1", username1ID)
+		execSQL(t, dbPool, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2)", username1ID, csOrg2ID)
 
 		requireOrgAccess(t, ts.URL, jar, "org1", false)
 		requireOrgAccess(t, ts.URL, jar, "org2", true)
@@ -1825,9 +2011,8 @@ func TestSessionAfterUserEdit(t *testing.T) {
 		ts, _ := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "username1", validUserPassword)
 		requireLoggedIn(t, ts.URL, jar)
-		org1 := "org1"
 
-		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Org: &org1, Role: "user", DisplayName: "username1-renamed"})
+		status, body := apiJSON(t, http.MethodPut, ts.URL+"/api/v1/users/"+username1ID, "admin", validAdminPassword, putUserBody{Orgs: []string{"org1"}, Role: "user", DisplayName: "username1-renamed"})
 		if status != http.StatusOK {
 			t.Fatalf("PUT user: %d (%s)", status, body)
 		}
@@ -1847,7 +2032,7 @@ func TestSessionAfterUserEdit(t *testing.T) {
 		res := doConsole(t, admin, http.MethodPost, ts.URL+"/console/superuser/users/"+username1ID+"/edit", url.Values{
 			"display_name": {"username1"},
 			"role":         {"admin"},
-			"org":          {"org1"},
+			"orgs":         {"org1"},
 		})
 		if res.status != http.StatusSeeOther {
 			t.Fatalf("edit user: got %d (%s)", res.status, res.body)
@@ -1866,7 +2051,7 @@ func TestSessionAfterUserEdit(t *testing.T) {
 		res := doConsole(t, admin, http.MethodPost, ts.URL+"/console/superuser/users/"+csAdminID+"/edit", url.Values{
 			"display_name": {"admin"},
 			"role":         {"admin"},
-			"org":          {"org2"},
+			"orgs":         {"org2"},
 		})
 		// The flash message for the ended session is dropped, the
 		// response is still the redirect
@@ -2059,10 +2244,54 @@ func TestConsoleOrgExistenceIsHidden(t *testing.T) {
 		}
 	})
 
+	// The not-found pages for an out-of-scope org and a nonexistent one must be
+	// byte-identical, sidebar included, and the sidebar must link to the org
+	// the user does have rather than going empty. If the user picked an org
+	// in the switcher, the sidebar shows that org. Otherwise it shows the
+	// user's first org by name, which for username1 is its only org.
+	t.Run("sidebar on not-found pages", func(t *testing.T) {
+		tests := []struct {
+			username    string
+			password    string
+			selectOrg   string
+			wantSidebar string
+		}{
+			{"username1", validUserPassword, "", "/console/org/org1/services"},
+			{"multi-org-user", validUserPassword, "", "/console/org/org1/services"},
+			{"multi-org-user", validUserPassword, "org2", "/console/org/org2/services"},
+		}
+		for _, test := range tests {
+			t.Run(test.username+"/selected="+test.selectOrg, func(t *testing.T) {
+				jar := loginJar(t, ts.URL, test.username, test.password)
+				if test.selectOrg != "" {
+					res := doConsole(t, jar, http.MethodGet, ts.URL+"/console/org-switcher?org="+test.selectOrg, nil)
+					if res.status != http.StatusFound {
+						t.Fatalf("org switcher: got %d", res.status)
+					}
+				}
+				for _, page := range pages {
+					t.Run(page.name, func(t *testing.T) {
+						outOfScope := do(t, ts.URL, jar, page.method, "org3", page.suffix)
+						unknown := do(t, ts.URL, jar, page.method, "does-not-exist", page.suffix)
+						if outOfScope.status != unknown.status || outOfScope.body != unknown.body {
+							t.Fatalf("org3 and does-not-exist differ:\n%d %s\n---\n%d %s", outOfScope.status, outOfScope.body, unknown.status, unknown.body)
+						}
+						if !strings.Contains(outOfScope.body, consoleOrgNotFound) {
+							t.Fatalf("expected %q in body: %s", consoleOrgNotFound, outOfScope.body)
+						}
+						if !strings.Contains(outOfScope.body, `href="`+test.wantSidebar+`"`) {
+							t.Fatalf("sidebar link %s missing: %s", test.wantSidebar, outOfScope.body)
+						}
+					})
+				}
+			})
+		}
+	})
+
 	t.Run("no org", func(t *testing.T) {
 		ts, dbPool := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "username1", validUserPassword)
-		execSQL(t, dbPool, "UPDATE users SET org_id = NULL WHERE id = $1", username1ID)
+		execSQL(t, dbPool, "DELETE FROM user_orgs WHERE user_id = $1", username1ID)
 		for _, page := range pages {
 			t.Run(page.name, func(t *testing.T) {
 				for _, org := range []string{"org1", "no-such-org"} {
@@ -2237,7 +2466,7 @@ func TestConsoleServiceExistenceIsHidden(t *testing.T) {
 	t.Run("no org", func(t *testing.T) {
 		ts, dbPool := newSessionTestServer(t, testServerInput{})
 		jar := loginJar(t, ts.URL, "username1", validUserPassword)
-		execSQL(t, dbPool, "UPDATE users SET org_id = NULL WHERE id = $1", username1ID)
+		execSQL(t, dbPool, "DELETE FROM user_orgs WHERE user_id = $1", username1ID)
 		for _, page := range pages {
 			t.Run(page.name, func(t *testing.T) {
 				for _, target := range targets[:4] {
@@ -2292,5 +2521,175 @@ func TestConsoleServiceExistenceIsHidden(t *testing.T) {
 		if delOrg1.status != del.status || delOrg1.body != del.body {
 			t.Fatalf("delete of a missing service in a real org differs: %d\n%s", delOrg1.status, delOrg1.body)
 		}
+	})
+}
+
+// requireRedirect checks that GET target in jar redirects to want, with
+// either 302 (org switcher) or 303 (dashboard).
+func requireRedirect(t *testing.T, jar http.CookieJar, target string, want string) {
+	t.Helper()
+	res := doConsole(t, jar, http.MethodGet, target, nil)
+	if (res.status != http.StatusFound && res.status != http.StatusSeeOther) || res.location != want {
+		t.Fatalf("GET %s: got %d to %q, want a redirect to %q", target, res.status, res.location, want)
+	}
+}
+
+func TestMultiOrgAPIAccess(t *testing.T) {
+	ts, dbPool := newSessionTestServer(t, testServerInput{})
+
+	// Only org1 has domains in the seed, so give org2 and org3 one each.
+	execSQL(t, dbPool, "INSERT INTO domains (org_id, fqdn, verified, verification_token) VALUES ($1, 'org2-domain.example', true, 'tok-org2')", csOrg2ID)
+	execSQL(t, dbPool, "INSERT INTO domains (org_id, fqdn, verified, verification_token) VALUES ($1, 'org3-domain.example', true, 'tok-org3')", csOrg3ID)
+
+	get := func(t *testing.T, path string) []map[string]any {
+		t.Helper()
+		status, body := apiJSON(t, http.MethodGet, ts.URL+path, "multi-org-user", validUserPassword, nil)
+		if status != http.StatusOK {
+			t.Fatalf("GET %s: %d (%s)", path, status, body)
+		}
+		var items []map[string]any
+		if err := json.Unmarshal([]byte(body), &items); err != nil {
+			t.Fatalf("GET %s: %v (%s)", path, err, body)
+		}
+		return items
+	}
+
+	// orgsOf returns the set of values of key over the items.
+	orgsOf := func(items []map[string]any, key string) map[string]int {
+		seen := map[string]int{}
+		for _, item := range items {
+			seen[fmt.Sprint(item[key])]++
+		}
+		return seen
+	}
+
+	t.Run("services", func(t *testing.T) {
+		seen := orgsOf(get(t, "/api/v1/services"), "org_name")
+		if seen["org1"] == 0 || seen["org2"] == 0 || len(seen) != 2 {
+			t.Fatalf("services per org: %v, want org1 and org2 only", seen)
+		}
+	})
+
+	t.Run("domains", func(t *testing.T) {
+		items := get(t, "/api/v1/domains")
+		seen := orgsOf(items, "fqdn")
+		if seen["example.se"] == 0 || seen["org2-domain.example"] == 0 || seen["org3-domain.example"] != 0 {
+			t.Fatalf("domains: %v, want org1's and org2's but not org3's", seen)
+		}
+
+		// Each domain says which org it belongs to, since the list spans several.
+		want := map[string]struct{ id, name string }{
+			"example.se":          {csOrg1ID, "org1"},
+			"org2-domain.example": {csOrg2ID, "org2"},
+		}
+		for _, item := range items {
+			w, ok := want[fmt.Sprint(item["fqdn"])]
+			if !ok {
+				continue
+			}
+			if item["org_id"] != w.id || item["org_name"] != w.name {
+				t.Errorf("domain %v: org_id %v org_name %v, want %s %s", item["fqdn"], item["org_id"], item["org_name"], w.id, w.name)
+			}
+		}
+	})
+
+	t.Run("created domain carries its org", func(t *testing.T) {
+		status, body := apiJSON(t, http.MethodPost, ts.URL+"/api/v1/domains?org=org1", "multi-org-user", validUserPassword, map[string]string{"fqdn": "created-org1.example"})
+		if status != http.StatusCreated && status != http.StatusOK {
+			t.Fatalf("POST domain: %d (%s)", status, body)
+		}
+		var d map[string]any
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatalf("POST domain: %v (%s)", err, body)
+		}
+		if d["org_id"] != csOrg1ID || d["org_name"] != "org1" {
+			t.Fatalf("created domain: org_id %v org_name %v, want %s org1", d["org_id"], d["org_name"], csOrg1ID)
+		}
+	})
+
+	t.Run("orgs", func(t *testing.T) {
+		seen := orgsOf(get(t, "/api/v1/orgs"), "name")
+		if len(seen) != 2 || seen["org1"] != 1 || seen["org2"] != 1 {
+			t.Fatalf("orgs: %v, want exactly org1 and org2", seen)
+		}
+	})
+
+	t.Run("out of scope org is a 404 like a nonexistent one", func(t *testing.T) {
+		outStatus, outBody := apiJSON(t, http.MethodGet, ts.URL+"/api/v1/services?org=org3", "multi-org-user", validUserPassword, nil)
+		unkStatus, unkBody := apiJSON(t, http.MethodGet, ts.URL+"/api/v1/services?org=does-not-exist", "multi-org-user", validUserPassword, nil)
+		if outStatus != http.StatusNotFound {
+			t.Fatalf("org3: got %d (%s), want 404", outStatus, outBody)
+		}
+		if outStatus != unkStatus || outBody != unkBody {
+			t.Fatalf("org3 and does-not-exist differ:\n%d %s\n---\n%d %s", outStatus, outBody, unkStatus, unkBody)
+		}
+	})
+}
+
+func TestMultiOrgConsoleDashboard(t *testing.T) {
+	ts, _ := newSessionTestServer(t, testServerInput{})
+	jar := loginJar(t, ts.URL, "multi-org-user", validUserPassword)
+
+	// Without a switcher selection the user lands on their first org by
+	// name rather than on a page asking them to pick one.
+	requireRedirect(t, jar, ts.URL+consolePath, "/console/org/org1")
+
+	res := doConsole(t, jar, http.MethodGet, ts.URL+"/console/org/org1", nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("org1 dashboard: got %d to %q", res.status, res.location)
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(res.body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var options, selected []string
+	doc.Find(`select[name="org"] option`).Each(func(_ int, s *goquery.Selection) {
+		options = append(options, s.AttrOr("value", ""))
+		if _, ok := s.Attr("selected"); ok {
+			selected = append(selected, s.AttrOr("value", ""))
+		}
+	})
+	if !slices.Equal(options, []string{"org1", "org2"}) {
+		t.Fatalf("switcher options: %v, want org1 and org2 without the no-org choice", options)
+	}
+	if !slices.Equal(selected, []string{"org1"}) {
+		t.Fatalf("switcher selection: %v, want org1", selected)
+	}
+
+	requireOrgAccess(t, ts.URL, jar, "org1", true)
+	requireOrgAccess(t, ts.URL, jar, "org2", true)
+	requireOrgAccess(t, ts.URL, jar, "org3", false)
+
+	requireRedirect(t, jar, ts.URL+"/console/org-switcher?org=org2", "/console/org/org2")
+	requireRedirect(t, jar, ts.URL+consolePath, "/console/org/org2")
+
+	// The no-org choice is not offered to users, but a request for it
+	// only drops the selection and the user lands on their first org.
+	requireRedirect(t, jar, ts.URL+"/console/org-switcher?org="+url.QueryEscape(cdntypes.OrgNotSelected), consolePath)
+	requireRedirect(t, jar, ts.URL+consolePath, "/console/org/org1")
+}
+
+func TestSingleOrgConsoleDashboard(t *testing.T) {
+	ts, _ := newSessionTestServer(t, testServerInput{})
+	jar := loginJar(t, ts.URL, "username1", validUserPassword)
+	requireRedirect(t, jar, ts.URL+consolePath, "/console/org/org1")
+}
+
+func TestSuperuserMultiOrgLanding(t *testing.T) {
+	t.Run("two orgs", func(t *testing.T) {
+		ts, dbPool := newSessionTestServer(t, testServerInput{})
+		execSQL(t, dbPool, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2), ($1, $3)", csAdminID, csOrg1ID, csOrg2ID)
+		jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+		res := doConsole(t, jar, http.MethodGet, ts.URL+consolePath, nil)
+		if res.status != http.StatusOK {
+			t.Fatalf("dashboard: got %d to %q, want the global dashboard", res.status, res.location)
+		}
+	})
+
+	t.Run("one org", func(t *testing.T) {
+		ts, dbPool := newSessionTestServer(t, testServerInput{})
+		execSQL(t, dbPool, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2)", csAdminID, csOrg1ID)
+		jar := loginJar(t, ts.URL, "admin", validAdminPassword)
+		requireRedirect(t, jar, ts.URL+consolePath, "/console/org/org1")
 	})
 }

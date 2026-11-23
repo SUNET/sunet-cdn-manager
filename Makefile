@@ -14,8 +14,10 @@ lint: generate
 	golangci-lint run
 	govulncheck ./...
 
+# pkg/server's testcontainers-backed suite takes about 10 minutes, which is
+# the go test default timeout, so raise it.
 test:
-	go test -race ./...
+	go test -race -timeout 30m ./...
 
 run-dev:
 	go run . --config sunet-cdn-manager-dev.toml init --init-password-file admin.password

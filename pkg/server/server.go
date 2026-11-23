@@ -131,6 +131,9 @@ const (
 	serviceNotFound                  = "service not found"
 	serviceVersionNotFound           = "service or version not found"
 	consoleAlreadyExists             = "already exists"
+	consoleOrgDoesNotExist           = "Selected organization does not exist"
+	consoleTooManyOrgs               = "At most 100 organizations can be selected"
+	consoleRoleDoesNotExist          = "Selected role does not exist"
 	validationNotDNSLabel            = "not a valid DNS label"
 	validationNotFQDN                = "not a valid FQDN"
 	validationMinZero                = "must be 0 or greater"
@@ -169,6 +172,7 @@ const (
 	consoleCreateUserRenderErr       = "unable to render create user page"
 	consoleEditUserRenderErr         = "unable to render edit user page"
 	consoleUsersRenderErr            = "unable to render users page"
+	consoleHomeRenderErr             = "unable to render console home page"
 	consoleNeedOrgMembershipMsg      = "not allowed to view this page, you need to be a member of an organization"
 
 	// Sent with 429 and 503 responses from login and password checks
@@ -491,44 +495,48 @@ func consoleDashboardHandler(dbc *dbConn) http.HandlerFunc {
 			return
 		}
 
-		if ad.Superuser {
-			// If the superuser is also a member of an org and has not
-			// yet interacted with the org switcher, redirect to their
-			// org dashboard so they land on a useful page rather than
-			// the generic "select an organization" prompt. This fires
-			// on every fresh login since logout destroys the session.
-			// We check org_selected (not the selected org) to
-			// distinguish "never selected" from "explicitly unselected
-			// via OrgNotSelected".
-			if ad.OrgName != nil && !sh.orgSelected {
-				orgConsole, err := url.JoinPath(consolePath, "org", *ad.OrgName)
-				if err != nil {
-					logger.Err(err).Msg("unable to create org console path")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
-				if err := sh.setSelectedOrg(ctx, ad.OrgID); err != nil {
-					logger.Err(err).Msg("unable to store default selected org")
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					return
-				}
-				validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
-				return
-			}
-			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sh.selectedOrgName, components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
-			if err != nil {
-				logger.Err(err).Msg("unable to render console home page")
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-		} else if ad.OrgName != nil {
-			orgConsole, err := url.JoinPath(consolePath, "org", *ad.OrgName)
+		redirectToOrg := func(orgName string) {
+			orgConsole, err := url.JoinPath(consolePath, "org", orgName)
 			if err != nil {
 				logger.Err(err).Msg("unable to create org console path")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 			validatedRedirect(orgConsole, w, r, http.StatusSeeOther)
+		}
+
+		if ad.Superuser {
+			// If the superuser is also a member of exactly one org and
+			// has not yet interacted with the org switcher, redirect to
+			// that org's dashboard so they land on a useful page rather
+			// than the generic "select an organization" prompt. This
+			// fires on every fresh login since logout destroys the
+			// session. A superuser in several orgs has no obvious org
+			// to land on and gets the prompt. We check org_selected
+			// (not the selected org) to distinguish "never selected"
+			// from "explicitly unselected via OrgNotSelected".
+			if len(ad.Orgs) == 1 && !sh.orgSelected {
+				org := ad.Orgs[0]
+				if err := sh.setSelectedOrg(ctx, &org.ID); err != nil {
+					logger.Err(err).Msg("unable to store default selected org")
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					return
+				}
+				redirectToOrg(org.Name)
+				return
+			}
+			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", sh.selectedOrgName, components.Dashboard(cdntypes.DashboardData{ResourceAccess: true}))
+			if err != nil {
+				logger.Err(err).Msg(consoleHomeRenderErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+		} else if org := consoleSidebarOrg(ad, sh); org != "" {
+			// A user with orgs has nothing to do without one, so they go
+			// to the org picked in the switcher, or else their first org
+			// by name. No selection is stored, consoleSidebarOrg makes
+			// the same choice wherever the sidebar needs it.
+			redirectToOrg(org)
 		} else {
 			logger.Error().Str("username", *ad.Username).Msg("user is not superuser or belonging to an organization")
 			err := renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", "", components.Dashboard(cdntypes.DashboardData{ResourceAccess: false}))
@@ -607,12 +615,12 @@ func getOrgDashboardData(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData,
 	var serviceVersions []cdntypes.ServiceVersionUsage
 
 	// Must be either superuser or a member of an org
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		return cdntypes.DashboardData{}, cdnerrors.ErrForbidden
 	}
 
-	// If not a superuser make sure the org membership matches the queried org
-	if !ad.Superuser && *ad.OrgID != org.id {
+	// If not a superuser make sure the queried org is one of the caller's orgs
+	if !ad.Superuser && !ad.MemberOf(org.id) {
 		return cdntypes.DashboardData{}, cdnerrors.ErrForbidden
 	}
 
@@ -726,7 +734,7 @@ func consoleOrgDashboardHandler(dbc *dbConn) http.HandlerFunc {
 
 		err = renderConsolePage(ctx, dbc, w, r, ad, "Dashboard", orgIdent.name, components.Dashboard(dashData))
 		if err != nil {
-			logger.Err(err).Msg("unable to render console home page")
+			logger.Err(err).Msg(consoleHomeRenderErr)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -1277,16 +1285,13 @@ func consoleServiceDeleteHandler(dbc *dbConn) http.HandlerFunc {
 		// Service deletion is a superuser action. Checked before any
 		// lookup so a non-superuser learns nothing about what exists.
 		//
-		// The org name comes from the caller's own auth data, never from the
-		// URL, so this branch cannot reveal whether the named org or service
-		// exists.
+		// The sidebar org comes from consoleSidebarOrg, never from the
+		// URL, so this branch cannot reveal whether the named org or
+		// service exists.
 		if !ad.Superuser {
 			logger.Error().Msg("consoleServiceDeleteHandler: service deletion requires a superuser")
-			userOrg := ""
-			if ad.OrgName != nil {
-				userOrg = *ad.OrgName
-			}
-			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Delete service", userOrg, components.ConsoleErrorContent(consoleDeleteRequiresSuperuser))
+			sh, _ := ctx.Value(sessionHandleKey{}).(*sessionHandle)
+			renderErr := renderConsolePage(ctx, dbc, w, r, ad, "Delete service", consoleSidebarOrg(ad, sh), components.ConsoleErrorContent(consoleDeleteRequiresSuperuser))
 			if renderErr != nil {
 				logger.Err(renderErr).Msg("unable to render delete-service forbidden page")
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2739,10 +2744,11 @@ func consoleServiceEnableHandler(dbc *dbConn) http.HandlerFunc {
 func renderConsolePage(ctx context.Context, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, orgName string, contents templ.Component, itemLabel ...string) error {
 	availableOrgNames := []string{}
 	if !ad.Superuser {
-		// The orgName can be empty for users that are not belonging to
-		// an org.
-		if orgName != "" {
-			availableOrgNames = append(availableOrgNames, orgName)
+		// A user can switch between the orgs they are a member of,
+		// which were loaded with the rights of this request, so no
+		// query is needed. Empty for users not belonging to an org.
+		for _, org := range ad.Orgs {
+			availableOrgNames = append(availableOrgNames, org.Name)
 		}
 	} else {
 		orgs, err := selectOrgs(ctx, dbc, ad)
@@ -3659,8 +3665,7 @@ var dummyArgon2Salt = []byte("sunet-cdn-dummy!") // 16 bytes, like real salts
 // It also returns the stored argon2 key the password was checked against.
 func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, a2Slots *argon2Slots, loginLimiter *loginRateLimiter, loginCache *lru.Cache[string, struct{}], ipKey netip.Prefix, username string, password string) (cdntypes.AuthData, []byte, error) {
 	var userID, roleID pgtype.UUID
-	var orgID *pgtype.UUID // can be nil if not belonging to a organization
-	var orgName *string    // same as above
+	var orgs []cdntypes.OrgRef // nil if not belonging to any organization
 	var stored argon2Data
 	var superuser bool
 	var roleName string
@@ -3675,8 +3680,7 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 		queryCtx,
 		`SELECT
 			users.id,
-			users.org_id,
-			orgs.name,
+			`+userOrgRecordsColumn+`,
 			users.role_id,
 			roles.name,
 			roles.superuser,
@@ -3690,13 +3694,11 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 		JOIN user_argon2keys ON users.id = user_argon2keys.user_id
 		JOIN roles ON users.role_id = roles.id
 		JOIN auth_providers ap ON users.auth_provider_id = ap.id
-		LEFT JOIN orgs ON users.org_id = orgs.id
 		WHERE users.display_name=$1 AND ap.name=$2`,
 		username, cdntypes.LocalAuthProvider,
 	).Scan(
 		&userID,
-		&orgID,
-		&orgName,
+		&orgs,
 		&roleID,
 		&roleName,
 		&superuser,
@@ -3725,8 +3727,7 @@ func verifyLocalUserPassword(ctx context.Context, logger *zerolog.Logger, dbc *d
 	ad := cdntypes.AuthData{
 		Username:  &username,
 		UserID:    &userID,
-		OrgID:     orgID,
-		OrgName:   orgName,
+		Orgs:      orgs,
 		RoleID:    roleID,
 		RoleName:  roleName,
 		Superuser: superuser,
@@ -3893,8 +3894,7 @@ func jwtToAuthData(ctx context.Context, tx pgx.Tx, jwtToken jwt.Token) (cdntypes
 	return cdntypes.AuthData{
 		Username:           nil,
 		UserID:             nil,
-		OrgID:              &orgID,
-		OrgName:            &orgName,
+		Orgs:               []cdntypes.OrgRef{{ID: orgID, Name: orgName}}, // a client credential belongs to exactly one org
 		RoleID:             roleID,
 		RoleName:           roleName,
 		Superuser:          superuser,
@@ -3912,8 +3912,12 @@ func addUserToRequestLog(logger *zerolog.Logger, ad cdntypes.AuthData) {
 		if ad.UserID != nil {
 			c = c.Str("user_id", ad.UserID.String())
 		}
-		if ad.OrgName != nil {
-			c = c.Str("org_name", *ad.OrgName)
+		if len(ad.Orgs) > 0 {
+			orgIDs := make([]string, 0, len(ad.Orgs))
+			for _, o := range ad.Orgs {
+				orgIDs = append(orgIDs, o.ID.String())
+			}
+			c = c.Strs("org_ids", orgIDs)
 		}
 		if ad.ClientCredName != nil {
 			c = c.Str("client_cred_name", *ad.ClientCredName)
@@ -3929,17 +3933,45 @@ func addUserToRequestLog(logger *zerolog.Logger, ad cdntypes.AuthData) {
 	})
 }
 
+// userOrgRecordsColumn selects the orgs of the user in the users row of the
+// outer query as an array of (id, name) records ordered by org name. The
+// record's field order must match cdntypes.OrgRef (ID, Name).
+const userOrgRecordsColumn = "(SELECT array_agg((o.id, o.name) ORDER BY o.name) FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = users.id) AS orgs"
+
+// userOrgNamesColumn selects the names of the orgs of the user in the users
+// row of the outer query, ordered by name.
+const userOrgNamesColumn = "(SELECT array_agg(o.name ORDER BY o.name) FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = users.id) AS org_names"
+
+// userOrgIDsColumn selects the IDs of the orgs of the user in the users row
+// of the outer query, ordered by org name, or NULL if the user is in no org.
+// A correlated subquery keeps the outer query at one row per user.
+const userOrgIDsColumn = "(SELECT array_agg(uo.org_id ORDER BY o.name) FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = users.id) AS org_ids"
+
+// selectUsersQuery selects the columns of the user API type, for
+// selectUsers and selectUser to add their own WHERE and ORDER BY to.
+const selectUsersQuery = "SELECT id, display_name, " + userOrgIDsColumn + ", role_id FROM users"
+
+// orgIDsOrEmpty returns orgIDs, or an empty slice if it is nil, so that a
+// user in no org has org_ids [] in JSON rather than null.
+func orgIDsOrEmpty(orgIDs []pgtype.UUID) []pgtype.UUID {
+	if orgIDs == nil {
+		return []pgtype.UUID{}
+	}
+	return orgIDs
+}
+
 func selectUsers(ctx context.Context, dbPool *pgxpool.Pool, logger *zerolog.Logger, ad cdntypes.AuthData) ([]user, error) {
 	var rows pgx.Rows
 	var err error
 	if ad.Superuser {
-		rows, err = dbPool.Query(ctx, "SELECT id, display_name, org_id, role_id FROM users ORDER BY display_name")
+		rows, err = dbPool.Query(ctx, selectUsersQuery+" ORDER BY display_name")
 		if err != nil {
 			logger.Err(err).Msg("unable to query for users")
 			return nil, fmt.Errorf("unable to query for users")
 		}
-	} else if ad.OrgID != nil && ad.UserID != nil {
-		rows, err = dbPool.Query(ctx, "SELECT id, display_name, org_id, role_id FROM users WHERE users.id=$1 ORDER BY display_name", *ad.UserID)
+	} else if ad.UserID != nil && len(ad.Orgs) > 0 {
+		// Only the caller themself. A user in no org stays forbidden.
+		rows, err = dbPool.Query(ctx, selectUsersQuery+" WHERE users.id=$1 ORDER BY display_name", *ad.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for users for organization: %w", err)
 		}
@@ -3953,6 +3985,10 @@ func selectUsers(ctx context.Context, dbPool *pgxpool.Pool, logger *zerolog.Logg
 		return nil, errors.New("unable to get rows for users")
 	}
 
+	for i := range users {
+		users[i].OrgIDs = orgIDsOrEmpty(users[i].OrgIDs)
+	}
+
 	return users, nil
 }
 
@@ -3964,13 +4000,14 @@ func selectUser(ctx context.Context, dbPool *pgxpool.Pool, userID pgtype.UUID, a
 	if !ad.Superuser && *ad.UserID != userID {
 		return user{}, cdnerrors.ErrNotFound
 	}
-	err := dbPool.QueryRow(ctx, "SELECT id, display_name, org_id, role_id FROM users WHERE id = $1", userID).Scan(&u.ID, &u.DisplayName, &u.OrgID, &u.RoleID)
+	err := dbPool.QueryRow(ctx, selectUsersQuery+" WHERE id = $1", userID).Scan(&u.ID, &u.DisplayName, &u.OrgIDs, &u.RoleID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return user{}, cdnerrors.ErrNotFound
 		}
 		return user{}, fmt.Errorf("selectUser: query failed: %w", err)
 	}
+	u.OrgIDs = orgIDsOrEmpty(u.OrgIDs)
 	return u, nil
 }
 
@@ -4671,7 +4708,7 @@ func insertL4LBNodeTx(ctx context.Context, tx pgx.Tx, name string, description s
 	return l4lbNodeID, nil
 }
 
-func createUser(ctx context.Context, dbc *dbConn, displayName string, role string, org *string, a2Data *argon2Data, ad cdntypes.AuthData) (user, error) {
+func createUser(ctx context.Context, dbc *dbConn, displayName string, role string, orgs []string, a2Data *argon2Data, ad cdntypes.AuthData) (user, error) {
 	if !ad.Superuser {
 		return user{}, cdnerrors.ErrForbidden
 	}
@@ -4679,19 +4716,17 @@ func createUser(ctx context.Context, dbc *dbConn, displayName string, role strin
 	var err error
 
 	var userID pgtype.UUID
+	var orgIDs []pgtype.UUID
 
-	var orgIdent orgIdentifier
 	var roleIdent roleIdentifier
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
 	err = pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		if org != nil {
-			orgIdent, err = newOrgIdentifier(dbCtx, tx, *org)
-			if err != nil {
-				return fmt.Errorf("unable to parse organization for user INSERT: %w", err)
-			}
+		requestedOrgIDs, err := resolveUserOrgsTx(dbCtx, tx, orgs)
+		if err != nil {
+			return fmt.Errorf("unable to resolve organizations for user INSERT: %w", err)
 		}
 
 		roleIdent, err = newRoleIdentifier(dbCtx, tx, role)
@@ -4704,14 +4739,21 @@ func createUser(ctx context.Context, dbc *dbConn, displayName string, role strin
 			return fmt.Errorf("unable to resolve authProvider name to ID: %w", err)
 		}
 
-		var orgID *pgtype.UUID
-		if org != nil {
-			orgID = &orgIdent.id
-		}
-
-		userID, err = insertUserTx(dbCtx, tx, displayName, orgID, roleIdent.id, authProviderID)
+		userID, err = insertUserTx(dbCtx, tx, displayName, roleIdent.id, authProviderID)
 		if err != nil {
 			return fmt.Errorf("createUser: INSERT failed: %w", err)
+		}
+
+		// A new user has no console sessions to end, so whether this
+		// changed anything does not matter.
+		_, err = setUserOrgsTx(dbCtx, tx, userID, requestedOrgIDs)
+		if err != nil {
+			return fmt.Errorf("createUser: unable to set organizations: %w", err)
+		}
+
+		orgIDs, err = selectUserOrgIDsTx(dbCtx, tx, userID)
+		if err != nil {
+			return fmt.Errorf("createUser: %w", err)
 		}
 
 		// When provided, set password atomically with user creation so
@@ -4729,16 +4771,11 @@ func createUser(ctx context.Context, dbc *dbConn, displayName string, role strin
 		return user{}, fmt.Errorf("createUser: transaction failed: %w", err)
 	}
 
-	var orgID *pgtype.UUID
-	if org != nil {
-		orgID = &orgIdent.id
-	}
-
 	return user{
 		ID:          userID,
 		DisplayName: displayName,
 		RoleID:      roleIdent.id,
-		OrgID:       orgID,
+		OrgIDs:      orgIDs,
 	}, nil
 }
 
@@ -4775,9 +4812,9 @@ func deleteUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdn
 	return displayName, nil
 }
 
-func insertUserTx(ctx context.Context, tx pgx.Tx, displayName string, orgID *pgtype.UUID, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
+func insertUserTx(ctx context.Context, tx pgx.Tx, displayName string, roleID pgtype.UUID, authProviderID pgtype.UUID) (pgtype.UUID, error) {
 	var userID pgtype.UUID
-	err := tx.QueryRow(ctx, "INSERT INTO users (display_name, org_id, role_id, auth_provider_id) VALUES ($1, $2, $3, $4) RETURNING id", displayName, orgID, roleID, authProviderID).Scan(&userID)
+	err := tx.QueryRow(ctx, "INSERT INTO users (display_name, role_id, auth_provider_id) VALUES ($1, $2, $3) RETURNING id", displayName, roleID, authProviderID).Scan(&userID)
 	if err != nil {
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
@@ -4808,8 +4845,8 @@ func authProviderNameToIDTx(ctx context.Context, tx pgx.Tx, name string) (pgtype
 	return authProviderID, nil
 }
 
-func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, displayName string, orgID *pgtype.UUID, roleID pgtype.UUID) error {
-	_, err := tx.Exec(ctx, "UPDATE users SET display_name = $1, org_id = $2, role_id = $3 WHERE id = $4", displayName, orgID, roleID, userID)
+func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, displayName string, roleID pgtype.UUID) error {
+	_, err := tx.Exec(ctx, "UPDATE users SET display_name = $1, role_id = $2 WHERE id = $3", displayName, roleID, userID)
 	if err != nil {
 		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 			switch pgErr.Code {
@@ -4825,50 +4862,94 @@ func updateUserTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, displayNam
 	return nil
 }
 
-func updateUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID, displayName string, org *string, role string) (user, error) {
+// updateUser sets the display name, role and orgs of a user. orgs replaces
+// the user's whole set of orgs, nil or empty meaning no org. The returned
+// bool is true whenever the role or the set of orgs changed; the user's
+// sessions are ended if any exist, so it does not mean sessions were
+// actually deleted.
+func updateUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdntypes.AuthData, userID pgtype.UUID, displayName string, orgs []string, role string) (user, bool, error) {
 	if !ad.Superuser {
-		return user{}, cdnerrors.ErrForbidden
+		return user{}, false, cdnerrors.ErrForbidden
 	}
 
 	dbCtx, cancel := dbc.detachedContext(ctx)
 	defer cancel()
 
 	var u user
+	var sessionsEnded bool
 	var revoked int64
 	err := pgx.BeginFunc(dbCtx, dbc.dbPool, func(tx pgx.Tx) error {
-		// Resolve the role and org before locking the users row. deleteOrg
-		// locks the orgs row and then, inside its DELETE, takes FOR KEY SHARE
-		// on the users rows referencing it. Locking the user first and then
-		// waiting for the org would let each transaction hold what the other
-		// waits for, which PostgreSQL breaks by aborting one with SQLSTATE
-		// 40P01.
+		// Lock order against deleteOrg. deleteOrg takes FOR UPDATE on
+		// the orgs row first. Its DELETE then sets selected_org_id to
+		// NULL in the console_sessions rows that selected the org, which
+		// locks those rows, and runs the foreign key check on user_orgs.
+		// That check takes FOR KEY SHARE on every user_orgs row
+		// referencing the org, so it waits for a transaction that has
+		// deleted one. deleteOrg never locks a users row.
+		//
+		// This transaction therefore takes FOR SHARE on every org whose
+		// memberships it may write, before writing any user_orgs or
+		// console_sessions row:
+		//   - the requested orgs, here, before the users row lock;
+		//   - the orgs of the current memberships, right after the users
+		//     row lock (see there).
+		// Then for each such org, one of two things happens. deleteOrg
+		// may hold the org first: this waits while holding only the role,
+		// the users row and share locks on other orgs, none of which
+		// deleteOrg needs. If the org is a current membership, deleteOrg's
+		// foreign key check finds it and refuses the delete. Otherwise a
+		// deleted org fails this request as not found. Or this holds the
+		// org first: deleteOrg waits at its FOR UPDATE until this commits.
+		//
+		// Without the lock on a current org that is being removed, the two
+		// could cross. deleteOrg would lock a session row of this user
+		// and then wait for this transaction's removal of the membership
+		// row, while this waits for that session row to end the user's
+		// sessions. That is a deadlock PostgreSQL breaks by aborting one
+		// with SQLSTATE 40P01.
 		roleIdent, err := newRoleIdentifier(dbCtx, tx, role)
 		if err != nil {
 			return fmt.Errorf("unable to parse role name or ID for PUT: %w", err)
 		}
 
-		// org can be nil when the user should have its org value unset
-		var orgID *pgtype.UUID
-		if org != nil {
-			orgIdent, err := newOrgIdentifier(dbCtx, tx, *org)
-			if err != nil {
-				return fmt.Errorf("unable to parse org ID for PATCH: %w", err)
-			}
-			orgID = &orgIdent.id
+		orgIDs, err := resolveUserOrgsTx(dbCtx, tx, orgs)
+		if err != nil {
+			return fmt.Errorf("unable to resolve organizations for PUT: %w", err)
 		}
 
 		var currentDisplayName string
 		var currentRoleID pgtype.UUID
-		var currentOrgID *pgtype.UUID
 		// FOR UPDATE rather than FOR SHARE: this transaction goes on to write
 		// this very row, and taking the shared lock first would mean upgrading
-		// it. See the lockUpdate const for why that deadlocks.
-		err = tx.QueryRow(dbCtx, "SELECT display_name, role_id, org_id FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentDisplayName, &currentRoleID, &currentOrgID)
+		// it. See the lockUpdate const for why that deadlocks. It also
+		// serializes updates of the same user, so the membership change
+		// below is computed against a set no one else changes meanwhile.
+		err = tx.QueryRow(dbCtx, "SELECT display_name, role_id FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentDisplayName, &currentRoleID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return cdnerrors.ErrNotFound
 			}
 			return fmt.Errorf("unable to look up user for PUT: %w", err)
+		}
+
+		// The orgs of the current memberships, for the lock order
+		// described above. They are read only now because the users row
+		// lock is what keeps the set fixed. Memberships are only written
+		// here under that lock, and by createUser for a user no one else
+		// can see yet. Deleting the user waits for the lock too.
+		//
+		// Waiting for one of these orgs while holding the users row cannot
+		// close a cycle. No transaction that takes FOR UPDATE on an orgs
+		// row (deleteOrg, updateOrg, the quota checks) goes on to lock a
+		// users row. Concurrent updateUser calls only take FOR SHARE on
+		// orgs, which does not conflict with itself.
+		currentOrgRows, err := tx.Query(dbCtx, "SELECT o.id FROM user_orgs uo JOIN orgs o ON o.id = uo.org_id WHERE uo.user_id = $1 ORDER BY o.id FOR SHARE OF o", userID)
+		if err != nil {
+			return fmt.Errorf("unable to lock current organizations for PUT: %w", err)
+		}
+		_, err = pgx.CollectRows(currentOrgRows, pgx.RowTo[pgtype.UUID])
+		if err != nil {
+			return fmt.Errorf("unable to lock current organizations for PUT: %w", err)
 		}
 
 		// Non-local users (e.g. Keycloak) cannot be renamed — their
@@ -4887,48 +4968,155 @@ func updateUser(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, ad cdn
 			}
 		}
 
-		err = updateUserTx(dbCtx, tx, userID, updateDisplayName, orgID, roleIdent.id)
+		err = updateUserTx(dbCtx, tx, userID, updateDisplayName, roleIdent.id)
 		if err != nil {
 			return fmt.Errorf("update failed: %w", err)
+		}
+
+		orgsChanged, err := setUserOrgsTx(dbCtx, tx, userID, orgIDs)
+		if err != nil {
+			return fmt.Errorf("unable to set organizations for PUT: %w", err)
 		}
 
 		// OWASP: renew the session id after a privilege level change.
 		// The admin's request can not give the user's browser a new id,
 		// so end the user's console sessions instead: they log in again
 		// and get one, and a token from before the change never gains
-		// the new rights. A display name change keeps the sessions.
-		if currentRoleID != roleIdent.id || !sameOrgID(currentOrgID, orgID) {
+		// the new rights. Any change to the set of orgs counts, an added
+		// org as much as a removed one. A display name change, or the
+		// same set of orgs given in another order or by ID instead of
+		// name, keeps the sessions.
+		if currentRoleID != roleIdent.id || orgsChanged {
 			revoked, err = consolesession.DeleteForUserTx(dbCtx, tx, userID)
 			if err != nil {
 				return fmt.Errorf("unable to end console sessions after role or org change: %w", err)
 			}
+			sessionsEnded = true
 		}
 
 		u.ID = userID
 		u.DisplayName = updateDisplayName
 		u.RoleID = roleIdent.id
-		u.OrgID = orgID
+		u.OrgIDs, err = selectUserOrgIDsTx(dbCtx, tx, userID)
+		if err != nil {
+			return fmt.Errorf("user PUT: %w", err)
+		}
 
 		return nil
 	})
 	if err != nil {
-		return user{}, fmt.Errorf("user PUT transaction failed: %w", err)
+		return user{}, false, fmt.Errorf("user PUT transaction failed: %w", err)
 	}
 
 	if revoked > 0 {
 		logger.Info().Str("reason", "role_or_org_change").Str("target_user_id", userID.String()).Int64("count", revoked).Msg("session_revoked")
 	}
 
-	return u, nil
+	return u, sessionsEnded, nil
 }
 
-// sameOrgID reports whether two optional org ids are the same, nil meaning
-// no org.
-func sameOrgID(a *pgtype.UUID, b *pgtype.UUID) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
+// errUserOrgNotFound is returned when an org requested for a user does not
+// exist. It wraps cdnerrors.ErrNotFound for callers that only check for that,
+// and lets the user handlers tell a missing org apart from a missing user.
+var errUserOrgNotFound = fmt.Errorf("%w: organization not found", cdnerrors.ErrNotFound)
+
+// resolveUserOrgsTx resolves the orgs requested for a user, each given by
+// name or ID, to their IDs. Every org is locked FOR SHARE until the end of
+// the transaction, so none of them can be deleted before the memberships are
+// written (see updateUser for the lock order). The first entry that fails
+// fails the whole request, so nothing is written for a partly valid list:
+// malformed input wraps cdnerrors.ErrUnableToParseNameOrID and an unknown org
+// is errUserOrgNotFound.
+//
+// The same org given twice, say once by name and once by ID, counts once.
+// The IDs are returned sorted by their bytes, which puts duplicates next to
+// each other and makes the result independent of the input order.
+//
+// The lookup is not limited to the caller's orgs, and its not-found error
+// tells an unknown org apart from an unknown user. That is only safe because
+// every caller (createUser, updateUser) is superuser-only and checks that
+// before calling this, and superusers can list all orgs anyway. If anyone
+// else is ever allowed to set memberships, resolve the orgs with resolveOrg
+// instead, so an org outside the caller's scope looks the same as one that
+// does not exist.
+func resolveUserOrgsTx(ctx context.Context, tx pgx.Tx, orgs []string) ([]pgtype.UUID, error) {
+	orgIDs := make([]pgtype.UUID, 0, len(orgs))
+	for _, org := range orgs {
+		// Rejects input that can never be an org without a query, with
+		// the same error as the other org lookups.
+		if _, _, err := parseNameOrID(org); err != nil {
+			return nil, err
+		}
+
+		orgIdent, err := newOrgIdentifier(ctx, tx, org)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("%w: %q", errUserOrgNotFound, org)
+			}
+			return nil, fmt.Errorf("unable to look up organization %q: %w", org, err)
+		}
+		orgIDs = append(orgIDs, orgIdent.id)
 	}
-	return *a == *b
+
+	slices.SortFunc(orgIDs, func(a pgtype.UUID, b pgtype.UUID) int {
+		return bytes.Compare(a.Bytes[:], b.Bytes[:])
+	})
+
+	return slices.Compact(orgIDs), nil
+}
+
+// setUserOrgsTx makes userID a member of exactly the orgs in orgIDs. It
+// deletes the memberships that are no longer wanted and inserts the new
+// ones, leaving memberships that stay untouched. It reports whether any
+// membership was added or removed, which updateUser uses to decide whether
+// to end the user's console sessions.
+func setUserOrgsTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID, orgIDs []pgtype.UUID) (bool, error) {
+	// A user with no orgs left must have all memberships deleted, but a
+	// nil slice would not do that. pgx sends a nil slice as SQL NULL, and
+	// "org_id = ANY(NULL)" evaluates to NULL rather than false. Negating
+	// NULL with NOT gives NULL again, and WHERE only keeps rows where the
+	// condition is true, so the DELETE below would remove nothing. With an
+	// empty array, "org_id = ANY('{}')" is false for every row, NOT makes
+	// it true, and every membership is removed.
+	if orgIDs == nil {
+		orgIDs = []pgtype.UUID{}
+	}
+
+	deleted, err := tx.Exec(ctx, "DELETE FROM user_orgs WHERE user_id = $1 AND NOT (org_id = ANY($2))", userID, orgIDs)
+	if err != nil {
+		return false, fmt.Errorf("unable to remove organization memberships: %w", err)
+	}
+
+	// ON CONFLICT skips memberships the user already has, so only new
+	// memberships count as inserted rows.
+	var inserted int64
+	for _, orgID := range orgIDs {
+		tag, err := tx.Exec(ctx, "INSERT INTO user_orgs (user_id, org_id) VALUES ($1, $2) ON CONFLICT (user_id, org_id) DO NOTHING", userID, orgID)
+		if err != nil {
+			// Not expected while resolveUserOrgsTx keeps the orgs
+			// locked, but an org deleted under the insert is an org
+			// that does not exist rather than a server failure.
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgForeignKeyViolation && pgErr.ConstraintName == "user_orgs_org_id_fkey" {
+				return false, errUserOrgNotFound
+			}
+			return false, fmt.Errorf("unable to add organization membership: %w", err)
+		}
+		inserted += tag.RowsAffected()
+	}
+
+	return deleted.RowsAffected()+inserted > 0, nil
+}
+
+// selectUserOrgIDsTx returns the IDs of the orgs of userID ordered by org
+// name, the same order as selectUsers and selectUser, and an empty slice if
+// the user is in no org.
+func selectUserOrgIDsTx(ctx context.Context, tx pgx.Tx, userID pgtype.UUID) ([]pgtype.UUID, error) {
+	var orgIDs []pgtype.UUID
+	err := tx.QueryRow(ctx, "SELECT "+userOrgIDsColumn+" FROM users WHERE id = $1", userID).Scan(&orgIDs)
+	if err != nil {
+		return nil, fmt.Errorf("unable to look up organizations of user: %w", err)
+	}
+	return orgIDsOrEmpty(orgIDs), nil
 }
 
 func selectUserListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdntypes.UserListItem, error) {
@@ -4937,13 +5125,13 @@ func selectUserListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData)
 	}
 
 	rows, err := dbc.dbPool.Query(ctx,
-		`SELECT u.id, u.display_name, r.name AS role_name,
-			o.name AS org_name, ap.name AS auth_provider
-		FROM users u
-		JOIN roles r ON u.role_id = r.id
-		JOIN auth_providers ap ON u.auth_provider_id = ap.id
-		LEFT JOIN orgs o ON u.org_id = o.id
-		ORDER BY u.display_name`)
+		`SELECT users.id, users.display_name, r.name AS role_name,
+			`+userOrgNamesColumn+`,
+			ap.name AS auth_provider
+		FROM users
+		JOIN roles r ON users.role_id = r.id
+		JOIN auth_providers ap ON users.auth_provider_id = ap.id
+		ORDER BY users.display_name`)
 	if err != nil {
 		return nil, fmt.Errorf("unable to query for user list items: %w", err)
 	}
@@ -4977,15 +5165,15 @@ func selectUserForEdit(ctx context.Context, dbc *dbConn, userID pgtype.UUID, ad 
 
 	var userData cdntypes.UserEditData
 	err := dbc.dbPool.QueryRow(ctx,
-		`SELECT u.id, u.display_name, r.name AS role_name,
-			o.name AS org_name, ap.name AS auth_provider
-		FROM users u
-		JOIN roles r ON u.role_id = r.id
-		JOIN auth_providers ap ON u.auth_provider_id = ap.id
-		LEFT JOIN orgs o ON u.org_id = o.id
-		WHERE u.id = $1`, userID).Scan(
+		`SELECT users.id, users.display_name, r.name AS role_name,
+			`+userOrgNamesColumn+`,
+			ap.name AS auth_provider
+		FROM users
+		JOIN roles r ON users.role_id = r.id
+		JOIN auth_providers ap ON users.auth_provider_id = ap.id
+		WHERE users.id = $1`, userID).Scan(
 		&userData.ID, &userData.DisplayName, &userData.RoleName,
-		&userData.OrgName, &userData.AuthProvider,
+		&userData.OrgNames, &userData.AuthProvider,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -5005,8 +5193,8 @@ func selectOrgs(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdnty
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
-	} else if ad.OrgID != nil {
-		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs WHERE id=$1 ORDER BY time_created", *ad.OrgID)
+	} else if len(ad.Orgs) > 0 {
+		rows, err = dbc.dbPool.Query(ctx, "SELECT id, name, service_quota, domain_quota, client_token_quota FROM orgs WHERE id = ANY($1) ORDER BY time_created", ad.OrgIDs())
 		if err != nil {
 			return nil, fmt.Errorf("unable to query for orgs: %w", err)
 		}
@@ -5022,6 +5210,12 @@ func selectOrgs(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) ([]cdnty
 	return orgs, nil
 }
 
+// selectDomainsQuery is the part of the domain list queries that does not
+// vary with which orgs are listed. The org columns are included since a list
+// can span several orgs, and the join is safe since domains.org_id is NOT NULL
+// and references orgs.
+const selectDomainsQuery = "SELECT domains.id, domains.org_id, orgs.name AS org_name, domains.fqdn, domains.verified, domains.verification_token, domains.time_retired IS NOT NULL AS retired, EXISTS (SELECT 1 FROM service_domains WHERE domain_id = domains.id) AS in_use, (SELECT array_agg(services.name ORDER BY services.name) FROM service_domains JOIN service_versions ON service_versions.id = service_domains.service_version_id JOIN services ON services.id = service_versions.service_id WHERE service_domains.domain_id = domains.id AND service_versions.active) AS active_services FROM domains JOIN orgs ON orgs.id = domains.org_id"
+
 func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOrID string) ([]cdntypes.Domain, error) {
 	domains := []cdntypes.Domain{}
 
@@ -5030,7 +5224,7 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 		var orgFilter pgtype.UUID
 
 		// Must be either superuser or member of an org
-		if !ad.Superuser && ad.OrgID == nil {
+		if scopeOf(ad).hasNoAccess() {
 			return cdnerrors.ErrForbidden
 		}
 
@@ -5045,20 +5239,21 @@ func selectDomains(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNa
 			orgFilter = orgIdent.id
 		}
 
-		// If not superuser and a specific org was not requested, set
-		// it to the org of the user.
-		if !ad.Superuser && !orgFilter.Valid {
-			orgFilter = *ad.OrgID
-		}
-
 		var rows pgx.Rows
 		if orgFilter.Valid {
-			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token, time_retired IS NOT NULL AS retired, EXISTS (SELECT 1 FROM service_domains WHERE domain_id = domains.id) AS in_use, (SELECT array_agg(services.name ORDER BY services.name) FROM service_domains JOIN service_versions ON service_versions.id = service_domains.service_version_id JOIN services ON services.id = service_versions.service_id WHERE service_domains.domain_id = domains.id AND service_versions.active) AS active_services FROM domains WHERE org_id=$1 ORDER BY fqdn", orgFilter)
+			rows, err = tx.Query(ctx, selectDomainsQuery+" WHERE domains.org_id = $1 ORDER BY domains.fqdn", orgFilter)
 			if err != nil {
 				return fmt.Errorf("unable to query for domains for specific org: %w", err)
 			}
+		} else if !ad.Superuser {
+			// Without a requested org a non-superuser gets the
+			// domains of every org they are a member of.
+			rows, err = tx.Query(ctx, selectDomainsQuery+" WHERE domains.org_id = ANY($1) ORDER BY domains.fqdn", ad.OrgIDs())
+			if err != nil {
+				return fmt.Errorf("unable to query for domains for member orgs: %w", err)
+			}
 		} else {
-			rows, err = tx.Query(ctx, "SELECT id, fqdn, verified, verification_token, time_retired IS NOT NULL AS retired, EXISTS (SELECT 1 FROM service_domains WHERE domain_id = domains.id) AS in_use, (SELECT array_agg(services.name ORDER BY services.name) FROM service_domains JOIN service_versions ON service_versions.id = service_domains.service_version_id JOIN services ON services.id = service_versions.service_id WHERE service_domains.domain_id = domains.id AND service_versions.active) AS active_services FROM domains ORDER BY fqdn")
+			rows, err = tx.Query(ctx, selectDomainsQuery+" ORDER BY domains.fqdn")
 			if err != nil {
 				return fmt.Errorf("unable to query for all domains: %w", err)
 			}
@@ -5623,7 +5818,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 	var clientID, clientSecret, registrationAccessToken string
 	var clientRegistered, clientMaybeRegistered bool
 
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		return cdntypes.NewOrgClientCredential{}, cdnerrors.ErrForbidden
 	}
 
@@ -5751,7 +5946,7 @@ func insertOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 }
 
 func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, clientCredAEADs []cipher.AEAD, ad cdntypes.AuthData, kccm *keycloakClientManager, orgNameOrID string, orgClientCredentialNameOrID string) (pgtype.UUID, error) {
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		return pgtype.UUID{}, cdnerrors.ErrForbidden
 	}
 
@@ -5790,9 +5985,9 @@ func deleteOrgClientCredential(ctx context.Context, logger *zerolog.Logger, dbc 
 			}
 		}
 
-		// A normal user can only delete a org client credential belonging to the
-		// same org they are a member of
-		if !ad.Superuser && *ad.OrgID != orgClientCredentialIdent.orgID {
+		// A normal user can only delete a org client credential belonging to
+		// one of the orgs they are a member of
+		if !ad.Superuser && !ad.MemberOf(orgClientCredentialIdent.orgID) {
 			return cdnerrors.ErrNotFound
 		}
 
@@ -6060,11 +6255,13 @@ func selectOrgListItems(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData) 
 			orgs.client_token_quota,
 			COALESCE(svc.cnt, 0) AS service_count,
 			COALESCE(dom.cnt, 0) AS domain_count,
-			COALESCE(cred.cnt, 0) AS client_token_count
+			COALESCE(cred.cnt, 0) AS client_token_count,
+			COALESCE(mem.cnt, 0) AS user_count
 		FROM orgs
 		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM services GROUP BY org_id) AS svc ON svc.org_id = orgs.id
 		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM domains WHERE time_retired IS NULL GROUP BY org_id) AS dom ON dom.org_id = orgs.id
 		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM org_keycloak_client_credentials GROUP BY org_id) AS cred ON cred.org_id = orgs.id
+		LEFT JOIN (SELECT org_id, COUNT(*) AS cnt FROM user_orgs GROUP BY org_id) AS mem ON mem.org_id = orgs.id
 		ORDER BY orgs.name`)
 	if err != nil {
 		return nil, fmt.Errorf("selectOrgListItems: unable to query orgs: %w", err)
@@ -6089,9 +6286,11 @@ type orgResourceCounts struct {
 	// and so block deleting it.
 	allDomains   int64
 	clientTokens int64
+	// users is the number of memberships in user_orgs.
+	users int64
 }
 
-// countOrgResources returns how many services, domains and client tokens
+// countOrgResources returns how many services, domains, client tokens and users
 // belong to the org. Callers making decisions that must exclude concurrent
 // resource creation should hold the org row lock (see
 // newOrgIdentifierForUpdate). The lock does not block deletion of those
@@ -6103,8 +6302,9 @@ func countOrgResources(ctx context.Context, tx pgx.Tx, orgID pgtype.UUID) (orgRe
 			(SELECT COUNT(*) FROM services WHERE org_id = $1),
 			(SELECT COUNT(*) FROM domains WHERE org_id = $1 AND time_retired IS NULL),
 			(SELECT COUNT(*) FROM domains WHERE org_id = $1),
-			(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1)`,
-		orgID).Scan(&c.services, &c.liveDomains, &c.allDomains, &c.clientTokens)
+			(SELECT COUNT(*) FROM org_keycloak_client_credentials WHERE org_id = $1),
+			(SELECT COUNT(*) FROM user_orgs WHERE org_id = $1)`,
+		orgID).Scan(&c.services, &c.liveDomains, &c.allDomains, &c.clientTokens, &c.users)
 	if err != nil {
 		return orgResourceCounts{}, err
 	}
@@ -6212,12 +6412,18 @@ func deleteOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, orgNameOr
 
 		// Retired domains are included: they are still the org's data
 		// and can be deleted once no service version references them.
-		if counts.services > 0 || counts.allDomains > 0 || counts.clientTokens > 0 {
+		//
+		// Memberships block deletion instead of cascading: they only
+		// ever change through updateUser, which ends the affected
+		// user's sessions, and a silent cascade would change a user's
+		// org set without going through that path.
+		if counts.services > 0 || counts.allDomains > 0 || counts.clientTokens > 0 || counts.users > 0 {
 			return &cdnerrors.DependentsError{
 				Name:         orgIdent.name,
 				Services:     counts.services,
 				Domains:      counts.allDomains,
 				ClientTokens: counts.clientTokens,
+				Users:        counts.users,
 			}
 		}
 
@@ -6280,7 +6486,7 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 	var orgFilter pgtype.UUID
 
 	// Must be either superuser or member of an org
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		return []cdntypes.Service{}, cdnerrors.ErrForbidden
 	}
 
@@ -6295,17 +6501,18 @@ func selectServicesTx(ctx context.Context, tx pgx.Tx, ad cdntypes.AuthData, orgN
 		orgFilter = orgIdent.id
 	}
 
-	// If not superuser and a specific org was not requested, set
-	// it to the org of the user.
-	if !ad.Superuser && !orgFilter.Valid {
-		orgFilter = *ad.OrgID
-	}
-
 	var rows pgx.Rows
 	if orgFilter.Valid {
 		rows, err = tx.Query(ctx, selectServicesQuery+" WHERE services.org_id=$1 ORDER BY services.time_created", orgFilter)
 		if err != nil {
 			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for specific org: %w", err)
+		}
+	} else if !ad.Superuser {
+		// Without a requested org a non-superuser gets the services
+		// of every org they are a member of.
+		rows, err = tx.Query(ctx, selectServicesQuery+" WHERE services.org_id = ANY($1) ORDER BY services.time_created", ad.OrgIDs())
+		if err != nil {
+			return []cdntypes.Service{}, fmt.Errorf("unable to query for services for member orgs: %w", err)
 		}
 	} else {
 		rows, err = tx.Query(ctx, selectServicesQuery+" ORDER BY services.time_created")
@@ -6989,7 +7196,7 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	var orgIdent orgIdentifier
 	var err error
 
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		return cdntypes.Domain{}, cdnerrors.ErrForbidden
 	}
 
@@ -7132,6 +7339,8 @@ func insertDomain(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, fqdn
 	// it, and a version with an unverified domain cannot be activated since.
 	d := cdntypes.Domain{
 		ID:                domainID,
+		OrgID:             orgIdent.id,
+		OrgName:           orgIdent.name,
 		FQDN:              fqdn,
 		Verified:          false,
 		VerificationToken: verificationToken,
@@ -7166,7 +7375,7 @@ func insertService(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, nam
 	var orgIdent orgIdentifier
 	var err error
 
-	if !ad.Superuser && ad.OrgID == nil {
+	if scopeOf(ad).hasNoAccess() {
 		logger.Error().Msg("insertService: not superuser or member of an org")
 		return cdntypes.Service{}, cdnerrors.ErrForbidden
 	}
@@ -9942,9 +10151,11 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					return nil, errors.New("unable to read auth data from users POST handler")
 				}
 
-				user, err := createUser(ctx, dbc, input.Body.DisplayName, input.Body.Role, input.Body.Org, nil, ad)
+				user, err := createUser(ctx, dbc, input.Body.DisplayName, input.Body.Role, input.Body.Orgs, nil, ad)
 				if err != nil {
 					switch {
+					case errors.Is(err, errUserOrgNotFound):
+						return nil, huma.Error404NotFound(orgNotFound)
 					case errors.Is(err, cdnerrors.ErrForbidden):
 						return nil, huma.Error403Forbidden(notAllowedToAddResource)
 					case errors.Is(err, cdnerrors.ErrAlreadyExists):
@@ -9952,7 +10163,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 					case errors.Is(err, cdnerrors.ErrCheckViolation):
 						return nil, huma.Error422UnprocessableEntity("invalid user data")
 					case errors.Is(err, pgx.ErrNoRows):
-						return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
+						return nil, huma.Error422UnprocessableEntity("specified role not found")
 					default:
 						logger.Err(err).Msg("unable to add user")
 						return nil, apiError(err)
@@ -10035,9 +10246,14 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				return nil, huma.Error422UnprocessableEntity(invalidUserIDFormat)
 			}
 
-			user, err := updateUser(ctx, logger, dbc, ad, userID, input.Body.DisplayName, input.Body.Org, input.Body.Role)
+			user, _, err := updateUser(ctx, logger, dbc, ad, userID, input.Body.DisplayName, input.Body.Orgs, input.Body.Role)
 			if err != nil {
 				switch {
+				case errors.Is(err, errUserOrgNotFound):
+					// Checked before cdnerrors.ErrNotFound, which it
+					// wraps, so the message does not claim the user is
+					// missing.
+					return nil, huma.Error404NotFound(orgNotFound)
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					return nil, huma.Error403Forbidden(api403String)
 				case errors.Is(err, cdnerrors.ErrNotFound):
@@ -10049,7 +10265,7 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 				case errors.Is(err, cdnerrors.ErrNotLocalUser):
 					return nil, huma.Error422UnprocessableEntity("renaming is only available for local users")
 				case errors.Is(err, pgx.ErrNoRows):
-					return nil, huma.Error422UnprocessableEntity("specified role or organization not found")
+					return nil, huma.Error422UnprocessableEntity("specified role not found")
 				default:
 					logger.Err(err).Msg("unable to update user")
 					return nil, apiError(err)
@@ -11630,16 +11846,19 @@ func setupHumaAPI(router chi.Router, dbc *dbConn, a2Slots *argon2Slots, loginLim
 // identity providers (e.g. "user@example.com" from OIDC/Keycloak) and are
 // not used for identification — users are always identified by UUID.
 type user struct {
-	ID          pgtype.UUID  `json:"id" doc:"ID of user"`
-	DisplayName string       `json:"display_name" example:"you@example.com" doc:"display name of user"`
-	RoleID      pgtype.UUID  `json:"role_id" doc:"ID of role, UUIDv4"`
-	OrgID       *pgtype.UUID `json:"org_id" doc:"ID of organization, UUIDv4"`
+	ID          pgtype.UUID   `json:"id" doc:"ID of user"`
+	DisplayName string        `json:"display_name" example:"you@example.com" doc:"display name of user"`
+	RoleID      pgtype.UUID   `json:"role_id" doc:"ID of role, UUIDv4"`
+	OrgIDs      []pgtype.UUID `json:"org_ids" doc:"IDs of the organizations the user is a member of, ordered by organization name, empty if none"`
 }
 
 type userBodyInput struct {
-	DisplayName string  `json:"display_name" example:"you@example.com" doc:"Display name of the user" minLength:"1" maxLength:"63"`
-	Role        string  `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
-	Org         *string `json:"org,omitempty" example:"my-org" doc:"Organization ID or name" minLength:"1" maxLength:"63"`
+	DisplayName string `json:"display_name" example:"you@example.com" doc:"Display name of the user" minLength:"1" maxLength:"63"`
+	Role        string `json:"role" example:"customer" doc:"Role ID or name" minLength:"1" maxLength:"63"`
+	// maxItems bounds the locked org lookups done per request, far above
+	// realistic membership counts. Keep it equal to the max on
+	// components.UserFormFields.Orgs, the console's limit.
+	Orgs []string `json:"orgs,omitempty" example:"my-org" doc:"IDs or names of the organizations the user is a member of, replacing any previous set. Omitted or empty means no organization." minLength:"1" maxLength:"63" maxItems:"100"`
 }
 
 type userPostInput struct {
@@ -11994,7 +12213,7 @@ func Init(logger zerolog.Logger, pgConfig *pgxpool.Config, encryptedSessionKey b
 			}
 		}
 
-		userID, err := insertUserTx(initCtx, tx, u.name, nil, adminRoleID, localAuthProviderID)
+		userID, err := insertUserTx(initCtx, tx, u.name, adminRoleID, localAuthProviderID)
 		if err != nil {
 			return fmt.Errorf("unable to INSERT initial user: %w", err)
 		}
@@ -12687,12 +12906,10 @@ func resolveConsoleOrg(ctx context.Context, dbc *dbConn, ad cdntypes.AuthData, o
 //
 // An org that does not exist and an org the caller may not see must give a
 // byte-identical page, so nothing on it may depend on the requested org: the
-// sidebar org is always the caller's own, never the one in the URL.
+// sidebar org comes from consoleSidebarOrg, never from the URL.
 func renderConsoleOrgUnavailable(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, err error, renderErrMsg string) {
-	sidebarOrg := ""
-	if ad.OrgName != nil {
-		sidebarOrg = *ad.OrgName
-	}
+	sh, _ := ctx.Value(sessionHandleKey{}).(*sessionHandle)
+	sidebarOrg := consoleSidebarOrg(ad, sh)
 
 	var msg string
 	switch {
@@ -12758,15 +12975,13 @@ func resolveConsoleService(ctx context.Context, dbc *dbConn, ad cdntypes.AuthDat
 //
 // Like renderConsoleOrgUnavailable, the page must be byte-identical whether
 // the org or service does not exist or the caller may not see it, so nothing
-// on it may depend on the URL: the sidebar org is the caller's own, and the
-// breadcrumbs are rendered for a fixed path instead of the requested one,
-// because the breadcrumb for a service or version URL echoes the service
+// on it may depend on the URL: the sidebar org comes from consoleSidebarOrg,
+// and the breadcrumbs are rendered for a fixed path instead of the requested
+// one, because the breadcrumb for a service or version URL echoes the service
 // segment of the path.
 func renderConsoleServiceUnavailable(ctx context.Context, logger *zerolog.Logger, dbc *dbConn, w http.ResponseWriter, r *http.Request, ad cdntypes.AuthData, title string, notFoundMsg string, err error, renderErrMsg string) {
-	sidebarOrg := ""
-	if ad.OrgName != nil {
-		sidebarOrg = *ad.OrgName
-	}
+	sh, _ := ctx.Value(sessionHandleKey{}).(*sessionHandle)
+	sidebarOrg := consoleSidebarOrg(ad, sh)
 
 	var msg string
 	switch {
@@ -14905,6 +15120,8 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 						formData.Errors.DisplayName = fieldError.Error()
 					case "Role":
 						formData.Errors.Role = fieldError.Error()
+					case "Orgs":
+						formData.Errors.Org = consoleTooManyOrgs
 					}
 				}
 				renderCreateForm(formData)
@@ -14939,12 +15156,6 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 				return
 			}
 
-			// Resolve org
-			var org *string
-			if formFields.Org != "" && formFields.Org != cdntypes.OrgNotSelected {
-				org = &formFields.Org
-			}
-
 			// Hash password before the transaction (same pattern as setLocalPassword)
 			a2Data, err := passwordToArgon2(ctx, a2Slots, formFields.Password)
 			if err != nil {
@@ -14958,15 +15169,17 @@ func consoleCreateUserHandler(dbc *dbConn, a2Slots *argon2Slots) http.HandlerFun
 				return
 			}
 
-			_, err = createUser(ctx, dbc, formFields.DisplayName, formFields.Role, org, &a2Data, ad)
+			_, err = createUser(ctx, dbc, formFields.DisplayName, formFields.Role, formFields.Orgs, &a2Data, ad)
 			if err != nil {
 				switch {
+				case errors.Is(err, errUserOrgNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+					formData.Errors.Org = consoleOrgDoesNotExist
 				case errors.Is(err, cdnerrors.ErrAlreadyExists):
 					formData.Errors.DisplayName = consoleAlreadyExists
 				case errors.Is(err, cdnerrors.ErrCheckViolation):
 					formData.Errors.DisplayName = "Invalid display name"
 				case errors.Is(err, pgx.ErrNoRows):
-					formData.Errors.ServerError = "Selected role or organization does not exist"
+					formData.Errors.Role = consoleRoleDoesNotExist
 				default:
 					formData.Errors.ServerError = "User creation failed"
 				}
@@ -15047,15 +15260,10 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			orgName := ""
-			if userData.OrgName != nil {
-				orgName = *userData.OrgName
-			}
-
 			formData := components.UserFormData{
 				DisplayName: userData.DisplayName,
 				Role:        userData.RoleName,
-				Org:         orgName,
+				Orgs:        userData.OrgNames,
 			}
 
 			renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
@@ -15110,22 +15318,22 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 						formData.Errors.DisplayName = fieldError.Error()
 					case "Role":
 						formData.Errors.Role = fieldError.Error()
+					case "Orgs":
+						formData.Errors.Org = consoleTooManyOrgs
 					}
 				}
 				renderEditForm(userData.DisplayName, formData, userData.AuthProvider, components.PasswordResetFormData{})
 				return
 			}
 
-			// Resolve org
-			var org *string
-			if formFields.Org != "" && formFields.Org != cdntypes.OrgNotSelected {
-				org = &formFields.Org
-			}
-
-			_, err = updateUser(ctx, logger, dbc, ad, userID, formFields.DisplayName, org, formFields.Role)
+			_, changed, err := updateUser(ctx, logger, dbc, ad, userID, formFields.DisplayName, formFields.Orgs, formFields.Role)
 			if err != nil {
 				logger.Err(err).Msg("user update failed")
 				switch {
+				case errors.Is(err, errUserOrgNotFound), errors.Is(err, cdnerrors.ErrUnableToParseNameOrID):
+					// Checked before cdnerrors.ErrNotFound, which
+					// errUserOrgNotFound wraps.
+					formData.Errors.Org = consoleOrgDoesNotExist
 				case errors.Is(err, cdnerrors.ErrForbidden):
 					formData.Errors.ServerError = "Not allowed to modify user"
 				case errors.Is(err, cdnerrors.ErrNotFound):
@@ -15137,7 +15345,7 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				case errors.Is(err, cdnerrors.ErrNotLocalUser):
 					formData.Errors.DisplayName = "Renaming is only available for local users"
 				case errors.Is(err, pgx.ErrNoRows):
-					formData.Errors.ServerError = "Selected role or organization does not exist"
+					formData.Errors.Role = consoleRoleDoesNotExist
 				default:
 					formData.Errors.ServerError = "User update failed"
 				}
@@ -15145,7 +15353,11 @@ func consoleEditUserHandler(dbc *dbConn) http.HandlerFunc {
 				return
 			}
 
-			err = sh.addFlash(ctx, flashMessageKeys.users, nil, fmt.Sprintf("User '%s' updated!", formFields.DisplayName))
+			flash := fmt.Sprintf("User '%s' updated!", formFields.DisplayName)
+			if changed {
+				flash += " Role or organization memberships changed, the user was logged out."
+			}
+			err = sh.addFlash(ctx, flashMessageKeys.users, nil, flash)
 			if err != nil {
 				logger.Err(err).Msg(unableToSetFlashMessage)
 				http.Error(w, unableToSetFlashMessage, http.StatusInternalServerError)
@@ -15193,15 +15405,10 @@ func consoleUserResetPasswordHandler(dbc *dbConn, a2Slots *argon2Slots, loginLim
 
 			title := fmt.Sprintf(consoleEditUserTitleFmt, userData.DisplayName)
 
-			orgName := ""
-			if userData.OrgName != nil {
-				orgName = *userData.OrgName
-			}
-
 			formData := components.UserFormData{
 				DisplayName: userData.DisplayName,
 				Role:        userData.RoleName,
-				Org:         orgName,
+				Orgs:        userData.OrgNames,
 			}
 
 			roles, rolesErr := selectRoles(ctx, dbc)

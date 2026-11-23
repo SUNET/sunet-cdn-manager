@@ -18,15 +18,11 @@ type callerScope struct {
 	orgIDs    []pgtype.UUID
 }
 
-// scopeOf builds the scope for an authenticated caller. It is a set rather
-// than a single org so that letting a user belong to several orgs only
-// changes this function, not the resolvers or the queries using the scope.
+// scopeOf builds the scope for an authenticated caller from every org the
+// caller is a member of. The resolvers and the queries using the scope match
+// against the whole set (= ANY), never against one element of it.
 func scopeOf(ad cdntypes.AuthData) callerScope {
-	s := callerScope{superuser: ad.Superuser}
-	if ad.OrgID != nil {
-		s.orgIDs = append(s.orgIDs, *ad.OrgID)
-	}
-	return s
+	return callerScope{superuser: ad.Superuser, orgIDs: ad.OrgIDs()}
 }
 
 // hasNoAccess reports whether the caller can see no org at all, in which case

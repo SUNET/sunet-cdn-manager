@@ -172,11 +172,13 @@ type IPNetworkFormData struct {
 }
 
 type UserFormFields struct {
-	DisplayName     string `schema:"display_name" validate:"required,min=1,max=63"`
-	Role            string `schema:"role" validate:"required"`
-	Org             string `schema:"org"`
-	Password        string `schema:"password"`         // #nosec G117 -- Used for form password input, never used for serialized output
-	ConfirmPassword string `schema:"confirm-password"` // #nosec G117 -- Used for form password input, never used for serialized output
+	DisplayName string `schema:"display_name" validate:"required,min=1,max=63"`
+	Role        string `schema:"role" validate:"required"`
+	// max bounds the locked org lookups done per request. Keep it equal
+	// to maxItems on userBodyInput.Orgs in pkg/server, the API's limit.
+	Orgs            []string `schema:"orgs" validate:"max=100"`
+	Password        string   `schema:"password"`         // #nosec G117 -- Used for form password input, never used for serialized output
+	ConfirmPassword string   `schema:"confirm-password"` // #nosec G117 -- Used for form password input, never used for serialized output
 }
 
 type UserFormErrors struct {

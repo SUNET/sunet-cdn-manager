@@ -101,14 +101,14 @@ func TestFormFieldErrorsAreAccessible(t *testing.T) {
 				DisplayName: "e-display", Role: "e-role", Org: "e-org", Password: "e-password", ConfirmPassword: "e-confirm",
 			}}, nil, nil),
 			withoutErr: CreateUserContent(UserFormData{}, nil, nil),
-			want:       map[string]string{"display_name": "e-display", "role": "e-role", "org": "e-org", "password": "e-password", "confirm-password": "e-confirm"},
+			want:       map[string]string{"display_name": "e-display", "role": "e-role", "orgs": "e-org", "password": "e-password", "confirm-password": "e-confirm"},
 		},
 		{
 			name: "edit user with password reset",
 			withErrs: EditUserContent(UserFormData{Errors: UserFormErrors{DisplayName: "e-display", Role: "e-role", Org: "e-org"}}, nil, nil, cdntypes.LocalAuthProvider, "user-id",
 				PasswordResetFormData{Errors: PasswordResetFormErrors{Password: "e-password", ConfirmPassword: "e-confirm"}}),
 			withoutErr: EditUserContent(UserFormData{}, nil, nil, cdntypes.LocalAuthProvider, "user-id", PasswordResetFormData{}),
-			want:       map[string]string{"display_name": "e-display", "role": "e-role", "org": "e-org", "password": "e-password", "confirm-password": "e-confirm"},
+			want:       map[string]string{"display_name": "e-display", "role": "e-role", "orgs": "e-org", "password": "e-password", "confirm-password": "e-confirm"},
 		},
 		{
 			name:       "edit externally managed user",
